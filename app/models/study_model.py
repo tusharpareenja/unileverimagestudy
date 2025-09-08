@@ -75,6 +75,7 @@ class StudyElement(Base):
     description = Column(Text, nullable=True)
     element_type = Column(element_type_enum, nullable=False)  # image|text
     content = Column(Text, nullable=False)                    # URL or text content
+    cloudinary_public_id = Column(Text, nullable=True)
     alt_text = Column(String(200), nullable=True)
 
     study = relationship("Study", back_populates="elements", lazy="selectin")
@@ -117,6 +118,7 @@ class LayerImage(Base):
     image_id = Column(String(100), nullable=False)  # string id; keep parity with legacy
     name = Column(String(100), nullable=False)
     url = Column(Text, nullable=False)
+    cloudinary_public_id = Column(Text, nullable=True)
     alt_text = Column(String(200), nullable=True)
     order = Column(Integer, nullable=False)
 

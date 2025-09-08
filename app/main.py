@@ -4,7 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import api_router
 from app.api.v1.study import router as study_router
 from app.api.v1.response import router as response_router
+from app.api.v1.uploads import router as uploads_router
 from app.core.config import settings
+from app.core.cloudinary_config import init_cloudinary
 
 app = FastAPI(
     title="Unilever Image Study API",
@@ -25,6 +27,7 @@ app.add_middleware(
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(study_router, prefix="/api/v1/studies", tags=["studies"])
 app.include_router(response_router, prefix="/api/v1/responses", tags=["responses"])
+app.include_router(uploads_router, prefix="/api/v1/uploads", tags=["uploads"])
 
 
 @app.get("/")
@@ -35,3 +38,9 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.on_event("startup")
+async def on_startup():
+    # Initialize Cloudinary once
+    init_cloudinary()

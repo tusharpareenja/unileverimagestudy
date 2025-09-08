@@ -16,6 +16,7 @@ from app.schemas.study_schema import (
     StudyStatus, StudyType, RegenerateTasksResponse, ValidateTasksResponse
 )
 from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
+from app.services.cloudinary_service import upload_base64, delete_public_id
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,19 @@ def _build_share_url(base_url: Optional[str], share_token: str) -> Optional[str]
     if not base_url:
         return None
     return f"{base_url.rstrip('/')}/participate/{share_token}"
+
+
+def _maybe_upload_data_url_to_cloudinary(url_or_data: Optional[str]) -> tuple[str, Optional[str]]:
+    """If value is a data URL, upload to Cloudinary and return (secure_url, public_id).
+    Otherwise return (original_value, None).
+    """
+    if not url_or_data:
+        return "", None
+    val = url_or_data.strip()
+    if val.startswith("data:image"):
+        secure_url, public_id = upload_base64(val, folder="studies")
+        return secure_url, public_id
+    return val, None
 
 def _load_owned_study(db: Session, study_id: UUID, owner_id: UUID, for_update: bool = False) -> Study:
     stmt = (
@@ -128,6 +142,9 @@ def create_study(
             if elem.element_id in seen_ids:
                 raise HTTPException(status_code=409, detail=f"Duplicate element_id: {elem.element_id}")
             seen_ids.add(elem.element_id)
+            # If frontend provided secure_url/public_id in content as JSON, you could parse it.
+            # For now, if content is a data URL, upload and replace.
+            content_url, public_id = _maybe_upload_data_url_to_cloudinary(elem.content)
             db.add(StudyElement(
                 id=uuid4(),
                 study_id=study.id,
@@ -135,8 +152,9 @@ def create_study(
                 name=elem.name,
                 description=elem.description,
                 element_type=elem.element_type,  # enum
-                content=elem.content,
-                alt_text=elem.alt_text
+                content=content_url or elem.content,
+                alt_text=elem.alt_text,
+                cloudinary_public_id=public_id
             ))
             order_counter += 1
 
@@ -165,14 +183,16 @@ def create_study(
                 if img.image_id in seen_image_ids:
                     raise HTTPException(status_code=409, detail=f"Duplicate image_id in layer {layer.layer_id}: {img.image_id}")
                 seen_image_ids.add(img.image_id)
+                url, public_id = _maybe_upload_data_url_to_cloudinary(img.url)
                 db.add(LayerImage(
                     id=uuid4(),
                     layer_id=layer_row.id,
                     image_id=img.image_id,
                     name=img.name,
-                    url=img.url,
+                    url=url or img.url,
                     alt_text=img.alt_text,
-                    order=img.order
+                    order=img.order,
+                    cloudinary_public_id=public_id
                 ))
 
     db.commit()
@@ -236,6 +256,13 @@ def update_study(
         if study.study_type != 'grid':
             raise HTTPException(status_code=400, detail="elements can only be set for grid studies.")
         # Clear and re-add
+        # Delete old assets best-effort
+        old_elements: List[StudyElement] = db.scalars(
+            select(StudyElement).where(StudyElement.study_id == study.id)
+        ).all()
+        for oe in old_elements:
+            if oe.cloudinary_public_id:
+                delete_public_id(oe.cloudinary_public_id)
         db.query(StudyElement).filter(StudyElement.study_id == study.id).delete()
         db.flush()
         seen_ids = set()
@@ -243,6 +270,7 @@ def update_study(
             if elem.element_id in seen_ids:
                 raise HTTPException(status_code=409, detail=f"Duplicate element_id: {elem.element_id}")
             seen_ids.add(elem.element_id)
+            content_url, public_id = _maybe_upload_data_url_to_cloudinary(elem.content)
             db.add(StudyElement(
                 id=uuid4(),
                 study_id=study.id,
@@ -250,15 +278,22 @@ def update_study(
                 name=elem.name,
                 description=elem.description,
                 element_type=elem.element_type,
-                content=elem.content,
-                alt_text=elem.alt_text
+                content=content_url or elem.content,
+                alt_text=elem.alt_text,
+                cloudinary_public_id=public_id
             ))
 
     if payload.study_layers is not None:
         # Only valid for layer
         if study.study_type != 'layer':
             raise HTTPException(status_code=400, detail="study_layers can only be set for layer studies.")
-        # Clear and re-add
+        # Clear and re-add (delete assets best-effort)
+        old_layer_images: List[LayerImage] = db.scalars(
+            select(LayerImage).join(StudyLayer, StudyLayer.id == LayerImage.layer_id).where(StudyLayer.study_id == study.id)
+        ).all()
+        for oi in old_layer_images:
+            if oi.cloudinary_public_id:
+                delete_public_id(oi.cloudinary_public_id)
         db.query(LayerImage).filter(
             LayerImage.layer_id.in_(
                 db.query(StudyLayer.id).filter(StudyLayer.study_id == study.id).subquery()
