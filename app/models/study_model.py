@@ -51,6 +51,7 @@ class Study(Base):
     creator = relationship("User", back_populates="studies", lazy="selectin", passive_deletes=True)
     elements = relationship("StudyElement", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     layers = relationship("StudyLayer", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
+    study_responses = relationship("StudyResponse", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
         UniqueConstraint('share_token', name='uq_studies_share_token'),

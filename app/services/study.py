@@ -8,12 +8,16 @@ from datetime import datetime
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select, func, desc
 from fastapi import HTTPException, status
+import logging
 
 from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
     StudyStatus, StudyType, RegenerateTasksResponse, ValidateTasksResponse
 )
+from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
+
+logger = logging.getLogger(__name__)
 
 # If you have an adapter wrapping your existing IPED task generation algorithms,
 # import it here. The adapter should provide two callables with these signatures:
@@ -338,21 +342,18 @@ def regenerate_tasks(
     *,
     generator: Optional[Dict[str, Any]] = None
 ) -> RegenerateTasksResponse:
-    """
-    generator: dict with callable functions:
-      {
-        "grid": generate_grid_tasks,
-        "layer": generate_layer_tasks
-      }
-    """
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
     if study.status == 'active':
         raise HTTPException(status_code=400, detail="Cannot regenerate tasks for active studies.")
 
-    if generator is None or 'grid' not in generator or 'layer' not in generator:
+    # Default to adapter-backed generators if none provided
+    generator = generator or {"grid": generate_grid_tasks, "layer": generate_layer_tasks}
+
+    if 'grid' not in generator or 'layer' not in generator:
         raise HTTPException(status_code=500, detail="Task generator not configured.")
 
     iped = study.iped_parameters or {}
+    computed_total: int = 0
     if study.study_type == 'grid':
         num_elements = iped.get('num_elements')
         tasks_per_consumer = iped.get('tasks_per_consumer')
@@ -367,6 +368,11 @@ def regenerate_tasks(
         if not elements or len(elements) != int(num_elements or 0):
             raise HTTPException(status_code=400, detail="Elements missing or count mismatch with num_elements.")
 
+        logger.debug(
+            "Regenerate grid: num_elements=%s tasks_per_consumer=%s respondents=%s elements_loaded=%s",
+            num_elements, tasks_per_consumer, number_of_respondents, len(elements)
+        )
+
         result = generator['grid'](
             num_elements=num_elements,
             tasks_per_consumer=tasks_per_consumer,
@@ -376,10 +382,24 @@ def regenerate_tasks(
             elements=elements
         )
         study.tasks = result.get('tasks', {})
-        # Update total_tasks from metadata or computed value
+        # Update total_tasks from metadata or computed fallback
         meta = result.get('metadata', {})
-        total_tasks = meta.get('tasks_per_consumer', tasks_per_consumer) * number_of_respondents
-        iped['total_tasks'] = total_tasks
+        tpc = meta.get('tasks_per_consumer') or tasks_per_consumer
+        nresp = number_of_respondents
+        try:
+            computed = int(tpc or 0) * int(nresp or 0)
+        except Exception:
+            computed = 0
+        # Fallback: count from generated tasks if available
+        if not computed and isinstance(study.tasks, dict):
+            try:
+                computed = sum(len(v or []) for v in study.tasks.values())
+            except Exception:
+                computed = 0
+        logger.debug("Regenerate grid computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
+                     computed, tpc, nresp, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
+        iped['total_tasks'] = computed
+        computed_total = computed
         study.iped_parameters = iped
 
     elif study.study_type == 'layer':
@@ -394,6 +414,10 @@ def regenerate_tasks(
         if not layers:
             raise HTTPException(status_code=400, detail="Layer configuration missing.")
 
+        logger.debug(
+            "Regenerate layer: respondents=%s exposure_pct=%s layers_loaded=%s",
+            number_of_respondents, exposure_tolerance_pct, len(layers)
+        )
         result = generator['layer'](
             layers=layers,
             number_of_respondents=number_of_respondents,
@@ -402,14 +426,33 @@ def regenerate_tasks(
         )
         study.tasks = result.get('tasks', {})
         meta = result.get('metadata', {})
-        iped['total_tasks'] = meta.get('tasks_per_consumer') * number_of_respondents
+        tpc = meta.get('tasks_per_consumer')
+        try:
+            computed = int(tpc or 0) * int(number_of_respondents or 0)
+        except Exception:
+            computed = 0
+        if not computed and isinstance(study.tasks, dict):
+            try:
+                computed = sum(len(v or []) for v in study.tasks.values())
+            except Exception:
+                computed = 0
+        logger.debug("Regenerate layer computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
+                     computed, tpc, number_of_respondents, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
+        iped['total_tasks'] = computed
+        computed_total = computed
         study.iped_parameters = iped
 
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}")
 
     db.commit()
-    return RegenerateTasksResponse(success=True, message="Task matrix regenerated successfully", total_tasks=study.iped_parameters.get('total_tasks', 0))
+    # Ensure something appears in logs even if logging config is minimal
+    try:
+        logger.info("Regenerate completed: study_id=%s total_tasks=%s", study_id, computed_total)
+        print(f"[regenerate] study_id={study_id} total_tasks={computed_total}")
+    except Exception:
+        pass
+    return RegenerateTasksResponse(success=True, message="Task matrix regenerated successfully", total_tasks=int(computed_total or 0))
 
 def validate_tasks(
     db: Session,

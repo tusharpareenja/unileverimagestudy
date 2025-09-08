@@ -3,11 +3,13 @@ from sqlalchemy import or_
 from typing import Optional, List
 from datetime import datetime
 import uuid
+import logging
 
 from app.models.user_model import User
 from app.schemas.user_schema import UserRegister, UserUpdate, PasswordChange, UserResponse
 from app.core.security import get_password_hash, verify_password, create_token_pair, refresh_access_token
 
+logger = logging.getLogger(__name__)
 
 class UserService:
     def __init__(self, db: Session):
@@ -15,6 +17,7 @@ class UserService:
 
     def authenticate_user(self, username_or_email: str, password: str) -> Optional[User]:
         """Authenticate user with username/email and password"""
+        logger.debug("Authenticating user: %s", username_or_email)
         # Check if input is email or username
         if '@' in username_or_email:
             user = self.db.query(User).filter(
@@ -28,9 +31,11 @@ class UserService:
             ).first()
         
         if not user:
+            logger.info("Auth failed: user not found or inactive for %s", username_or_email)
             return None
         
         if not verify_password(password, user.password_hash):
+            logger.info("Auth failed: bad password for user_id=%s", user.id)
             return None
         
         # Update last login
@@ -41,23 +46,20 @@ class UserService:
 
     def authenticate_user_with_tokens(self, username_or_email: str, password: str) -> Optional[dict]:
         """Authenticate user and return user data with JWT tokens"""
-        user = self.authenticate_user(username_or_email, password)
-        if not user:
+        try:
+            user = self.authenticate_user(username_or_email, password)
+            if not user:
+                return None
+            tokens = create_token_pair(user.id, user.username)
+            user_response = UserResponse.from_orm(user)
+            return {"user": user_response, "tokens": tokens}
+        except Exception:
+            logger.exception("Token generation failed during authentication for %s", username_or_email)
             return None
-        
-        # Create JWT tokens
-        tokens = create_token_pair(user.id, user.username)
-        
-        # Convert user to response schema
-        user_response = UserResponse.from_orm(user)
-        
-        return {
-            "user": user_response,
-            "tokens": tokens
-        }
 
     def create_user(self, user_data: UserRegister) -> User:
         """Create a new user"""
+        logger.debug("Creating user: username=%s email=%s", user_data.username, user_data.email)
         # Check if username or email already exists
         existing_user = self.db.query(User).filter(
             or_(User.username == user_data.username.lower(), 
@@ -66,8 +68,10 @@ class UserService:
         
         if existing_user:
             if existing_user.username == user_data.username.lower():
+                logger.info("Create user failed: username exists: %s", user_data.username)
                 raise ValueError("Username already exists")
             else:
+                logger.info("Create user failed: email exists: %s", user_data.email)
                 raise ValueError("Email already exists")
         
         # Create new user
@@ -84,9 +88,14 @@ class UserService:
             is_verified=False
         )
         
-        self.db.add(db_user)
-        self.db.commit()
-        self.db.refresh(db_user)
+        try:
+            self.db.add(db_user)
+            self.db.commit()
+            self.db.refresh(db_user)
+        except Exception:
+            logger.exception("Create user DB error for username=%s email=%s", user_data.username, user_data.email)
+            self.db.rollback()
+            raise
         
         return db_user
 

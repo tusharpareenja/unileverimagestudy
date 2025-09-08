@@ -9,18 +9,15 @@ from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_active_user
 from app.db.session import get_db
-from app.models.user_model import User  # adjust import to your user model path
+from app.models.user_model import User
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus
 )
 from app.services import study as study_service
+from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
 
 router = APIRouter()
-
-# If you have task generators, inject here. For now use placeholders.
-# from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
-
 
 
 @router.post("", response_model=StudyOut, status_code=status.HTTP_201_CREATED)
@@ -29,7 +26,6 @@ def create_study_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    # Optional: pass BASE_URL from settings for share_url generation
     base_url_for_share: Optional[str] = None
     study = study_service.create_study(
         db=db,
@@ -107,13 +103,10 @@ def regenerate_tasks_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    # Inject your generators here
     generator: Dict[str, Any] = {
-        # "grid": generate_grid_tasks,
-        # "layer": generate_layer_tasks,
+        "grid": generate_grid_tasks,
+        "layer": generate_layer_tasks,
     }
-    if not generator:
-        raise HTTPException(status_code=500, detail="Task generators not configured.")
     return study_service.regenerate_tasks(
         db=db, study_id=study_id, owner_id=current_user.id, generator=generator
     )

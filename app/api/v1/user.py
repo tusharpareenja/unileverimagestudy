@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+import logging, traceback
 from sqlalchemy.orm import Session
 from typing import List
 import uuid
@@ -17,6 +18,7 @@ from app.core.dependencies import get_current_user, get_current_active_user
 from app.models.user_model import User
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/register", response_model=UserLoginResponse, status_code=status.HTTP_201_CREATED)
@@ -25,17 +27,21 @@ async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
     Register a new user and return user data with JWT tokens
     """
     try:
+        logger.debug("Register request: username=%s email=%s", user_data.username, user_data.email)
         result = create_user_with_tokens(db, user_data)
         return UserLoginResponse(**result)
     except ValueError as e:
+        logger.info("Register validation error: %s", e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
+        logger.exception("Register failed with unexpected error")
+        # Surface actual error for debugging
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error"
+            detail=str(e)
         )
 
 
