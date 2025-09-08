@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
+from typing import List
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_active_user
@@ -42,6 +43,25 @@ async def upload_image_base64(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception:
         raise HTTPException(status_code=500, detail="Upload failed")
+
+
+@router.post("/images")
+async def upload_images(
+    files: List[UploadFile] = File(...),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    results = []
+    errors = []
+    for idx, f in enumerate(files or []):
+        try:
+            secure_url, public_id = upload_file(f)
+            results.append({"secure_url": secure_url, "public_id": public_id, "index": idx})
+        except ValueError as e:
+            errors.append({"index": idx, "error": str(e)})
+        except Exception:
+            errors.append({"index": idx, "error": "Upload failed"})
+    return {"results": results, "errors": errors}
 
 
 @router.delete("")

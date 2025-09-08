@@ -23,8 +23,9 @@ def upload_file(file, folder: str = "studies") -> Tuple[str, str]:
     filename = getattr(file, "filename", None)
     if filename:
         _validate_filename(filename)
-    # Cloudinary handles streaming; we pass the file object directly
-    result = cloudinary.uploader.upload(file, folder=folder, resource_type="image")
+    # Cloudinary handles file-like objects; for FastAPI UploadFile use underlying .file
+    stream = getattr(file, "file", None) or file
+    result = cloudinary.uploader.upload(stream, folder=folder, resource_type="image")
     return result.get("secure_url"), result.get("public_id")
 
 
