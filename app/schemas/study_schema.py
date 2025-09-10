@@ -18,23 +18,11 @@ class RatingScale(BaseModel):
     max_label: str
     middle_label: Optional[str] = None
 
-class IPEDParameters(BaseModel):
-    # Common
+class AudienceSegmentation(BaseModel):
     number_of_respondents: int = Field(..., ge=1)
-    total_tasks: Optional[int] = Field(None, ge=0)
-    seed: Optional[int] = Field(None, ge=1)
-
-    # Grid
-    num_elements: Optional[int] = Field(None, ge=1)
-    tasks_per_consumer: Optional[int] = Field(None, ge=1)
-    exposure_tolerance_cv: Optional[float] = Field(None, ge=0)
-
-    # Layer
-    exposure_tolerance_pct: Optional[float] = Field(None, ge=0)
-
-    # Legacy/optional
-    min_active_elements: Optional[int] = Field(None, ge=0)
-    max_active_elements: Optional[int] = Field(None, ge=0)
+    country: Optional[str] = None
+    gender_distribution: Optional[Dict[str, float]] = None
+    age_distribution: Optional[Dict[str, float]] = None
 
 class StudyElementIn(BaseModel):
     element_id: str = Field(..., max_length=10)  # e.g., E1
@@ -65,11 +53,16 @@ class StudyLayerIn(BaseModel):
     description: Optional[str] = None
     z_index: int
     order: int
-    images: List[LayerImageIn] = []
+    images: List[LayerImageIn] = Field(default_factory=list)
 
-class StudyLayerOut(StudyLayerIn):
+class StudyLayerOut(BaseModel):
     id: UUID
-    images: List[LayerImageOut] = []
+    layer_id: str = Field(..., max_length=100)
+    name: str = Field(..., max_length=100)
+    description: Optional[str] = None
+    z_index: int
+    order: int
+    images: List[LayerImageOut] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
 # ---------- Study payloads ----------
@@ -82,7 +75,7 @@ class StudyBase(BaseModel):
     orientation_text: str
     study_type: StudyType
     rating_scale: RatingScale
-    iped_parameters: IPEDParameters
+    audience_segmentation: AudienceSegmentation
 
 class StudyCreate(StudyBase):
     # For grid studies, provide elements; for layer studies, provide study_layers
@@ -96,7 +89,7 @@ class StudyUpdate(BaseModel):
     main_question: Optional[str] = None
     orientation_text: Optional[str] = None
     rating_scale: Optional[RatingScale] = None
-    iped_parameters: Optional[IPEDParameters] = None
+    audience_segmentation: Optional[AudienceSegmentation] = None
     # Replacing full collections (server should decide whether allowed while active)
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
@@ -124,7 +117,7 @@ class StudyOut(BaseModel):
     orientation_text: str
     study_type: StudyType
     rating_scale: RatingScale
-    iped_parameters: IPEDParameters
+    audience_segmentation: AudienceSegmentation
 
     # Children
     elements: Optional[List[StudyElementOut]] = None
@@ -157,11 +150,26 @@ class RegenerateTasksResponse(BaseModel):
     success: bool
     message: str
     total_tasks: int
+    metadata: Optional[Dict[str, Any]] = None
 
 class ValidateTasksResponse(BaseModel):
     validation_passed: bool
     issues: List[str] = []
     totals: Dict[str, Any] = {}
+
+class GenerateTasksRequest(BaseModel):
+    study_id: Optional[UUID] = None
+    study_type: StudyType
+    audience_segmentation: AudienceSegmentation
+    elements: Optional[List[StudyElementIn]] = None
+    study_layers: Optional[List[StudyLayerIn]] = None
+    exposure_tolerance_cv: Optional[float] = None
+    exposure_tolerance_pct: Optional[float] = None
+    seed: Optional[int] = None
+
+class GenerateTasksResult(BaseModel):
+    tasks: Dict[str, List[Dict[str, Any]]]
+    metadata: Dict[str, Any]
 
 
 # Rebuild models to resolve forward references
@@ -184,3 +192,4 @@ def rebuild_models():
 
 # Call rebuild to resolve forward references
 rebuild_models()
+

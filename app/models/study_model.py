@@ -27,7 +27,7 @@ class Study(Base):
 
     # JSON configs
     rating_scale = Column(JSONB, nullable=False)         # {min_value, max_value in {5,7,9}, labels...}
-    iped_parameters = Column(JSONB, nullable=False)      # grid/layer-specific fields; validate in schemas
+    audience_segmentation = Column('iped_parameters', JSONB, nullable=False)  # renamed logically; same column
     tasks = Column(JSONB, nullable=True)                 # generated task matrix
 
     # Ownership / meta

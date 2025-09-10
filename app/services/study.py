@@ -33,17 +33,10 @@ def _ensure_study_type_constraints(payload: StudyCreate) -> None:
     if payload.study_type == 'grid':
         if not payload.elements or len(payload.elements) < 1:
             raise HTTPException(status_code=400, detail="Grid study requires non-empty elements.")
-        if not payload.iped_parameters.num_elements or not payload.iped_parameters.tasks_per_consumer:
-            raise HTTPException(status_code=400, detail="Grid IPED requires num_elements and tasks_per_consumer.")
-        if payload.iped_parameters.num_elements != len(payload.elements):
-            # Allow mismatch but warn? Prefer to enforce strictness:
-            raise HTTPException(status_code=400, detail="num_elements must equal the number of provided elements.")
+        # num_elements inferred from elements; tasks_per_consumer will auto-pick
     elif payload.study_type == 'layer':
         if not payload.study_layers or len(payload.study_layers) < 1:
             raise HTTPException(status_code=400, detail="Layer study requires at least one layer with images.")
-        if payload.iped_parameters.tasks_per_consumer is not None:
-            # In layer mode, tasks_per_consumer is derived; disallow explicit value to avoid confusion.
-            raise HTTPException(status_code=400, detail="tasks_per_consumer is auto-derived for layer studies.")
     else:
         raise HTTPException(status_code=400, detail="Unsupported study_type. Must be 'grid' or 'layer'.")
 
@@ -120,7 +113,7 @@ def create_study(
         orientation_text=payload.orientation_text,
         study_type=payload.study_type,  # enum compatible
         rating_scale=payload.rating_scale.model_dump(),
-        iped_parameters=payload.iped_parameters.model_dump(exclude_none=True),
+        audience_segmentation=payload.audience_segmentation.model_dump(exclude_none=True),
         tasks=None,
         creator_id=creator_id,
         status='draft',
@@ -217,16 +210,14 @@ def list_studies(
         count_stmt = count_stmt.where(Study.status == status_filter)
 
     total = db.scalar(count_stmt) or 0
-    items = (
-        db.scalars(
-            base_stmt
-            .order_by(desc(Study.created_at))
-            .offset((page - 1) * per_page)
-            .limit(per_page)
-        )
-        .all()
-    )
-    return items, total
+    seq_items = db.scalars(
+        base_stmt
+        .order_by(desc(Study.created_at))
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+    ).all()
+    items: List[Study] = list(seq_items)
+    return items, int(total)
 
 def update_study(
     db: Session,
@@ -239,16 +230,21 @@ def update_study(
         raise HTTPException(status_code=400, detail="Cannot edit active studies.")
 
     # Apply scalar updates
-    if payload.title is not None: study.title = payload.title
-    if payload.background is not None: study.background = payload.background
-    if payload.language is not None: study.language = payload.language
-    if payload.main_question is not None: study.main_question = payload.main_question
-    if payload.orientation_text is not None: study.orientation_text = payload.orientation_text
+    if payload.title is not None:
+        study.title = payload.title
+    if payload.background is not None:
+        study.background = payload.background
+    if payload.language is not None:
+        study.language = payload.language
+    if payload.main_question is not None:
+        study.main_question = payload.main_question
+    if payload.orientation_text is not None:
+        study.orientation_text = payload.orientation_text
     if payload.rating_scale is not None:
         _validate_rating_scale(payload.rating_scale.model_dump())
         study.rating_scale = payload.rating_scale.model_dump()
-    if payload.iped_parameters is not None:
-        study.iped_parameters = payload.iped_parameters.model_dump(exclude_none=True)
+    if payload.audience_segmentation is not None:
+        study.audience_segmentation = payload.audience_segmentation.model_dump(exclude_none=True)
 
     # Replace children collections if provided
     if payload.elements is not None:
@@ -257,12 +253,13 @@ def update_study(
             raise HTTPException(status_code=400, detail="elements can only be set for grid studies.")
         # Clear and re-add
         # Delete old assets best-effort
-        old_elements: List[StudyElement] = db.scalars(
+        old_elements_seq = db.scalars(
             select(StudyElement).where(StudyElement.study_id == study.id)
         ).all()
+        old_elements: List[StudyElement] = list(old_elements_seq)
         for oe in old_elements:
-            if oe.cloudinary_public_id:
-                delete_public_id(oe.cloudinary_public_id)
+            if oe.cloudinary_public_id is not None and oe.cloudinary_public_id != "":
+                delete_public_id(str(oe.cloudinary_public_id))
         db.query(StudyElement).filter(StudyElement.study_id == study.id).delete()
         db.flush()
         seen_ids = set()
@@ -288,17 +285,15 @@ def update_study(
         if study.study_type != 'layer':
             raise HTTPException(status_code=400, detail="study_layers can only be set for layer studies.")
         # Clear and re-add (delete assets best-effort)
-        old_layer_images: List[LayerImage] = db.scalars(
+        old_layer_images_seq = db.scalars(
             select(LayerImage).join(StudyLayer, StudyLayer.id == LayerImage.layer_id).where(StudyLayer.study_id == study.id)
         ).all()
+        old_layer_images: List[LayerImage] = list(old_layer_images_seq)
         for oi in old_layer_images:
-            if oi.cloudinary_public_id:
-                delete_public_id(oi.cloudinary_public_id)
-        db.query(LayerImage).filter(
-            LayerImage.layer_id.in_(
-                db.query(StudyLayer.id).filter(StudyLayer.study_id == study.id).subquery()
-            )
-        ).delete(synchronize_session=False)
+            if oi.cloudinary_public_id is not None and oi.cloudinary_public_id != "":
+                delete_public_id(str(oi.cloudinary_public_id))
+        subq = db.query(StudyLayer.id).filter(StudyLayer.study_id == study.id).subquery()
+        db.query(LayerImage).filter(LayerImage.layer_id.in_(select(subq.c.id))).delete(synchronize_session=False)
         db.query(StudyLayer).filter(StudyLayer.study_id == study.id).delete()
         db.flush()
 
@@ -358,7 +353,7 @@ def change_status(
         raise HTTPException(status_code=400, detail="Invalid status.")
 
     # transitions timestamps
-    if new_status == 'active' and not study.launched_at:
+    if new_status == 'active' and (study.launched_at is None):
         study.launched_at = datetime.utcnow()
     if new_status == 'completed':
         study.completed_at = datetime.utcnow()
@@ -387,30 +382,29 @@ def regenerate_tasks(
     if 'grid' not in generator or 'layer' not in generator:
         raise HTTPException(status_code=500, detail="Task generator not configured.")
 
-    iped = study.iped_parameters or {}
+    audience = study.audience_segmentation or {}
     computed_total: int = 0
     if study.study_type == 'grid':
-        num_elements = iped.get('num_elements')
-        tasks_per_consumer = iped.get('tasks_per_consumer')
-        number_of_respondents = iped.get('number_of_respondents')
-        exposure_tolerance_cv = iped.get('exposure_tolerance_cv', 1.0)
-        seed = iped.get('seed')
+        number_of_respondents = audience.get('number_of_respondents')
+        exposure_tolerance_cv = 1.0
+        seed = None
 
         # Load elements (ordered by element_id lexical)
         elements: List[StudyElement] = db.scalars(
             select(StudyElement).where(StudyElement.study_id == study.id).order_by(StudyElement.element_id.asc())
         ).all()
-        if not elements or len(elements) != int(num_elements or 0):
-            raise HTTPException(status_code=400, detail="Elements missing or count mismatch with num_elements.")
+        if not elements:
+            raise HTTPException(status_code=400, detail="Elements missing for grid study.")
+        num_elements = len(elements)
 
         logger.debug(
-            "Regenerate grid: num_elements=%s tasks_per_consumer=%s respondents=%s elements_loaded=%s",
-            num_elements, tasks_per_consumer, number_of_respondents, len(elements)
+            "Regenerate grid: num_elements=%s respondents=%s elements_loaded=%s",
+            num_elements, number_of_respondents, len(elements)
         )
 
         result = generator['grid'](
             num_elements=num_elements,
-            tasks_per_consumer=tasks_per_consumer,
+            tasks_per_consumer=None,
             number_of_respondents=number_of_respondents,
             exposure_tolerance_cv=exposure_tolerance_cv,
             seed=seed,
@@ -419,7 +413,7 @@ def regenerate_tasks(
         study.tasks = result.get('tasks', {})
         # Update total_tasks from metadata or computed fallback
         meta = result.get('metadata', {})
-        tpc = meta.get('tasks_per_consumer') or tasks_per_consumer
+        tpc = meta.get('tasks_per_consumer')
         nresp = number_of_respondents
         try:
             computed = int(tpc or 0) * int(nresp or 0)
@@ -433,14 +427,13 @@ def regenerate_tasks(
                 computed = 0
         logger.debug("Regenerate grid computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
                      computed, tpc, nresp, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
-        iped['total_tasks'] = computed
         computed_total = computed
-        study.iped_parameters = iped
+        # total stored only in response; audience_segmentation remains unchanged
 
     elif study.study_type == 'layer':
-        number_of_respondents = iped.get('number_of_respondents')
-        exposure_tolerance_pct = iped.get('exposure_tolerance_pct', 2.0)
-        seed = iped.get('seed')
+        number_of_respondents = audience.get('number_of_respondents')
+        exposure_tolerance_pct = 2.0
+        seed = None
 
         # Collect layers with images in a simple list for generator
         layers = db.scalars(
@@ -473,9 +466,8 @@ def regenerate_tasks(
                 computed = 0
         logger.debug("Regenerate layer computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
                      computed, tpc, number_of_respondents, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
-        iped['total_tasks'] = computed
         computed_total = computed
-        study.iped_parameters = iped
+        # total stored only in response; audience_segmentation remains unchanged
 
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}")
@@ -487,7 +479,14 @@ def regenerate_tasks(
         print(f"[regenerate] study_id={study_id} total_tasks={computed_total}")
     except Exception:
         pass
-    return RegenerateTasksResponse(success=True, message="Task matrix regenerated successfully", total_tasks=int(computed_total or 0))
+    # Attach metadata from last generation if available
+    response_meta = locals().get('meta', {}) if 'meta' in locals() else {}
+    return RegenerateTasksResponse(
+        success=True,
+        message="Task matrix regenerated successfully",
+        total_tasks=int(computed_total or 0),
+        metadata=response_meta if isinstance(response_meta, dict) else {}
+    )
 
 def validate_tasks(
     db: Session,
@@ -499,29 +498,15 @@ def validate_tasks(
         return ValidateTasksResponse(validation_passed=False, issues=["No tasks generated"], totals={})
 
     issues: List[str] = []
-    iped = study.iped_parameters or {}
+    # Simplified validation without IPED parameters
     totals: Dict[str, Any] = {}
 
     if study.study_type == 'grid':
-        tasks_per_consumer = int(iped.get('tasks_per_consumer') or 0)
-        num_elements = int(iped.get('num_elements') or 0)
-        min_active = iped.get('min_active_elements')
-        max_active = iped.get('max_active_elements')
-
-        # Ensure each respondent has correct number of tasks and active count bounds respected
+        # Basic structural checks
         for respondent, task_list in study.tasks.items():
-            if tasks_per_consumer and len(task_list) != tasks_per_consumer:
-                issues.append(f"Respondent {respondent} has {len(task_list)} tasks, expected {tasks_per_consumer}.")
             for task in task_list:
                 elements_shown = task.get("elements_shown", {})
-                # Count active elements (keys like E1, E2 where value == 1)
                 active_count = sum(1 for k, v in elements_shown.items() if not k.endswith('_content') and int(v or 0) == 1)
-                if num_elements and active_count > num_elements:
-                    issues.append(f"Task {task.get('task_id')} active elements exceed num_elements.")
-                if min_active is not None and active_count < int(min_active):
-                    issues.append(f"Task {task.get('task_id')} has {active_count} active elements; below min {min_active}.")
-                if max_active is not None and active_count > int(max_active):
-                    issues.append(f"Task {task.get('task_id')} has {active_count} active elements; above max {max_active}.")
 
         totals['respondents'] = len(study.tasks)
 

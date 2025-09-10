@@ -1,7 +1,7 @@
 # app/services/task_generation_core.py
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, cast
 import numpy as np
 import math
 import random
@@ -151,8 +151,8 @@ def _generate_grid_mode(num_consumers: int, tasks_per_consumer: int, num_element
                 attempts += 1
             if attempts >= 200:
                 raise RuntimeError("Grid: failed to build unique vignette; adjust parameters.")
-    df = pd.DataFrame(design_data, columns=elem_names)
-    df.insert(0, "Consumer ID", [f"C{i+1}" for i in range(num_consumers) for _ in range(tasks_per_consumer)])
+    df = pd.DataFrame(design_data, columns=elem_names)  # type: ignore[arg-type]
+    df.insert(0, "Consumer ID", [f"C{i+1}" for i in range(num_consumers) for _ in range(tasks_per_consumer)])  # type: ignore[arg-type]
     df = _soft_repair_grid_counts(df, elem_names, exposure_tol_cv=exposure_tol_cv)
     _, mean, std, cv = _compute_exposure_stats(df, elem_names)
     r_stats = {"mean": mean, "std": std, "cv_pct": 100.0 * cv}
@@ -160,7 +160,7 @@ def _generate_grid_mode(num_consumers: int, tasks_per_consumer: int, num_element
 
 def generate_grid_tasks(
     num_elements: int,
-    tasks_per_consumer: int,
+    tasks_per_consumer: Optional[int],
     number_of_respondents: int,
     exposure_tolerance_cv: float = 1.0,
     seed: Optional[int] = None,
@@ -170,6 +170,9 @@ def generate_grid_tasks(
         set_seed(seed)
     exposure_tol_cv = exposure_tolerance_cv / 100.0
     minK, maxK, T, cap, notes = _choose_k_t_policy(number_of_respondents, num_elements, maxT=24, exposure_tol_cv=exposure_tol_cv)
+    if tasks_per_consumer is None:
+        tasks_per_consumer = T
+        notes.append(f"tasks_per_consumer auto-picked to {T}.")
     if tasks_per_consumer > cap:
         raise ValueError(f"T ({tasks_per_consumer}) exceeds capacity ({cap}) for E={num_elements}, K={minK}")
     df, r_stats, elem_names = _generate_grid_mode(number_of_respondents, tasks_per_consumer, num_elements, K=minK, exposure_tol_cv=exposure_tol_cv)
@@ -225,7 +228,7 @@ def _repair_layer_counts(design_df: pd.DataFrame, category_info: Dict[str, List[
     total_tasks = len(design_df)
     cats = list(category_info.keys())
 
-    chosen = {c: design_df[category_info[c]].idxmax(axis=1).copy() for c in cats}
+    chosen = {c: cast(pd.Series, design_df[category_info[c]].idxmax(axis=1)).copy() for c in cats}
     row_to_cid = design_df["Consumer ID"].astype(str).to_numpy()
     row_sig = [None] * total_tasks
     seen_by_cid = {}
@@ -339,68 +342,124 @@ def _generate_layer_mode(num_consumers: int, tasks_per_consumer: int, category_i
             if not success:
                 raise RuntimeError("Layer: could not build a unique vignette; adjust parameters/tolerance/retries.")
 
-    df = pd.DataFrame(design_data, columns=all_factors)
-    df.insert(0, "Consumer ID", [f"C{i+1}" for i in range(num_consumers) for _ in range(tasks_per_consumer)])
+    df = pd.DataFrame(design_data, columns=all_factors)  # type: ignore[arg-type]
+    df.insert(0, "Consumer ID", [f"C{i+1}" for i in range(num_consumers) for _ in range(tasks_per_consumer)])  # type: ignore[arg-type]
     df = _repair_layer_counts(df, category_info, tol_pct=tol_pct)
     Ks = [len(cats)] * (num_consumers * tasks_per_consumer)
     return df, Ks, all_factors
 
-def generate_layer_tasks(
-    category_info: Dict[str, List[str]],
-    number_of_respondents: int,
-    exposure_tolerance_pct: float = 2.0,
-    seed: Optional[int] = None,
-    elements: Optional[Dict[str, List[Any]]] = None
-) -> Dict[str, Any]:
+def generate_layer_tasks(layers_data: List[Dict], number_of_respondents: int,
+                           exposure_tolerance_pct: float = 2.0, seed: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Generate tasks for the new layer structure (vignette-based approach).
+    
+    Args:
+        layers_data: List of layer objects with images
+        number_of_respondents: Number of respondents (N)
+        exposure_tolerance_pct: Exposure tolerance as percentage
+        seed: Random seed for reproducibility
+    
+    Returns:
+        Dictionary containing task matrix and metadata
+    """
+    # Set seed if provided
     if seed is not None:
         set_seed(seed)
+    
+    # Convert layers data to category_info format for the existing algorithm
+    category_info = {}
+    for layer in layers_data:
+        layer_name = layer['name']
+        # Create element names for this layer (e.g., "Background_1", "Background_2")
+        elements = [f"{layer_name}_{i+1}" for i in range(len(layer['images']))]
+        category_info[layer_name] = elements
+    
+    # Auto-calculate tasks per consumer
     tasks_per_consumer, capacity = _auto_pick_t_for_layer(category_info, baseline=24)
-    df, Ks, all_elements = _generate_layer_mode(
+    
+    # Generate design matrix using existing algorithm
+    design_df, Ks, _ = _generate_layer_mode(
         num_consumers=number_of_respondents,
         tasks_per_consumer=tasks_per_consumer,
         category_info=category_info,
         tol_pct=exposure_tolerance_pct / 100.0
     )
-    tasks_structure: Dict[str, List[Dict[str, Any]]] = {}
-
+    
+    # Convert to task structure with image content
+    tasks_structure = {}
+    all_elements = [e for es in category_info.values() for e in es]
+    
     for respondent_id in range(number_of_respondents):
         respondent_tasks = []
         start_idx = respondent_id * tasks_per_consumer
         end_idx = start_idx + tasks_per_consumer
-        respondent_data = df.iloc[start_idx:end_idx]
+        
+        # Get tasks for this specific respondent
+        respondent_data = design_df.iloc[start_idx:end_idx]
+        
         for task_index, (_, task_row) in enumerate(respondent_data.iterrows()):
+            # Create elements_shown dictionary
             elements_shown = {}
             elements_shown_content = {}
+            
             for element_name in all_elements:
-                active = int(task_row[element_name])
-                elements_shown[element_name] = active
-                key_content = element_name
-                if active and elements:
-                    for category_name, category_elements in elements.items():
-                        for element in category_elements:
-                            if getattr(element, 'name', None) == element_name:
-                                elements_shown_content[element_name] = {
-                                    "url": getattr(element, 'url', getattr(element, 'content', '')),
-                                    "name": getattr(element, 'name', element_name),
-                                    "alt_text": getattr(element, 'alt_text', ''),
-                                }
-                                break
+                # Element is only shown if it's active in this task
+                element_active = int(task_row[element_name])
+                elements_shown[element_name] = element_active
+                
+                # Find the corresponding image for this element
+                if element_active:
+                    # Parse element name to find layer and image index
+                    # Format: "LayerName_ImageIndex" (e.g., "Background_1")
+                    if '_' in element_name:
+                        layer_name, img_index_str = element_name.rsplit('_', 1)
+                        try:
+                            img_index = int(img_index_str) - 1  # Convert to 0-based index
+                            
+                            # Find the layer and image
+                            for layer in layers_data:
+                                if layer['name'] == layer_name and img_index < len(layer['images']):
+                                    image = layer['images'][img_index]
+                                    elements_shown_content[element_name] = {
+                                        'url': image['url'],
+                                        'name': image['name'],
+                                        'alt_text': image.get('alt', image.get('alt_text', '')),
+                                        'layer_name': layer_name,
+                                        'z_index': layer['z_index']
+                                    }
+                                    break
+                            else:
+                                elements_shown_content[element_name] = None
+                        except ValueError:
+                            elements_shown_content[element_name] = None
+                    else:
+                        elements_shown_content[element_name] = None
+                else:
+                    elements_shown_content[element_name] = None
+            
+            # Clean up any _ref entries
             elements_shown = {k: v for k, v in elements_shown.items() if not k.endswith('_ref')}
-            respondent_tasks.append({
+            elements_shown_content = {k: v for k, v in elements_shown_content.items() if not k.endswith('_ref')}
+            
+            task_obj = {
                 "task_id": f"{respondent_id}_{task_index}",
                 "elements_shown": elements_shown,
                 "elements_shown_content": elements_shown_content,
                 "task_index": task_index
-            })
+            }
+            respondent_tasks.append(task_obj)
+        
         tasks_structure[str(respondent_id)] = respondent_tasks
-
+    
     return {
-        "tasks": tasks_structure,
-        "metadata": {
-            "study_type": "layer",
-            "tasks_per_consumer": tasks_per_consumer,
-            "number_of_respondents": number_of_respondents,
-            "exposure_tolerance_pct": exposure_tolerance_pct,
-            "capacity": capacity
+        'tasks': tasks_structure,
+        'metadata': {
+            'study_type': 'layer_v2',
+            'layers_data': layers_data,
+            'category_info': category_info,
+            'tasks_per_consumer': tasks_per_consumer,
+            'number_of_respondents': number_of_respondents,
+            'exposure_tolerance_pct': exposure_tolerance_pct,
+            'capacity': capacity
         }
     }

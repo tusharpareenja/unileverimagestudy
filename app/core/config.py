@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql://neondb_owner:npg_cxKYrQmSIU97@ep-young-art-a1a3vf2a-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+    DATABASE_URL: str
     SECRET_KEY: str
     
     # JWT Settings

@@ -10,7 +10,7 @@ from app.services.task_generation_core import (
 
 def generate_grid_tasks(
     num_elements: int,
-    tasks_per_consumer: int,
+    tasks_per_consumer: Optional[int],
     number_of_respondents: int,
     exposure_tolerance_cv: float,
     seed: Optional[int],
@@ -31,15 +31,27 @@ def generate_layer_tasks(
     exposure_tolerance_pct: float,
     seed: Optional[int],
 ) -> Dict[str, Any]:
-    category_info: Dict[str, List[str]] = {}
-    elements_dict: Dict[str, List[Any]] = {}
+    # Convert StudyLayer objects to the format expected by core function
+    layers_data = []
     for layer in layers:
-        category_info[layer.name] = [img.name for img in layer.images]
-        elements_dict[layer.name] = list(layer.images)
+        layer_dict = {
+            'name': str(getattr(layer, 'name')),
+            'z_index': int(getattr(layer, 'z_index', 0)),
+            'order': int(getattr(layer, 'order', 0)),
+            'images': [
+                {
+                    'name': str(getattr(img, 'name')),
+                    'url': str(getattr(img, 'url', '')),
+                    'alt_text': str(getattr(img, 'alt_text', ''))
+                }
+                for img in layer.images
+            ]
+        }
+        layers_data.append(layer_dict)
+    
     return _layer(
-        category_info=category_info,
+        layers_data=layers_data,
         number_of_respondents=number_of_respondents,
         exposure_tolerance_pct=exposure_tolerance_pct,
         seed=seed,
-        elements=elements_dict,
     )
