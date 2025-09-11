@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
+import asyncio
 from typing import List
 from sqlalchemy.orm import Session
 
@@ -51,16 +52,21 @@ async def upload_images(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
+    # Run uploads concurrently to reduce total wall time
+    loop = asyncio.get_running_loop()
+    tasks = [loop.run_in_executor(None, upload_file, f) for f in (files or [])]
+
     results = []
     errors = []
-    for idx, f in enumerate(files or []):
-        try:
-            secure_url, public_id = upload_file(f)
+    completed = await asyncio.gather(*tasks, return_exceptions=True)
+    for idx, outcome in enumerate(completed):
+        if isinstance(outcome, Exception):
+            msg = str(outcome) if isinstance(outcome, ValueError) else "Upload failed"
+            errors.append({"index": idx, "error": msg})
+        else:
+            secure_url, public_id = outcome
             results.append({"secure_url": secure_url, "public_id": public_id, "index": idx})
-        except ValueError as e:
-            errors.append({"index": idx, "error": str(e)})
-        except Exception:
-            errors.append({"index": idx, "error": "Upload failed"})
+
     return {"results": results, "errors": errors}
 
 

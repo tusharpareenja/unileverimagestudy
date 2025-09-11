@@ -227,7 +227,30 @@ def update_study(
 ) -> Study:
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
     if study.status == 'active':
-        raise HTTPException(status_code=400, detail="Cannot edit active studies.")
+        non_status_changes = any([
+            payload.title is not None,
+            payload.background is not None,
+            payload.language is not None,
+            payload.main_question is not None,
+            payload.orientation_text is not None,
+            payload.rating_scale is not None,
+            payload.audience_segmentation is not None,
+            payload.elements is not None,
+            payload.study_layers is not None,
+        ])
+        if non_status_changes:
+            raise HTTPException(status_code=400, detail="Cannot edit active studies except status.")
+
+    # Handle status change if provided (align with change_status rules)
+    if payload.status is not None:
+        if payload.status not in ['draft', 'active', 'paused', 'completed']:
+            raise HTTPException(status_code=400, detail="Invalid status.")
+        # transitions timestamps
+        if payload.status == 'active' and (study.launched_at is None):
+            study.launched_at = datetime.utcnow()
+        if payload.status == 'completed':
+            study.completed_at = datetime.utcnow()
+        study.status = payload.status
 
     # Apply scalar updates
     if payload.title is not None:
