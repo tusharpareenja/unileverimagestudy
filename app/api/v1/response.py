@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
@@ -14,7 +15,7 @@ from app.schemas.response_schema import (
     StudyResponseOut, StudyResponseDetail, StudyResponseListItem,
     StartStudyRequest, StartStudyResponse, SubmitTaskRequest, SubmitTaskResponse,
     SubmitClassificationRequest, SubmitClassificationResponse,
-    AbandonStudyRequest, AbandonStudyResponse,
+    AbandonStudyRequest, AbandonStudyResponse, UpdateUserDetailsRequest,
     StudyAnalytics, ResponseAnalytics, CompletedTaskOut,
     ClassificationAnswerOut, ElementInteractionOut, TaskSessionOut, TaskSessionCreate,
     ElementInteractionCreate, CompletedTaskCreate, ClassificationAnswerCreate, StudyResponseCreate
@@ -107,6 +108,25 @@ async def get_session(
     
     return response
 
+@router.put("/session/{session_id}/user-details")
+async def update_user_details(
+    session_id: str,
+    request: UpdateUserDetailsRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Update user details for a study session.
+    This endpoint is public and doesn't require authentication.
+    """
+    service = StudyResponseService(db)
+    user_details_dict = request.user_details.model_dump(exclude_none=True)
+    success = service.update_user_details(session_id, user_details_dict)
+    
+    return {
+        "success": success,
+        "message": "User details updated successfully" if success else "Failed to update user details"
+    }
+
 # ---------- Study Response Management (Authenticated) ----------
 
 @router.get("/", response_model=List[StudyResponseListItem])
@@ -127,9 +147,9 @@ async def list_responses(
     
     if study_id:
         # Verify user owns the study
-        from app.services.study import StudyService
-        study_service = StudyService(db)
-        study = study_service.get_study(study_id)
+        from app.services import study as study_service
+        # study_service = study_service
+        study = study_service.get_study(db, study_id, current_user.id)
         
         if not study or study.creator_id != current_user.id:
             raise HTTPException(
@@ -140,9 +160,9 @@ async def list_responses(
         responses = service.get_responses_by_study(study_id, limit, offset)
     else:
         # Get all studies owned by user and their responses
-        from app.services.study import StudyService
-        study_service = StudyService(db)
-        user_studies = study_service.get_studies_by_user(current_user.id)
+        from app.services import study as study_service
+        # study_service = study_service
+        user_studies, _ = study_service.list_studies(db, current_user.id)
         study_ids = [study.id for study in user_studies]
         
         if not study_ids:
@@ -301,11 +321,10 @@ async def get_response_analytics(
 @router.post("/task-sessions/", response_model=TaskSessionOut)
 async def create_task_session(
     session_data: TaskSessionCreate,
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
-    Create a new task session.
+    Create a new task session. Public, no authentication required.
     """
     service = TaskSessionService(db)
     return service.create_task_session(session_data)
@@ -314,11 +333,10 @@ async def create_task_session(
 async def get_task_session(
     session_id: str,
     task_id: str,
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
-    Get a task session by session ID and task ID.
+    Get a task session by session ID and task ID. Public, no authentication required.
     """
     service = TaskSessionService(db)
     task_session = service.get_task_session(session_id, task_id)
@@ -336,11 +354,10 @@ async def add_page_transition(
     session_id: str,
     task_id: str,
     page_name: str,
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
-    Add a page transition to a task session.
+    Add a page transition to a task session. Public, no authentication required.
     """
     service = TaskSessionService(db)
     success = service.add_page_transition(session_id, task_id, page_name)
@@ -358,11 +375,10 @@ async def add_element_interaction(
     session_id: str,
     task_id: str,
     interaction_data: ElementInteractionCreate,
-    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
-    Add an element interaction to a task session.
+    Add an element interaction to a task session. Public, no authentication required.
     """
     service = TaskSessionService(db)
     success = service.add_element_interaction(session_id, task_id, interaction_data)

@@ -65,6 +65,25 @@ class StudyLayerOut(BaseModel):
     images: List[LayerImageOut] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
+class AnswerOption(BaseModel):
+    """Answer option for multiple choice questions"""
+    id: str = Field(..., max_length=10)  # A, B, C, etc.
+    text: str = Field(..., max_length=200)
+    order: Optional[int] = None
+
+class StudyClassificationQuestionIn(BaseModel):
+    question_id: str = Field(..., max_length=10)  # Q1, Q2, ...
+    question_text: str = Field(..., max_length=500)
+    question_type: str = Field(default='multiple_choice', max_length=20)  # multiple_choice, text, rating, etc.
+    is_required: bool = Field(default=True)
+    order: int = Field(default=1, ge=1)
+    answer_options: Optional[List[AnswerOption]] = None  # For multiple choice questions
+    config: Optional[Dict[str, Any]] = None  # Additional question-specific config
+
+class StudyClassificationQuestionOut(StudyClassificationQuestionIn):
+    id: UUID
+    model_config = ConfigDict(from_attributes=True)
+
 # ---------- Study payloads ----------
 
 class StudyBase(BaseModel):
@@ -81,6 +100,7 @@ class StudyCreate(StudyBase):
     # For grid studies, provide elements; for layer studies, provide study_layers
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
+    classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
 
 class StudyUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=255)
@@ -93,6 +113,7 @@ class StudyUpdate(BaseModel):
     # Replacing full collections (server should decide whether allowed while active)
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
+    classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
     status: Optional[StudyStatus] = None
 
 # ---------- Read models ----------
@@ -122,6 +143,7 @@ class StudyOut(BaseModel):
     # Children
     elements: Optional[List[StudyElementOut]] = None
     study_layers: Optional[List[StudyLayerOut]] = None
+    classification_questions: Optional[List[StudyClassificationQuestionOut]] = None
 
     # Tasks and meta
     tasks: Optional[Dict[str, List[Dict[str, Any]]]] = None

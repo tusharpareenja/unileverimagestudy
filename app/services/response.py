@@ -55,12 +55,30 @@ class StudyResponseService:
         # Get next available respondent ID
         respondent_id = self._get_next_respondent_id(response_data.study_id)
         
+        # Derive total tasks assigned for this respondent
+        total_tasks_assigned = 0
+        try:
+            if isinstance(study.tasks, list):
+                # Flat list of tasks
+                total_tasks_assigned = len(study.tasks)
+            elif isinstance(study.tasks, dict):
+                # Either per-respondent list OR index-keyed dict ("0","1",...)
+                per_resp = study.tasks.get(str(respondent_id))
+                if isinstance(per_resp, list):
+                    total_tasks_assigned = len(per_resp)
+                else:
+                    # If values are task dicts keyed by numeric strings, count keys
+                    # e.g., {"0": {...}, "1": {...}, ...}
+                    total_tasks_assigned = len(study.tasks)
+        except Exception:
+            total_tasks_assigned = 0
+
         # Create response
         response = StudyResponse(
             study_id=response_data.study_id,
             session_id=session_id,
             respondent_id=respondent_id,
-            total_tasks_assigned=len(study.tasks) if study.tasks else 0,
+            total_tasks_assigned=total_tasks_assigned,
             session_start_time=response_data.session_start_time or datetime.utcnow(),
             personal_info=response_data.personal_info,
             ip_address=response_data.ip_address,
@@ -141,11 +159,20 @@ class StudyResponseService:
         if not study.tasks or len(study.tasks) == 0:
             raise HTTPException(status_code=400, detail="Study has no tasks")
         
+        # Merge personal_info and user_details
+        combined_personal_info = {}
+        if request.personal_info:
+            combined_personal_info.update(request.personal_info)
+        if request.user_details:
+            # Convert user_details to dict and merge
+            user_details_dict = request.user_details.model_dump(exclude_none=True)
+            combined_personal_info.update(user_details_dict)
+        
         # Create response session
         response_data = StudyResponseCreate(
             study_id=request.study_id,
             session_start_time=datetime.utcnow(),
-            personal_info=request.personal_info,
+            personal_info=combined_personal_info if combined_personal_info else None,
             ip_address=ip_address,
             user_agent=user_agent,
             total_tasks_assigned=len(study.tasks)
@@ -181,7 +208,7 @@ class StudyResponseService:
             task_id=request.task_id,
             respondent_id=response.respondent_id,
             task_index=response.current_task_index,
-            elements_shown_in_task={},  # Will be populated from study.tasks
+            elements_shown_in_task={},  # Will be populated from study.tasks below
             task_start_time=datetime.utcnow() - timedelta(seconds=request.task_duration_seconds),
             task_completion_time=datetime.utcnow(),
             task_duration_seconds=request.task_duration_seconds,
@@ -191,6 +218,57 @@ class StudyResponseService:
         
         completed_task = CompletedTask(**task_data.model_dump())
         completed_task.study_response_id = response.id
+        
+        # Populate elements_shown/task metadata from study.tasks
+        study: Study = self.db.get(Study, response.study_id)
+        try:
+            elements_shown_in_task: Dict[str, Any] = {}
+            elements_shown_content: Optional[Dict[str, Any]] = None
+            task_context: Optional[Dict[str, Any]] = None
+            
+            if study and isinstance(study.tasks, dict):
+                respondent_key = str(response.respondent_id)
+                tasks_for_respondent = study.tasks.get(respondent_key)
+                if isinstance(tasks_for_respondent, list):
+                    if 0 <= response.current_task_index < len(tasks_for_respondent):
+                        task_def = tasks_for_respondent[response.current_task_index] or {}
+                    else:
+                        task_def = {}
+                else:
+                    # Index-keyed dict format: tasks_for_respondent is None, tasks are at top level as {"0": {...}, ...}
+                    task_def = study.tasks.get(str(response.current_task_index), {}) or {}
+
+                # Attempt multiple possible field names
+                elements_shown_in_task = (
+                    task_def.get("elements_shown_in_task")
+                    or task_def.get("elements_shown")
+                    or {}
+                )
+                elements_shown_content = task_def.get("elements_shown_content")
+                task_context = {
+                    "main_question": study.main_question,
+                    "orientation_text": study.orientation_text,
+                    "rating_scale": study.rating_scale,
+                    "generated_task_id": task_def.get("task_id"),
+                }
+            
+            completed_task.elements_shown_in_task = elements_shown_in_task or {}
+            if elements_shown_content is not None:
+                completed_task.elements_shown_content = elements_shown_content
+            # Helpful duplicates for backward compatibility
+            if not getattr(completed_task, "elements_shown", None):
+                completed_task.elements_shown = elements_shown_in_task or None
+            if study and study.study_type == 'layer' and not getattr(completed_task, "layers_shown_in_task", None):
+                completed_task.layers_shown_in_task = elements_shown_content or None
+            
+            # Set task metadata
+            if study:
+                completed_task.task_type = study.study_type
+            if task_context:
+                completed_task.task_context = task_context
+        except Exception:
+            # Best-effort population; proceed even if tasks structure is unexpected
+            pass
         
         self.db.add(completed_task)
         
@@ -207,8 +285,8 @@ class StudyResponseService:
                 interaction.study_response_id = response.id
                 self.db.add(interaction)
         
-        # Check if study is complete
-        is_complete = response.current_task_index >= response.total_tasks_assigned
+        # Check if study is complete (after this submission)
+        is_complete = response.current_task_index >= (response.total_tasks_assigned or 0)
         if is_complete:
             self._mark_response_completed(response)
         
@@ -259,6 +337,25 @@ class StudyResponseService:
         # Update study counters
         self._update_study_counters(response.study_id)
         
+        return True
+    
+    def update_user_details(self, session_id: str, user_details: Dict[str, Any]) -> bool:
+        """Update user details for a study session."""
+        response = self.get_response_by_session(session_id)
+        if not response:
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        if response.is_completed:
+            raise HTTPException(status_code=400, detail="Cannot update details for completed study")
+        
+        # Merge with existing personal_info
+        existing_info = response.personal_info or {}
+        existing_info.update(user_details)
+        
+        response.personal_info = existing_info
+        response.last_activity = datetime.utcnow()
+        
+        self.db.commit()
         return True
     
     # ---------- Analytics and Reporting ----------
@@ -379,16 +476,19 @@ class StudyResponseService:
         return (max_respondent or 0) + 1
     
     def _mark_response_completed(self, response: StudyResponse) -> None:
-        """Mark a response as completed."""
+        """Mark a response as completed, handling timezone-aware timestamps."""
+        from datetime import timezone
         response.is_completed = True
         response.is_abandoned = False
-        response.session_end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
+        response.session_end_time = end_time
         response.completion_percentage = 100.0
         
         if response.session_start_time:
-            response.total_study_duration = (
-                response.session_end_time - response.session_start_time
-            ).total_seconds()
+            start_time = response.session_start_time
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            response.total_study_duration = (end_time - start_time).total_seconds()
     
     def _update_study_counters(self, study_id: UUID) -> None:
         """Update study response counters."""
@@ -481,7 +581,16 @@ class TaskSessionService:
     
     def create_task_session(self, session_data: TaskSessionCreate) -> TaskSession:
         """Create a new task session."""
+        # Resolve study_response_id from the provided session_id
+        response = self.db.execute(
+            select(StudyResponse).where(StudyResponse.session_id == session_data.session_id)
+        ).scalar_one_or_none()
+        if not response:
+            raise HTTPException(status_code=404, detail="Session not found")
+
         task_session = TaskSession(**session_data.model_dump())
+        task_session.study_response_id = response.id
+
         self.db.add(task_session)
         self.db.commit()
         self.db.refresh(task_session)

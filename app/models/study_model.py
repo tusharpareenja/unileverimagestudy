@@ -51,6 +51,7 @@ class Study(Base):
     creator = relationship("User", back_populates="studies", lazy="selectin", passive_deletes=True)
     elements = relationship("StudyElement", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     layers = relationship("StudyLayer", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
+    classification_questions = relationship("StudyClassificationQuestion", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     study_responses = relationship("StudyResponse", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
@@ -127,4 +128,30 @@ class LayerImage(Base):
     __table_args__ = (
         UniqueConstraint('layer_id', 'image_id', name='uq_layer_images_image_id'),
         Index('idx_layer_images_layer_id_image_id', 'layer_id', 'image_id'),
+    )
+
+class StudyClassificationQuestion(Base):
+    """Classification questions that belong to a study."""
+    __tablename__ = "study_classification_questions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    study_id = Column(UUID(as_uuid=True), ForeignKey('studies.id', ondelete='CASCADE'), nullable=False, index=True)
+
+    question_id = Column(String(10), nullable=False)  # Q1, Q2, ...
+    question_text = Column(Text, nullable=False)
+    question_type = Column(String(20), nullable=False, default='multiple_choice')  # multiple_choice, text, rating, etc.
+    is_required = Column(String(1), nullable=False, default='Y')  # Y/N
+    order = Column(Integer, nullable=False, default=1)
+    
+    # Answer options (for multiple choice questions)
+    answer_options = Column(JSONB, nullable=True)  # [{"id": "A", "text": "Option 1"}, ...]
+    
+    # Additional configuration
+    config = Column(JSONB, nullable=True)  # Additional question-specific config
+
+    study = relationship("Study", back_populates="classification_questions", lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint('study_id', 'question_id', name='uq_study_classification_questions_question_id'),
+        Index('idx_study_classification_questions_study_id_order', 'study_id', 'order'),
     )

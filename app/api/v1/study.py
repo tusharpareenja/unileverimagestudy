@@ -64,6 +64,24 @@ def get_study_endpoint(
     return study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
 
 
+@router.get("/public/{study_id}", response_model=StudyOut)
+def get_study_public_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Get study information for public access (no authentication required).
+    Only returns studies that are active and have a share_token.
+    """
+    study = study_service.get_study_public(db=db, study_id=study_id)
+    if not study:
+        raise HTTPException(
+            status_code=404, 
+            detail="Study not found or not publicly accessible"
+        )
+    return study
+
+
 @router.put("/{study_id}", response_model=StudyOut)
 def update_study_endpoint(
     study_id: UUID,

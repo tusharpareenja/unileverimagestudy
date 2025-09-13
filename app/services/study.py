@@ -10,7 +10,7 @@ from sqlalchemy import select, func, desc
 from fastapi import HTTPException, status
 import logging
 
-from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage
+from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage, StudyClassificationQuestion
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
     StudyStatus, StudyType, RegenerateTasksResponse, ValidateTasksResponse
@@ -79,6 +79,7 @@ def _load_owned_study(db: Session, study_id: UUID, owner_id: UUID, for_update: b
         .options(
             selectinload(Study.elements),
             selectinload(Study.layers).selectinload(StudyLayer.images),
+            selectinload(Study.classification_questions),
         )
         .where(Study.id == study_id, Study.creator_id == owner_id)
     )
@@ -188,12 +189,58 @@ def create_study(
                     cloudinary_public_id=public_id
                 ))
 
+    # Handle classification questions (for both grid and layer studies)
+    if payload.classification_questions:
+        seen_question_ids = set()
+        for question in payload.classification_questions:
+            if question.question_id in seen_question_ids:
+                raise HTTPException(status_code=409, detail=f"Duplicate question_id: {question.question_id}")
+            seen_question_ids.add(question.question_id)
+            
+            # Convert answer options to JSONB format
+            answer_options_json = None
+            if question.answer_options:
+                answer_options_json = [option.model_dump() for option in question.answer_options]
+            
+            db.add(StudyClassificationQuestion(
+                id=uuid4(),
+                study_id=study.id,
+                question_id=question.question_id,
+                question_text=question.question_text,
+                question_type=question.question_type,
+                is_required='Y' if question.is_required else 'N',
+                order=question.order,
+                answer_options=answer_options_json,
+                config=question.config
+            ))
+
     db.commit()
     db.refresh(study)
     return study
 
 def get_study(db: Session, study_id: UUID, owner_id: UUID) -> Study:
     return _load_owned_study(db, study_id, owner_id, for_update=False)
+
+def get_study_public(db: Session, study_id: UUID) -> Optional[Study]:
+    """
+    Get study information for public access (no authentication required).
+    Only returns studies that are active and have a share_token.
+    """
+    stmt = (
+        select(Study)
+        .options(
+            selectinload(Study.elements),
+            selectinload(Study.layers).selectinload(StudyLayer.images),
+            selectinload(Study.classification_questions),
+        )
+        .where(
+            Study.id == study_id,
+            Study.status == 'active',
+            Study.share_token.isnot(None),
+            Study.share_token != ''
+        )
+    )
+    return db.scalars(stmt).first()
 
 def list_studies(
     db: Session,
@@ -352,6 +399,36 @@ def update_study(
                     alt_text=img.alt_text,
                     order=img.order
                 ))
+
+    # Handle classification questions updates
+    if payload.classification_questions is not None:
+        # Clear existing classification questions
+        db.query(StudyClassificationQuestion).filter(StudyClassificationQuestion.study_id == study.id).delete()
+        db.flush()
+        
+        # Add new classification questions
+        seen_question_ids = set()
+        for question in payload.classification_questions:
+            if question.question_id in seen_question_ids:
+                raise HTTPException(status_code=409, detail=f"Duplicate question_id: {question.question_id}")
+            seen_question_ids.add(question.question_id)
+            
+            # Convert answer options to JSONB format
+            answer_options_json = None
+            if question.answer_options:
+                answer_options_json = [option.model_dump() for option in question.answer_options]
+            
+            db.add(StudyClassificationQuestion(
+                id=uuid4(),
+                study_id=study.id,
+                question_id=question.question_id,
+                question_text=question.question_text,
+                question_type=question.question_type,
+                is_required='Y' if question.is_required else 'N',
+                order=question.order,
+                answer_options=answer_options_json,
+                config=question.config
+            ))
 
     db.commit()
     db.refresh(study)
