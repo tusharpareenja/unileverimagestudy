@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -44,3 +45,15 @@ async def health_check():
 async def on_startup():
     # Initialize Cloudinary once
     init_cloudinary()
+    
+    # Start background tasks
+    from app.services.background_tasks import background_task_service
+    background_task_service.task = asyncio.create_task(
+        background_task_service.start_abandonment_checker(interval_minutes=30)
+    )
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    # Stop background tasks
+    from app.services.background_tasks import background_task_service
+    background_task_service.stop_abandonment_checker()

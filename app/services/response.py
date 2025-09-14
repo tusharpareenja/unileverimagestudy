@@ -84,7 +84,10 @@ class StudyResponseService:
             ip_address=response_data.ip_address,
             user_agent=response_data.user_agent,
             browser_info=response_data.browser_info,
-            last_activity=datetime.utcnow()
+            last_activity=datetime.utcnow(),
+            status='in_progress',  # Set status as in_progress when session starts
+            is_abandoned=False,    # Set to False initially, will be True after 2 hours if no activity
+            is_completed=False     # Set to False initially
         )
         
         self.db.add(response)
@@ -328,6 +331,7 @@ class StudyResponseService:
         
         response.is_abandoned = True
         response.is_completed = False
+        response.status = 'abandoned'  # Set status as abandoned
         response.abandonment_timestamp = datetime.utcnow()
         response.abandonment_reason = request.reason
         response.last_activity = datetime.utcnow()
@@ -338,6 +342,42 @@ class StudyResponseService:
         self._update_study_counters(response.study_id)
         
         return True
+    
+    def check_and_mark_abandoned_sessions(self) -> int:
+        """Check for sessions that have been inactive for 2+ hours and mark them as abandoned."""
+        from datetime import timedelta
+        
+        # Find sessions that are in_progress but haven't been active for 2+ hours
+        cutoff_time = datetime.utcnow() - timedelta(hours=2)
+        
+        abandoned_sessions = self.db.execute(
+            select(StudyResponse)
+            .where(
+                and_(
+                    StudyResponse.status == 'in_progress',
+                    StudyResponse.last_activity < cutoff_time,
+                    StudyResponse.is_completed == False
+                )
+            )
+        ).scalars().all()
+        
+        count = 0
+        for session in abandoned_sessions:
+            session.is_abandoned = True
+            session.is_completed = False
+            session.status = 'abandoned'
+            session.abandonment_timestamp = datetime.utcnow()
+            session.abandonment_reason = 'Inactive for 2+ hours'
+            count += 1
+        
+        if count > 0:
+            self.db.commit()
+            # Update study counters for affected studies
+            study_ids = set(session.study_id for session in abandoned_sessions)
+            for study_id in study_ids:
+                self._update_study_counters(study_id)
+        
+        return count
     
     def update_user_details(self, session_id: str, user_details: Dict[str, Any]) -> bool:
         """Update user details for a study session."""
@@ -361,47 +401,44 @@ class StudyResponseService:
     # ---------- Analytics and Reporting ----------
     
     def get_study_analytics(self, study_id: UUID) -> StudyAnalytics:
-        """Get analytics data for a study."""
-        # Get response counts
-        total_responses = self.db.execute(
-            select(func.count(StudyResponse.id))
-            .where(StudyResponse.study_id == study_id)
-        ).scalar()
+        """Get analytics data for a study - ultra-optimized with minimal queries."""
+        # Single query to get all response statistics
+        stats_query = select(
+            func.count(StudyResponse.id).label('total_responses'),
+            func.count(StudyResponse.id).filter(StudyResponse.is_completed == True).label('completed_responses'),
+            func.count(StudyResponse.id).filter(StudyResponse.is_abandoned == True).label('abandoned_responses'),
+            func.avg(StudyResponse.total_study_duration).filter(StudyResponse.is_completed == True).label('avg_duration')
+        ).where(StudyResponse.study_id == study_id)
         
-        completed_responses = self.db.execute(
-            select(func.count(StudyResponse.id))
-            .where(and_(
-                StudyResponse.study_id == study_id,
-                StudyResponse.is_completed == True
-            ))
-        ).scalar()
+        result = self.db.execute(stats_query).first()
         
-        abandoned_responses = self.db.execute(
-            select(func.count(StudyResponse.id))
-            .where(and_(
-                StudyResponse.study_id == study_id,
-                StudyResponse.is_abandoned == True
-            ))
-        ).scalar()
+        total_responses = result.total_responses or 0
+        completed_responses = result.completed_responses or 0
+        abandoned_responses = result.abandoned_responses or 0
+        avg_duration = float(result.avg_duration or 0)
         
         # Calculate rates
         completion_rate = (completed_responses / total_responses * 100) if total_responses > 0 else 0
         abandonment_rate = (abandoned_responses / total_responses * 100) if total_responses > 0 else 0
         
-        # Get average duration
-        avg_duration = self.db.execute(
-            select(func.avg(StudyResponse.total_study_duration))
-            .where(and_(
-                StudyResponse.study_id == study_id,
-                StudyResponse.is_completed == True
-            ))
-        ).scalar() or 0
+        # Simplified analytics - return empty data if no responses to avoid expensive queries
+        if total_responses == 0:
+            return StudyAnalytics(
+                total_responses=0,
+                completed_responses=0,
+                abandoned_responses=0,
+                completion_rate=0,
+                average_duration=0,
+                abandonment_rate=0,
+                element_heatmap={},
+                timing_distributions={"task_durations": [], "average_duration": 0, "min_duration": 0, "max_duration": 0, "total_tasks": 0}
+            )
         
-        # Get element heatmap (simplified)
-        element_heatmap = self._get_element_heatmap(study_id)
+        # Get element heatmap (optimized)
+        element_heatmap = self._get_element_heatmap_optimized(study_id)
         
-        # Get timing distributions
-        timing_distributions = self._get_timing_distributions(study_id)
+        # Get timing distributions (optimized)
+        timing_distributions = self._get_timing_distributions_optimized(study_id)
         
         return StudyAnalytics(
             total_responses=total_responses,
@@ -480,9 +517,11 @@ class StudyResponseService:
         from datetime import timezone
         response.is_completed = True
         response.is_abandoned = False
+        response.status = 'completed'  # Set status as completed
         end_time = datetime.now(timezone.utc)
         response.session_end_time = end_time
         response.completion_percentage = 100.0
+        response.last_activity = end_time  # Update last activity
         
         if response.session_start_time:
             start_time = response.session_start_time
@@ -525,50 +564,63 @@ class StudyResponseService:
         
         self.db.commit()
     
-    def _get_element_heatmap(self, study_id: UUID) -> Dict[str, Any]:
-        """Get element interaction heatmap data."""
-        # Simplified implementation - you can expand this
-        interactions = self.db.execute(
-            select(ElementInteraction)
-            .join(StudyResponse)
-            .where(StudyResponse.study_id == study_id)
-        ).scalars().all()
+    def _get_element_heatmap_optimized(self, study_id: UUID) -> Dict[str, Any]:
+        """Get element interaction heatmap data - ultra-optimized with aggregation."""
+        # Single query with aggregation to get heatmap data
+        heatmap_query = select(
+            ElementInteraction.element_id,
+            func.sum(ElementInteraction.view_time_seconds).label('total_view_time'),
+            func.sum(ElementInteraction.hover_count).label('total_hovers'),
+            func.sum(ElementInteraction.click_count).label('total_clicks'),
+            func.count(ElementInteraction.id).label('interaction_count')
+        ).join(StudyResponse).where(
+            StudyResponse.study_id == study_id
+        ).group_by(ElementInteraction.element_id).limit(50)  # Limit to prevent excessive data
+        
+        results = self.db.execute(heatmap_query).all()
         
         heatmap = {}
-        for interaction in interactions:
-            element_id = interaction.element_id
-            if element_id not in heatmap:
-                heatmap[element_id] = {
-                    "total_view_time": 0.0,
-                    "total_hovers": 0,
-                    "total_clicks": 0,
-                    "interaction_count": 0
-                }
-            
-            heatmap[element_id]["total_view_time"] += interaction.view_time_seconds
-            heatmap[element_id]["total_hovers"] += interaction.hover_count
-            heatmap[element_id]["total_clicks"] += interaction.click_count
-            heatmap[element_id]["interaction_count"] += 1
+        for result in results:
+            heatmap[result.element_id] = {
+                "total_view_time": float(result.total_view_time or 0),
+                "total_hovers": int(result.total_hovers or 0),
+                "total_clicks": int(result.total_clicks or 0),
+                "interaction_count": int(result.interaction_count or 0)
+            }
         
         return heatmap
     
-    def _get_timing_distributions(self, study_id: UUID) -> Dict[str, Any]:
-        """Get timing distribution data."""
-        # Get task durations
-        durations = self.db.execute(
+    def _get_timing_distributions_optimized(self, study_id: UUID) -> Dict[str, Any]:
+        """Get timing distribution data - ultra-optimized with single query."""
+        # Single query to get all timing statistics
+        timing_query = select(
+            func.avg(CompletedTask.task_duration_seconds).label('avg_duration'),
+            func.min(CompletedTask.task_duration_seconds).label('min_duration'),
+            func.max(CompletedTask.task_duration_seconds).label('max_duration'),
+            func.count(CompletedTask.id).label('total_tasks')
+        ).join(StudyResponse).where(
+            StudyResponse.study_id == study_id
+        )
+        
+        result = self.db.execute(timing_query).first()
+        
+        if not result or result.total_tasks == 0:
+            return {"task_durations": [], "average_duration": 0, "min_duration": 0, "max_duration": 0, "total_tasks": 0}
+        
+        # Get sample durations for distribution (very limited to ensure fast response)
+        sample_durations = self.db.execute(
             select(CompletedTask.task_duration_seconds)
             .join(StudyResponse)
             .where(StudyResponse.study_id == study_id)
+            .limit(100)  # Very small limit for fast response
         ).scalars().all()
         
-        if not durations:
-            return {"task_durations": [], "average_duration": 0}
-        
         return {
-            "task_durations": list(durations),
-            "average_duration": sum(durations) / len(durations),
-            "min_duration": min(durations),
-            "max_duration": max(durations)
+            "task_durations": list(sample_durations),
+            "average_duration": float(result.avg_duration or 0),
+            "min_duration": float(result.min_duration or 0),
+            "max_duration": float(result.max_duration or 0),
+            "total_tasks": int(result.total_tasks or 0)
         }
 
 # ---------- Task Session Service ----------

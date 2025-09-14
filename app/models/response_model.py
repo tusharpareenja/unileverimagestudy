@@ -32,6 +32,8 @@ class ElementInteraction(Base):
         Index("idx_element_interaction_response", "study_response_id"),
         Index("idx_element_interaction_task", "task_session_id"),
         Index("idx_element_interaction_element", "element_id"),
+        # Composite index for analytics performance
+        Index("idx_element_interaction_analytics", "study_response_id", "element_id"),
     )
 
 # ---------- Completed Task Table ----------
@@ -76,6 +78,8 @@ class CompletedTask(Base):
         Index("idx_completed_task_response", "study_response_id"),
         Index("idx_completed_task_id", "task_id"),
         Index("idx_completed_task_respondent", "respondent_id"),
+        # Composite index for analytics performance
+        Index("idx_completed_task_analytics", "study_response_id", "task_duration_seconds"),
     )
 
 # ---------- Classification Answer Table ----------
@@ -121,6 +125,7 @@ class StudyResponse(Base):
     session_start_time = Column(DateTime(timezone=True), nullable=False)
     session_end_time = Column(DateTime(timezone=True), nullable=True)
     is_completed = Column(Boolean, default=False)
+    status = Column(String(20), nullable=True, index=True)
     
     # Classification and Demographics
     personal_info = Column(JSONB, nullable=True)  # Age, gender, education, etc.
@@ -159,6 +164,9 @@ class StudyResponse(Base):
         Index("idx_study_response_completed", "is_completed"),
         Index("idx_study_response_abandoned", "is_abandoned"),
         Index("idx_study_response_activity", "last_activity"),
+        # Composite indexes for analytics performance
+        Index("idx_study_response_analytics", "study_id", "is_completed", "is_abandoned"),
+        Index("idx_study_response_duration", "study_id", "total_study_duration"),
     )
 
 # ---------- Task Session Table ----------
@@ -186,6 +194,7 @@ class TaskSession(Base):
     abandonment_timestamp = Column(DateTime(timezone=True), nullable=True)
     abandonment_reason = Column(String(200), nullable=True)
     recovery_attempts = Column(Integer, default=0)
+    
     
     # Performance Analytics
     browser_performance = Column(JSONB, nullable=True)

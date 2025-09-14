@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_active_user
 from app.db.session import get_db
 from app.models.user_model import User
+from app.models.study_model import Study
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus,
@@ -17,6 +18,7 @@ from app.schemas.study_schema import (
 )
 from app.services import study as study_service
 from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -27,12 +29,12 @@ def create_study_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    base_url_for_share: Optional[str] = None
+    # Use settings.BASE_URL as default for share URL generation
     study = study_service.create_study(
         db=db,
         creator_id=current_user.id,
         payload=payload,
-        base_url_for_share=base_url_for_share,
+        base_url_for_share=settings.BASE_URL,
     )
     return study
 
@@ -62,6 +64,49 @@ def get_study_endpoint(
     current_user: User = Depends(get_current_active_user),
 ):
     return study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+
+
+@router.get("/private/{study_id}", response_model=StudyOut)
+def get_study_private_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Get complete study details for the study creator only.
+    This endpoint provides full access to all study information including:
+    - All study metadata and configuration
+    - Complete elements/layers with images
+    - Classification questions
+    - Tasks and response data
+    - Share URL and tokens
+    """
+    return study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+
+
+@router.get("/{study_id}/is-owner")
+def check_study_ownership_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Check if the logged-in user is the owner of the study and if the study is active.
+    Returns ownership status and active status in a single optimized query.
+    """
+    from sqlalchemy import select
+    
+    # Single optimized query to check ownership and status
+    stmt = select(Study.creator_id, Study.status).where(Study.id == study_id)
+    result = db.execute(stmt).first()
+    
+    if not result:
+        return {"is_owner": False, "is_active": False}
+    
+    is_owner = result.creator_id == current_user.id
+    is_active = result.status == 'active'
+    
+    return {"is_owner": is_owner, "is_active": is_active}
 
 
 @router.get("/public/{study_id}", response_model=StudyOut)

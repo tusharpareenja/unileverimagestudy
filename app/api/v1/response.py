@@ -202,15 +202,8 @@ async def get_response(
         )
     
     # Verify user owns the study
-    from app.services.study import StudyService
-    study_service = StudyService(db)
-    study = study_service.get_study(response.study_id)
-    
-    if not study or study.creator_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied to this response"
-        )
+    from app.services import study as study_service
+    study = study_service.get_study(db=db, study_id=response.study_id, owner_id=current_user.id)
     
     return response
 
@@ -233,15 +226,8 @@ async def delete_response(
         )
     
     # Verify user owns the study
-    from app.services.study import StudyService
-    study_service = StudyService(db)
-    study = study_service.get_study(response.study_id)
-    
-    if not study or study.creator_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied to this response"
-        )
+    from app.services import study as study_service
+    study = study_service.get_study(db=db, study_id=response.study_id, owner_id=current_user.id)
     
     success = service.delete_response(response_id)
     
@@ -262,21 +248,31 @@ async def get_study_analytics(
     db: Session = Depends(get_db)
 ):
     """
-    Get analytics data for a study.
+    Get analytics data for a study - optimized for fast performance.
     """
-    # Verify user owns the study
-    from app.services.study import StudyService
-    study_service = StudyService(db)
-    study = study_service.get_study(study_id)
+    import time
+    start_time = time.time()
     
-    if not study or study.creator_id != current_user.id:
+    # Fast ownership verification - only check creator_id, don't load full study
+    from sqlalchemy import select
+    from app.models.study_model import Study
+    
+    ownership_check = select(Study.creator_id).where(Study.id == study_id)
+    result = db.execute(ownership_check).first()
+    
+    if not result or result.creator_id != current_user.id:
         raise HTTPException(
-            status_code=403,
-            detail="Access denied to this study"
+            status_code=404,
+            detail="Study not found or access denied"
         )
     
     service = StudyResponseService(db)
-    return service.get_study_analytics(study_id)
+    analytics = service.get_study_analytics(study_id)
+    
+    end_time = time.time()
+    print(f"Analytics query took: {(end_time - start_time)*1000:.2f}ms")
+    
+    return analytics
 
 @router.get("/analytics/response/{response_id}", response_model=ResponseAnalytics)
 async def get_response_analytics(
@@ -297,15 +293,8 @@ async def get_response_analytics(
         )
     
     # Verify user owns the study
-    from app.services.study import StudyService
-    study_service = StudyService(db)
-    study = study_service.get_study(response.study_id)
-    
-    if not study or study.creator_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied to this response"
-        )
+    from app.services import study as study_service
+    study = study_service.get_study(db=db, study_id=response.study_id, owner_id=current_user.id)
     
     analytics = service.get_response_analytics(response_id)
     if not analytics:
@@ -315,6 +304,25 @@ async def get_response_analytics(
         )
     
     return analytics
+
+
+@router.post("/check-abandoned-sessions")
+async def check_abandoned_sessions(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Manually trigger check for sessions that should be marked as abandoned (2+ hours inactive).
+    This endpoint can be called periodically or by a background task.
+    """
+    service = StudyResponseService(db)
+    count = service.check_and_mark_abandoned_sessions()
+    
+    return {
+        "message": f"Checked for abandoned sessions",
+        "sessions_marked_abandoned": count,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 # ---------- Task Session Endpoints ----------
 
@@ -404,15 +412,8 @@ async def export_study_responses(
     Export all responses for a study in CSV or JSON format.
     """
     # Verify user owns the study
-    from app.services.study import StudyService
-    study_service = StudyService(db)
-    study = study_service.get_study(study_id)
-    
-    if not study or study.creator_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied to this study"
-        )
+    from app.services import study as study_service
+    study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
     
     service = StudyResponseService(db)
     responses = service.get_responses_by_study(study_id, limit=10000)  # Large limit for export
@@ -484,15 +485,8 @@ async def export_response_detailed(
         )
     
     # Verify user owns the study
-    from app.services.study import StudyService
-    study_service = StudyService(db)
-    study = study_service.get_study(response.study_id)
-    
-    if not study or study.creator_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Access denied to this response"
-        )
+    from app.services import study as study_service
+    study = study_service.get_study(db=db, study_id=response.study_id, owner_id=current_user.id)
     
     # Get detailed response data
     detailed_response = service.get_response(response_id)

@@ -17,6 +17,7 @@ from app.schemas.study_schema import (
 )
 from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
 from app.services.cloudinary_service import upload_base64, delete_public_id
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +56,10 @@ def _validate_rating_scale(rating_scale: Dict[str, Any]) -> None:
 def _generate_share_token() -> str:
     return uuid4().hex
 
-def _build_share_url(base_url: Optional[str], share_token: str) -> Optional[str]:
-    if not base_url:
-        return None
-    return f"{base_url.rstrip('/')}/participate/{share_token}"
+def _build_share_url(base_url: Optional[str], study_id: str) -> str:
+    # Use provided base_url or fall back to settings
+    url = base_url or settings.BASE_URL
+    return f"{url.rstrip('/')}/participate/{study_id}"
 
 
 def _maybe_upload_data_url_to_cloudinary(url_or_data: Optional[str]) -> tuple[str, Optional[str]]:
@@ -103,8 +104,7 @@ def create_study(
     _validate_rating_scale(payload.rating_scale.model_dump())
 
     share_token = _generate_share_token()
-    share_url = _build_share_url(base_url_for_share, share_token)
-
+    
     study = Study(
         id=uuid4(),
         title=payload.title,
@@ -119,13 +119,17 @@ def create_study(
         creator_id=creator_id,
         status='draft',
         share_token=share_token,
-        share_url=share_url,
+        share_url=None,  # Will be set after study.id is available
         total_responses=0,
         completed_responses=0,
         abandoned_responses=0,
     )
     db.add(study)
     db.flush()  # ensure study.id is available
+    
+    # Now generate share_url using the study.id
+    share_url = _build_share_url(base_url_for_share, str(study.id))
+    study.share_url = share_url
 
     # Children
     if payload.study_type == 'grid' and payload.elements:
@@ -452,9 +456,11 @@ def change_status(
     if new_status not in ['draft', 'active', 'paused', 'completed']:
         raise HTTPException(status_code=400, detail="Invalid status.")
 
-    # transitions timestamps
+    # transitions timestamps and share_url update
     if new_status == 'active' and (study.launched_at is None):
         study.launched_at = datetime.utcnow()
+        # Update share_url when study is launched (becomes active)
+        study.share_url = _build_share_url(None, str(study.id))
     if new_status == 'completed':
         study.completed_at = datetime.utcnow()
 
