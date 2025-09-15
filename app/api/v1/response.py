@@ -7,6 +7,8 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from fastapi.responses import StreamingResponse
+import json
+import asyncio
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -335,6 +337,45 @@ async def get_study_analytics(
     print(f"Analytics query took: {(end_time - start_time)*1000:.2f}ms")
     
     return analytics
+
+
+@router.get("/analytics/study/{study_id}/stream")
+async def stream_study_analytics(
+    study_id: UUID,
+    interval_seconds: int = Query(5, ge=1, le=60),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Server-Sent Events (SSE) stream of study analytics.
+    Emits an event every `interval_seconds` with the same payload shape
+    as /analytics/study/{study_id}.
+    """
+    # Ownership check (fast)
+    from sqlalchemy import select
+    from app.models.study_model import Study
+    ownership_check = select(Study.creator_id).where(Study.id == study_id)
+    result = db.execute(ownership_check).first()
+    if not result or result.creator_id != current_user.id:
+        raise HTTPException(
+            status_code=404,
+            detail="Study not found or access denied"
+        )
+
+    service = StudyResponseService(db)
+
+    async def event_generator():
+        last_payload: str | None = None
+        while True:
+            analytics = service.get_study_analytics(study_id)
+            payload = json.dumps(analytics.model_dump())
+            # Only send when changed to reduce client work
+            if payload != last_payload:
+                yield f"data: {payload}\n\n"
+                last_payload = payload
+            await asyncio.sleep(interval_seconds)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.get("/analytics/response/{response_id}", response_model=ResponseAnalytics)
 async def get_response_analytics(
