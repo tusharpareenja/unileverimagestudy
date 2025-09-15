@@ -125,46 +125,42 @@ def create_study(
         abandoned_responses=0,
     )
     db.add(study)
-    db.flush()  # ensure study.id is available
-    
-    # Now generate share_url using the study.id
-    share_url = _build_share_url(base_url_for_share, str(study.id))
-    study.share_url = share_url
+    # UUID is already assigned above; avoid early flush to reduce DB round-trips
+    study.share_url = _build_share_url(base_url_for_share, str(study.id))
 
     # Children
     if payload.study_type == 'grid' and payload.elements:
         # Ensure element_id uniqueness within the study
         seen_ids = set()
-        order_counter = 1
+        new_elements: List[StudyElement] = []
         for elem in payload.elements:
             if elem.element_id in seen_ids:
                 raise HTTPException(status_code=409, detail=f"Duplicate element_id: {elem.element_id}")
             seen_ids.add(elem.element_id)
-            # If frontend provided secure_url/public_id in content as JSON, you could parse it.
-            # For now, if content is a data URL, upload and replace.
             content_url, public_id = _maybe_upload_data_url_to_cloudinary(elem.content)
-            db.add(StudyElement(
+            new_elements.append(StudyElement(
                 id=uuid4(),
                 study_id=study.id,
                 element_id=elem.element_id,
                 name=elem.name,
                 description=elem.description,
-                element_type=elem.element_type,  # enum
+                element_type=elem.element_type,
                 content=content_url or elem.content,
                 alt_text=elem.alt_text,
                 cloudinary_public_id=public_id
             ))
-            order_counter += 1
+        if new_elements:
+            db.add_all(new_elements)
 
     if payload.study_type == 'layer' and payload.study_layers:
         # Each layer with images
         seen_layer_ids = set()
+        new_layers: List[StudyLayer] = []
         for layer in payload.study_layers:
             if layer.layer_id in seen_layer_ids:
                 raise HTTPException(status_code=409, detail=f"Duplicate layer_id: {layer.layer_id}")
             seen_layer_ids.add(layer.layer_id)
-
-            layer_row = StudyLayer(
+            new_layers.append(StudyLayer(
                 id=uuid4(),
                 study_id=study.id,
                 layer_id=layer.layer_id,
@@ -172,17 +168,20 @@ def create_study(
                 description=layer.description,
                 z_index=layer.z_index,
                 order=layer.order
-            )
-            db.add(layer_row)
-            db.flush()
+            ))
+        if new_layers:
+            db.add_all(new_layers)
 
+        # Build images for all layers without per-layer flushes (ids are preassigned)
+        new_images: List[LayerImage] = []
+        for layer_row, layer in zip(new_layers, payload.study_layers or []):
             seen_image_ids = set()
             for img in layer.images or []:
                 if img.image_id in seen_image_ids:
                     raise HTTPException(status_code=409, detail=f"Duplicate image_id in layer {layer.layer_id}: {img.image_id}")
                 seen_image_ids.add(img.image_id)
                 url, public_id = _maybe_upload_data_url_to_cloudinary(img.url)
-                db.add(LayerImage(
+                new_images.append(LayerImage(
                     id=uuid4(),
                     layer_id=layer_row.id,
                     image_id=img.image_id,
@@ -192,21 +191,19 @@ def create_study(
                     order=img.order,
                     cloudinary_public_id=public_id
                 ))
+        if new_images:
+            db.add_all(new_images)
 
     # Handle classification questions (for both grid and layer studies)
     if payload.classification_questions:
         seen_question_ids = set()
+        new_questions: List[StudyClassificationQuestion] = []
         for question in payload.classification_questions:
             if question.question_id in seen_question_ids:
                 raise HTTPException(status_code=409, detail=f"Duplicate question_id: {question.question_id}")
             seen_question_ids.add(question.question_id)
-            
-            # Convert answer options to JSONB format
-            answer_options_json = None
-            if question.answer_options:
-                answer_options_json = [option.model_dump() for option in question.answer_options]
-            
-            db.add(StudyClassificationQuestion(
+            answer_options_json = [option.model_dump() for option in question.answer_options] if question.answer_options else None
+            new_questions.append(StudyClassificationQuestion(
                 id=uuid4(),
                 study_id=study.id,
                 question_id=question.question_id,
@@ -217,6 +214,8 @@ def create_study(
                 answer_options=answer_options_json,
                 config=question.config
             ))
+        if new_questions:
+            db.add_all(new_questions)
 
     db.commit()
     db.refresh(study)
@@ -277,20 +276,7 @@ def update_study(
     payload: StudyUpdate
 ) -> Study:
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
-    if study.status == 'active':
-        non_status_changes = any([
-            payload.title is not None,
-            payload.background is not None,
-            payload.language is not None,
-            payload.main_question is not None,
-            payload.orientation_text is not None,
-            payload.rating_scale is not None,
-            payload.audience_segmentation is not None,
-            payload.elements is not None,
-            payload.study_layers is not None,
-        ])
-        if non_status_changes:
-            raise HTTPException(status_code=400, detail="Cannot edit active studies except status.")
+    # Allow editing even when active (per new requirement)
 
     # Handle status change if provided (align with change_status rules)
     if payload.status is not None:
@@ -302,6 +288,18 @@ def update_study(
         if payload.status == 'completed':
             study.completed_at = datetime.utcnow()
         study.status = payload.status
+        # Generate tasks automatically when study transitions to active
+        if payload.status == 'active':
+            try:
+                from app.services.study import regenerate_tasks
+                regenerate_tasks(
+                    db=db,
+                    study_id=study.id,
+                    owner_id=owner_id,
+                )
+            except Exception as ex:
+                # Non-fatal: keep study active even if task generation fails
+                logger.error("Task generation on activation failed: %s", ex)
 
     # Apply scalar updates
     if payload.title is not None:

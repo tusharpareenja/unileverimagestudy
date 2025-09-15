@@ -233,6 +233,7 @@ class StudyResponseListItem(BaseModel):
     id: UUID
     session_id: str
     respondent_id: int
+    personal_info: Optional[Dict[str, Any]] = None
     is_completed: bool
     is_abandoned: bool
     completion_percentage: float
@@ -313,6 +314,7 @@ class StudyAnalytics(BaseModel):
     total_responses: int
     completed_responses: int
     abandoned_responses: int
+    in_progress_responses: int
     completion_rate: float
     average_duration: float
     abandonment_rate: float

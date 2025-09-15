@@ -116,10 +116,12 @@ def _soft_repair_grid_counts(design_df: pd.DataFrame, elem_names: List[str], exp
                     break
     return design_df
 
-def _generate_grid_mode(num_consumers: int, tasks_per_consumer: int, num_elements: int, K: int, exposure_tol_cv=0.01):
+def _generate_grid_mode(num_consumers: int, tasks_per_consumer: int, num_elements: int, K: int, exposure_tol_cv=0.01, elem_names: Optional[List[str]] = None):
     E = int(num_elements)
     total_tasks = num_consumers * tasks_per_consumer
-    elem_names = [f"E{i+1}" for i in range(E)]
+    # Allow caller to provide explicit element names (e.g., image names). Fallback to E1..EN.
+    if not elem_names or len(elem_names) != E:
+        elem_names = [f"E{i+1}" for i in range(E)]
     used_elem = {e: 0 for e in elem_names}
     col_index = {e: i for i, e in enumerate(elem_names)}
     design_data = np.zeros((total_tasks, E), dtype=int)
@@ -175,7 +177,22 @@ def generate_grid_tasks(
         notes.append(f"tasks_per_consumer auto-picked to {T}.")
     if tasks_per_consumer > cap:
         raise ValueError(f"T ({tasks_per_consumer}) exceeds capacity ({cap}) for E={num_elements}, K={minK}")
-    df, r_stats, elem_names = _generate_grid_mode(number_of_respondents, tasks_per_consumer, num_elements, K=minK, exposure_tol_cv=exposure_tol_cv)
+    # If StudyElement list is provided, use their display names as the element keys
+    provided_names: Optional[List[str]] = None
+    if elements:
+        try:
+            provided_names = [str(getattr(el, 'name')) for el in elements][:num_elements]
+        except Exception:
+            provided_names = None
+
+    df, r_stats, elem_names = _generate_grid_mode(
+        number_of_respondents,
+        tasks_per_consumer,
+        num_elements,
+        K=minK,
+        exposure_tol_cv=exposure_tol_cv,
+        elem_names=provided_names,
+    )
 
     tasks_structure: Dict[str, List[Dict[str, Any]]] = {}
     for respondent_id in range(number_of_respondents):

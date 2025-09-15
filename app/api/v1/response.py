@@ -6,7 +6,9 @@ from uuid import UUID
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.core.dependencies import get_current_active_user
 from app.db.session import get_db
@@ -89,7 +91,7 @@ async def abandon_study(
         message="Study marked as abandoned" if success else "Failed to abandon study"
     )
 
-@router.get("/session/{session_id}", response_model=StudyResponseOut)
+@router.get("/session/{session_id}", response_model=StudyResponseDetail)
 async def get_session(
     session_id: str,
     db: Session = Depends(get_db)
@@ -98,7 +100,7 @@ async def get_session(
     Get study session details by session ID.
     """
     service = StudyResponseService(db)
-    response = service.get_response_by_session(session_id)
+    response = service.get_response_detail_by_session(session_id)
     
     if not response:
         raise HTTPException(
@@ -106,7 +108,67 @@ async def get_session(
             detail="Session not found"
         )
     
-    return response
+    # Map classification answer codes to human-readable labels using study configuration
+    try:
+        if response and getattr(response, "study_id", None):
+            from app.models.study_model import StudyClassificationQuestion
+            # Build options map per question
+            questions = db.execute(
+                select(StudyClassificationQuestion)
+                .where(StudyClassificationQuestion.study_id == response.study_id)
+                .order_by(StudyClassificationQuestion.order)
+            ).scalars().all()
+            qid_to_options: Dict[str, Dict[str, str]] = {}
+            for q in questions:
+                options_map: Dict[str, str] = {}
+                if isinstance(q.answer_options, list):
+                    for opt in q.answer_options:
+                        if not isinstance(opt, dict):
+                            continue
+                        text = opt.get("text") or opt.get("label") or opt.get("name")
+                        if text is None:
+                            continue
+                        for key_name in ("id", "value", "code", "label"):
+                            if key_name in opt and opt[key_name] is not None:
+                                options_map[str(opt[key_name])] = text
+                if options_map:
+                    qid_to_options[q.question_id] = options_map
+
+            # Convert ORM -> Pydantic dict
+            resp_out = StudyResponseDetail.model_validate(response).model_dump()
+            # Transform answers
+            for ans in resp_out.get("classification_answers", []) or []:
+                qid = ans.get("question_id")
+                raw = ans.get("answer")
+                mapped = raw
+                try:
+                    options_map = qid_to_options.get(qid)
+                    if isinstance(raw, str) and options_map:
+                        left_code = raw.split(' - ', 1)[0]
+                        right_part = raw.split(' - ', 1)[1].strip() if ' - ' in raw else None
+                        if raw in options_map:
+                            mapped = options_map[raw]
+                        elif left_code in options_map:
+                            mapped = options_map[left_code]
+                        elif right_part and right_part in options_map:
+                            mapped = options_map[right_part]
+                        else:
+                            parts = raw.split(' - ', 1)
+                            if len(parts) == 2 and parts[1].strip():
+                                mapped = parts[1].strip()
+                    elif isinstance(raw, str):
+                        parts = raw.split(' - ', 1)
+                        if len(parts) == 2 and parts[1].strip():
+                            mapped = parts[1].strip()
+                except Exception:
+                    mapped = raw
+                ans["answer"] = mapped
+            return resp_out
+    except Exception:
+        # Fallback to raw response if mapping fails
+        pass
+
+    return StudyResponseDetail.model_validate(response)
 
 @router.put("/session/{session_id}/user-details")
 async def update_user_details(
@@ -496,3 +558,47 @@ async def export_response_detailed(
         "analytics": service.get_response_analytics(response_id),
         "export_timestamp": datetime.utcnow().isoformat()
     }
+
+
+@router.get("/export/study/{study_id}/flattened-csv")
+async def export_study_flattened_csv(
+    study_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Export a flattened CSV where each row is a respondent-task with columns:
+    Panelist(session_id), QQ* classification answers, Gender, Age, Task, Layer_* visibility flags, Rating, ResponseTime.
+    """
+    # Verify user owns the study
+    from app.services import study as study_service
+    study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+
+    service = StudyResponseService(db)
+
+    def csv_generator():
+        import csv
+        import io
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        batch_size = 500
+        counter = 0
+        for row in service.generate_csv_rows_for_study(study_id):
+            writer.writerow(row)
+            counter += 1
+            if counter % batch_size == 0:
+                data = buffer.getvalue()
+                if data:
+                    yield data
+                buffer.seek(0)
+                buffer.truncate(0)
+        # flush remainder
+        data = buffer.getvalue()
+        if data:
+            yield data
+
+    filename = f"study_{study_id}_flattened_export.csv"
+    headers = {
+        "Content-Disposition": f"attachment; filename={filename}"
+    }
+    return StreamingResponse(csv_generator(), media_type="text/csv", headers=headers)

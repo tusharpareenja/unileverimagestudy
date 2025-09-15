@@ -127,6 +127,11 @@ class StudyListItem(BaseModel):
     total_responses: int
     completed_responses: int
     abandoned_responses: int
+    completion_rate: float | int = 0
+    average_duration: float | int = 0
+    abandonment_rate: float | int = 0
+    respondents_target: int | None = 0
+    respondents_completed: int | None = 0
     model_config = ConfigDict(from_attributes=True)
 
 class StudyOut(BaseModel):

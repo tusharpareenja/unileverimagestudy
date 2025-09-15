@@ -1,11 +1,12 @@
 # app/services/response.py
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Iterable
 from uuid import UUID, uuid4
 from datetime import datetime, timedelta
+import time
 
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, selectinload, load_only
 from sqlalchemy import select, func, desc, and_, or_
 from fastapi import HTTPException, status
 
@@ -13,7 +14,7 @@ from app.models.response_model import (
     StudyResponse, CompletedTask, ClassificationAnswer, 
     ElementInteraction, TaskSession
 )
-from app.models.study_model import Study
+from app.models.study_model import Study, StudyClassificationQuestion, StudyElement
 from app.schemas.response_schema import (
     StudyResponseCreate, StudyResponseUpdate, StudyResponseOut,
     CompletedTaskCreate, ClassificationAnswerCreate,
@@ -30,6 +31,12 @@ class StudyResponseService:
     
     def __init__(self, db: Session):
         self.db = db
+        # Lightweight in-process cache for analytics to accelerate repeated GETs
+        # Keyed by study_id; values are (expires_at_epoch_seconds, StudyAnalytics)
+        if not hasattr(StudyResponseService, "_analytics_cache"):
+            StudyResponseService._analytics_cache: Dict[str, Tuple[float, Any]] = {}
+        if not hasattr(StudyResponseService, "_analytics_ttl_seconds"):
+            StudyResponseService._analytics_ttl_seconds: int = 15
     
     # ---------- Core CRUD Operations ----------
     
@@ -106,6 +113,97 @@ class StudyResponseService:
     def get_response_by_session(self, session_id: str) -> Optional[StudyResponse]:
         """Get a study response by session ID."""
         stmt = select(StudyResponse).where(StudyResponse.session_id == session_id)
+        return self.db.execute(stmt).scalar_one_or_none()
+    
+    def get_response_detail_by_session(self, session_id: str) -> Optional[StudyResponse]:
+        """Get a study response by session ID with related details, optimized for speed."""
+        stmt = (
+            select(StudyResponse)
+            .where(StudyResponse.session_id == session_id)
+            .options(
+                load_only(
+                    StudyResponse.id,
+                    StudyResponse.study_id,
+                    StudyResponse.session_id,
+                    StudyResponse.respondent_id,
+                    StudyResponse.current_task_index,
+                    StudyResponse.completed_tasks_count,
+                    StudyResponse.total_tasks_assigned,
+                    StudyResponse.session_start_time,
+                    StudyResponse.session_end_time,
+                    StudyResponse.is_completed,
+                    StudyResponse.personal_info,
+                    StudyResponse.ip_address,
+                    StudyResponse.user_agent,
+                    StudyResponse.browser_info,
+                    StudyResponse.completion_percentage,
+                    StudyResponse.total_study_duration,
+                    StudyResponse.last_activity,
+                    StudyResponse.is_abandoned,
+                    StudyResponse.abandonment_timestamp,
+                    StudyResponse.abandonment_reason,
+                    StudyResponse.created_at,
+                    StudyResponse.updated_at,
+                ),
+                selectinload(StudyResponse.completed_tasks).load_only(
+                    CompletedTask.id,
+                    CompletedTask.study_response_id,
+                    CompletedTask.task_id,
+                    CompletedTask.respondent_id,
+                    CompletedTask.task_index,
+                    CompletedTask.elements_shown_in_task,
+                    CompletedTask.elements_shown_content,
+                    CompletedTask.layers_shown_in_task,
+                    CompletedTask.task_type,
+                    CompletedTask.task_context,
+                    CompletedTask.task_start_time,
+                    CompletedTask.task_completion_time,
+                    CompletedTask.task_duration_seconds,
+                    CompletedTask.rating_given,
+                    CompletedTask.rating_timestamp,
+                ),
+                selectinload(StudyResponse.classification_answers).load_only(
+                    ClassificationAnswer.id,
+                    ClassificationAnswer.study_response_id,
+                    ClassificationAnswer.question_id,
+                    ClassificationAnswer.question_text,
+                    ClassificationAnswer.answer,
+                    ClassificationAnswer.answer_timestamp,
+                    ClassificationAnswer.time_spent_seconds,
+                ),
+                selectinload(StudyResponse.element_interactions).load_only(
+                    ElementInteraction.id,
+                    ElementInteraction.study_response_id,
+                    ElementInteraction.task_session_id,
+                    ElementInteraction.element_id,
+                    ElementInteraction.view_time_seconds,
+                    ElementInteraction.hover_count,
+                    ElementInteraction.click_count,
+                    ElementInteraction.first_view_time,
+                    ElementInteraction.last_view_time,
+                ),
+                selectinload(StudyResponse.task_sessions).load_only(
+                    TaskSession.id,
+                    TaskSession.study_response_id,
+                    TaskSession.session_id,
+                    TaskSession.task_id,
+                    TaskSession.classification_page_time,
+                    TaskSession.orientation_page_time,
+                    TaskSession.individual_task_page_times,
+                    TaskSession.page_transitions,
+                    TaskSession.is_completed,
+                    TaskSession.abandonment_timestamp,
+                    TaskSession.abandonment_reason,
+                    TaskSession.recovery_attempts,
+                    TaskSession.browser_performance,
+                    TaskSession.page_load_times,
+                    TaskSession.device_info,
+                    TaskSession.screen_resolution,
+                    TaskSession.created_at,
+                    TaskSession.updated_at,
+                ),
+            )
+        )
         return self.db.execute(stmt).scalar_one_or_none()
     
     def get_responses_by_study(self, study_id: UUID, limit: int = 100, offset: int = 0) -> List[StudyResponse]:
@@ -319,6 +417,357 @@ class StudyResponseService:
         self.db.commit()
         
         return True
+
+    # ---------- CSV Export ----------
+
+    def generate_csv_rows_for_study(self, study_id: UUID) -> Iterable[List[Any]]:
+        """
+        Yield CSV rows for all responses in a study.
+
+        Columns produced (order):
+        - Panelist (session_id)
+        - QQ1..QQN (classification answers in question order if present)
+        - Gender
+        - Age
+        - Task (task index starting at 1)
+        - Dynamic Layer_* columns (Layer_{taskIndex}_{layerIndex}) with 0/1 visibility
+        - Rating
+        - ResponseTime (seconds)
+
+        Notes:
+        - Age is derived from personal_info.dob or personal_info.date_of_birth (YYYY-MM-DD).
+        - Gender comes from personal_info.gender if available.
+        - Layer visibility is inferred from CompletedTask.elements_shown_content or layers_shown_in_task.
+        """
+        # Preload minimal study and responses
+        study: Optional[Study] = self.db.get(Study, study_id)
+        if not study:
+            raise HTTPException(status_code=404, detail="Study not found")
+
+        # Fetch responses (single query)
+        responses: List[StudyResponse] = list(self.db.execute(
+            select(StudyResponse.id, StudyResponse.session_id, StudyResponse.personal_info)
+            .where(StudyResponse.study_id == study_id)
+        ).all())
+        # Early return if no responses
+        if not responses:
+            yield ["Panelist"]  # minimal header to keep CSV valid
+            return
+        # Index positions for lightweight tuples
+        RESP_ID_IDX = 0
+        RESP_SESSION_IDX = 1
+        RESP_PI_IDX = 2
+        response_ids = [r[RESP_ID_IDX] for r in responses]
+
+        # Build question ordering from study configuration (preferred over discovered answers)
+        # Map question_id -> column header text (use question_text) and keep answer option maps for code->text
+        question_id_to_col: Dict[str, str] = {}
+        question_id_to_options: Dict[str, Dict[str, str]] = {}
+        questions = self.db.execute(
+            select(StudyClassificationQuestion)
+            .where(StudyClassificationQuestion.study_id == study_id)
+            .order_by(StudyClassificationQuestion.order)
+        ).scalars().all()
+        next_q_num = 1
+        for q in questions:
+            # Use full question text; fallback to QQn
+            question_id_to_col[q.question_id] = (q.question_text or f"QQ{next_q_num}")
+            next_q_num += 1
+            options_map: Dict[str, str] = {}
+            if isinstance(q.answer_options, list):
+                for opt in q.answer_options:
+                    if not isinstance(opt, dict):
+                        continue
+                    text = opt.get("text") or opt.get("label") or opt.get("name")
+                    if text is None:
+                        continue
+                    # Support multiple keys that might appear in stored answers
+                    for key_name in ("id", "value", "code", "label"):
+                        if key_name in opt and opt[key_name] is not None:
+                            options_map[str(opt[key_name])] = text
+            if options_map:
+                question_id_to_options[q.question_id] = options_map
+
+        # If there are answers for questions not in config, append them in discovery order (batched)
+        if not question_id_to_col and response_ids:
+            discovered = self.db.execute(
+                select(ClassificationAnswer.question_id)
+                .where(ClassificationAnswer.study_response_id.in_(response_ids))
+            ).all()
+            for (qid,) in discovered:
+                if qid not in question_id_to_col:
+                    question_id_to_col[qid] = f"QQ{next_q_num}"
+                    next_q_num += 1
+
+        # Build consistent ordered headers for all layer slots using layer name + image name
+        import re
+        def parse_slot(key: str) -> tuple[str, int]:
+            # returns (layer_label, image_index)
+            m = re.search(r"^(.*?)[ _-]?(\d+)$", key)
+            if m:
+                return (m.group(1).strip(), int(m.group(2)))
+            return (key.strip(), 0)
+
+        # Accumulate first-seen names per slot and per layer
+        slot_to_image_name: Dict[tuple[str, int], str] = {}
+        layer_to_display: Dict[str, str] = {}
+        layer_to_max_image: Dict[str, int] = {}
+
+        # Preload all tasks for the study and group by response (single query)
+        tasks_seq = self.db.execute(
+            select(CompletedTask)
+            .where(CompletedTask.study_response_id.in_(response_ids))
+            .order_by(CompletedTask.study_response_id, CompletedTask.task_index)
+        ).scalars().all()
+        from collections import defaultdict
+        tasks_by_response: Dict[UUID, List[CompletedTask]] = defaultdict(list)
+        for t in tasks_seq:
+            tasks_by_response[t.study_response_id].append(t)
+
+        for resp in responses:
+            tasks = tasks_by_response.get(resp[RESP_ID_IDX], [])
+            for t in tasks:
+                data = t.layers_shown_in_task or t.elements_shown_content or {}
+                if not isinstance(data, dict):
+                    continue
+                for k, v in data.items():
+                    if not isinstance(k, str):
+                        continue
+                    layer_label, image_idx = parse_slot(k)
+                    # Prefer explicit layer_name when present
+                    if isinstance(v, dict):
+                        lbl = (v.get("layer_name") or layer_label or "").strip()
+                        if lbl:
+                            layer_to_display[layer_label] = lbl
+                        img = (v.get("name") or v.get("alt_text") or "").strip()
+                        if img and (layer_label, image_idx) not in slot_to_image_name:
+                            slot_to_image_name[(layer_label, image_idx)] = img
+                    # track max index for each layer
+                    current_max = layer_to_max_image.get(layer_label, 0)
+                    if image_idx > current_max:
+                        layer_to_max_image[layer_label] = image_idx
+
+        # Order layers by numeric index found inside their label; fallback to alpha
+        def layer_order_key(label: str) -> tuple[int, str]:
+            m = re.search(r"(\d+)", label)
+            return (int(m.group(1)) if m else 9999, label)
+
+        ordered_layers = sorted(layer_to_max_image.keys(), key=layer_order_key)
+
+        # Build final layer columns list in order
+        layer_headers: List[str] = []
+        layer_slots: List[tuple[str, int]] = []
+        for base_label in ordered_layers:
+            display = (layer_to_display.get(base_label) or base_label).strip().replace(" ", "_")
+            max_idx = layer_to_max_image.get(base_label, 0)
+            for idx in range(1, max_idx + 1):
+                img_name = slot_to_image_name.get((base_label, idx))
+                header = f"{display}_{img_name.replace(' ', '_')}" if img_name else f"{display}_{idx}"
+                layer_headers.append(header)
+                layer_slots.append((base_label, idx))
+
+        # Build header (elements for grid fetched once)
+        header: List[str] = ["Panelist"]
+        header.extend([question_id_to_col[qid] for qid in question_id_to_col])
+        header.extend(["Gender", "Age", "Task"])
+        # If study is grid, add grid element columns (ElementName flags and content URLs)
+        # Otherwise, add layer columns
+        study_obj: Optional[Study] = self.db.get(Study, study_id)
+        is_grid = bool(study_obj and str(study_obj.study_type) == 'grid')
+        grid_element_names: List[str] = []
+        if is_grid:
+            # Load elements for this study in stable order (by element_id)
+            elements = self.db.execute(
+                select(StudyElement.name)
+                .where(StudyElement.study_id == study_id)
+                .order_by(StudyElement.element_id)
+            ).all()
+            grid_element_names = [str(name).replace(' ', '_') for (name,) in elements]
+            # Add presence columns only (no *_content columns)
+            header.extend(grid_element_names)
+        else:
+            # Layer columns: all slots per layer in numeric order with attached image names
+            header.extend(layer_headers)
+        header.extend(["Rating", "ResponseTime"])
+
+        # Yield header
+        yield header
+
+        # Helper to compute age
+        def compute_age(personal_info: Optional[Dict[str, Any]]) -> Optional[int]:
+            if not personal_info:
+                return None
+            dob_str = personal_info.get("dob") or personal_info.get("date_of_birth")
+            if not dob_str:
+                return personal_info.get("age")
+            try:
+                from datetime import date
+                year, month, day = [int(x) for x in str(dob_str).split("-")[:3]]
+                born = date(year, month, day)
+                today = date.today()
+                return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+            except Exception:
+                return None
+
+        # Emit rows
+        # Preload all answers and group by response (single query)
+        answers_seq = self.db.execute(
+            select(ClassificationAnswer)
+            .where(ClassificationAnswer.study_response_id.in_(response_ids))
+        ).scalars().all()
+        answers_by_response: Dict[UUID, List[ClassificationAnswer]] = defaultdict(list)
+        for a in answers_seq:
+            answers_by_response[a.study_response_id].append(a)
+
+        for resp in responses:
+            # Build map for classification answers for this response
+            answers = answers_by_response.get(resp[RESP_ID_IDX], [])
+            answer_map: Dict[Any, Any] = {}
+            for a in answers:
+                options_map = question_id_to_options.get(a.question_id)
+                answer_map[a.question_id] = self._format_classification_answer(a, options_map)
+
+            gender = None
+            pi = resp[RESP_PI_IDX]
+            if isinstance(pi, dict):
+                gender = pi.get("gender") or pi.get("Gender")
+            age_val = compute_age(pi if isinstance(pi, dict) else None)
+
+            # Fetch tasks ordered by task_index (preloaded)
+            tasks = tasks_by_response.get(resp[RESP_ID_IDX], [])
+
+            for t in tasks:
+                row: List[Any] = []
+                row.append(resp[RESP_SESSION_IDX])
+                # Classification answers in header order
+                for qid in question_id_to_col.keys():
+                    row.append(answer_map.get(qid))
+                row.append(gender)
+                row.append(age_val)
+                row.append(t.task_index + 1)
+
+                if is_grid:
+                    # Grid: read elements_shown_in_task and write presence per element name
+                    grid_data = t.elements_shown_in_task or t.elements_shown or {}
+                    # Normalize presence map: ignore *_content keys, support element_id or name keys
+                    presence_map: Dict[str, int] = {}
+                    presence_map_lower: Dict[str, int] = {}
+                    if isinstance(grid_data, dict):
+                        for k, v in grid_data.items():
+                            if not isinstance(k, str) or k.endswith('_content'):
+                                continue
+                            try:
+                                presence_val = int(v) if v in (0, 1) else (1 if v else 0)
+                            except Exception:
+                                presence_val = 1 if v else 0
+                            key_norm = k.strip()
+                            presence_map[key_norm] = presence_val
+                            presence_map_lower[key_norm.lower()] = presence_val
+                    # Load elements in stable order and map by either id or name
+                    elements = self.db.execute(
+                        select(StudyElement).where(StudyElement.study_id == study_id).order_by(StudyElement.element_id)
+                    ).scalars().all()
+                    for e in elements:
+                        candidates = [
+                            str(e.element_id or '').strip(),
+                            str(e.name or '').strip(),
+                            str((e.name or '').replace(' ', '_')).strip(),
+                        ]
+                        presence = 0
+                        for cand in candidates:
+                            if not cand:
+                                continue
+                            if cand in presence_map:
+                                presence = presence_map[cand]
+                                break
+                            lc = cand.lower()
+                            if lc in presence_map_lower:
+                                presence = presence_map_lower[lc]
+                                break
+                        row.append(presence)
+                else:
+                    # Layer: visibility per ordered slots
+                    layer_data = t.layers_shown_in_task or t.elements_shown_content or {}
+                    for base_label, idx in layer_slots:
+                        value = 0
+                        if isinstance(layer_data, dict):
+                            # Find matching key regardless of spacing/hyphen style
+                            candidates = [
+                                f"{base_label} {idx}", f"{base_label}_{idx}", f"{base_label}-{idx}",
+                                f"{base_label.strip()} {idx}", f"{base_label.strip()}_{idx}", f"{base_label.strip()}-{idx}"
+                            ]
+                            for cand in candidates:
+                                if cand in layer_data and layer_data[cand]:
+                                    value = 1
+                                    break
+                        row.append(value)
+
+                row.append(float(t.rating_given))
+                row.append(float(t.task_duration_seconds or 0.0))
+
+                yield row
+
+    def _extract_num_layers(self, task: CompletedTask) -> int:
+        """Infer number of layers from task content."""
+        data = task.elements_shown_content or task.layers_shown_in_task or {}
+        try:
+            # Expecting a dict like {"layers": [ {...}, {...} ]} or just a list
+            if isinstance(data, dict) and isinstance(data.get("layers"), list):
+                return len(data["layers"]) or 0
+            if isinstance(data, list):
+                return len(data) or 0
+        except Exception:
+            pass
+        return 0
+
+    def _extract_layer_visibility_map(self, task: CompletedTask) -> Dict[Tuple[int, int], bool]:
+        """
+        Build a map of (taskIndex, layerIndex) -> visible bool for a single task.
+        We mark all layers present in the content for this task as visible (True).
+        """
+        visibility: Dict[Tuple[int, int], bool] = {}
+        data = task.elements_shown_content or task.layers_shown_in_task or {}
+        try:
+            layers = None
+            if isinstance(data, dict) and isinstance(data.get("layers"), list):
+                layers = data.get("layers")
+            elif isinstance(data, list):
+                layers = data
+            if isinstance(layers, list):
+                for idx, _layer in enumerate(layers, start=1):
+                    visibility[(task.task_index, idx)] = True
+        except Exception:
+            pass
+        return visibility
+
+    def _format_classification_answer(self, answer: ClassificationAnswer, options_map: Optional[Dict[str, str]] = None) -> Any:
+        """
+        Return a user-friendly classification answer for CSV output.
+        If the stored answer contains an internal code like "9de47e73 - Option 1",
+        we strip the code and keep only the human label after the hyphen.
+        """
+        try:
+            raw = answer.answer
+            if isinstance(raw, str):
+                # If options map provided, try to map code -> text first
+                if options_map:
+                    # Accept exact code or left part of "code - label"
+                    left_code = raw.split(' - ', 1)[0]
+                    right_part = raw.split(' - ', 1)[1].strip() if ' - ' in raw else None
+                    if raw in options_map:
+                        return options_map[raw]
+                    if left_code in options_map:
+                        return options_map[left_code]
+                    if right_part and right_part in options_map:
+                        return options_map[right_part]
+                # Common pattern: "<code> - <label>"; take the part after the first ' - '
+                parts = raw.split(' - ', 1)
+                if len(parts) == 2 and parts[1].strip():
+                    return parts[1].strip()
+                return raw.strip()
+            return raw
+        except Exception:
+            return getattr(answer, 'answer', None)
     
     def abandon_study(self, session_id: str, request: AbandonStudyRequest) -> bool:
         """Mark a study response as abandoned."""
@@ -402,11 +851,18 @@ class StudyResponseService:
     
     def get_study_analytics(self, study_id: UUID) -> StudyAnalytics:
         """Get analytics data for a study - ultra-optimized with minimal queries."""
+        # Serve from short-lived cache if present
+        cache_key = str(study_id)
+        cached = StudyResponseService._analytics_cache.get(cache_key)
+        now = time.time()
+        if cached and cached[0] > now:
+            return cached[1]
         # Single query to get all response statistics
         stats_query = select(
             func.count(StudyResponse.id).label('total_responses'),
             func.count(StudyResponse.id).filter(StudyResponse.is_completed == True).label('completed_responses'),
             func.count(StudyResponse.id).filter(StudyResponse.is_abandoned == True).label('abandoned_responses'),
+            func.count(StudyResponse.id).filter(StudyResponse.status == 'in_progress').label('in_progress_responses'),
             func.avg(StudyResponse.total_study_duration).filter(StudyResponse.is_completed == True).label('avg_duration')
         ).where(StudyResponse.study_id == study_id)
         
@@ -415,6 +871,7 @@ class StudyResponseService:
         total_responses = result.total_responses or 0
         completed_responses = result.completed_responses or 0
         abandoned_responses = result.abandoned_responses or 0
+        in_progress_responses = result.in_progress_responses or 0
         avg_duration = float(result.avg_duration or 0)
         
         # Calculate rates
@@ -427,6 +884,7 @@ class StudyResponseService:
                 total_responses=0,
                 completed_responses=0,
                 abandoned_responses=0,
+                in_progress_responses=0,
                 completion_rate=0,
                 average_duration=0,
                 abandonment_rate=0,
@@ -440,16 +898,21 @@ class StudyResponseService:
         # Get timing distributions (optimized)
         timing_distributions = self._get_timing_distributions_optimized(study_id)
         
-        return StudyAnalytics(
+        analytics = StudyAnalytics(
             total_responses=total_responses,
             completed_responses=completed_responses,
             abandoned_responses=abandoned_responses,
+            in_progress_responses=in_progress_responses,
             completion_rate=completion_rate,
             average_duration=avg_duration,
             abandonment_rate=abandonment_rate,
             element_heatmap=element_heatmap,
             timing_distributions=timing_distributions
         )
+        # Update cache
+        ttl = getattr(StudyResponseService, "_analytics_ttl_seconds", 15)
+        StudyResponseService._analytics_cache[cache_key] = (now + ttl, analytics)
+        return analytics
     
     def get_response_analytics(self, response_id: UUID) -> Optional[ResponseAnalytics]:
         """Get detailed analytics for a specific response."""
