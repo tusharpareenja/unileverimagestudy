@@ -55,28 +55,21 @@ def list_studies_endpoint(
         page=page,
         per_page=per_page,
     )
-    # Attach accurate analytics using the same service as /responses/analytics/study/{study_id}
+    # Lightweight enrichment: only the counters needed for the list card
     if not studies:
         return studies
-    resp_service = StudyResponseService(db)
     enriched: List[StudyListItem] = []
     for s in studies:
-        try:
-            analytics = resp_service.get_study_analytics(s.id)
-            item = StudyListItem.model_validate(s).model_dump()
-            item.update({
-                "total_responses": analytics.total_responses,
-                "completed_responses": analytics.completed_responses,
-                "abandoned_responses": analytics.abandoned_responses,
-                "completion_rate": analytics.completion_rate,
-                "average_duration": analytics.average_duration,
-                "abandonment_rate": analytics.abandonment_rate,
-                "respondents_target": int((s.audience_segmentation or {}).get("number_of_respondents") or 0),
-                "respondents_completed": analytics.completed_responses,
-            })
-            enriched.append(StudyListItem(**item))
-        except Exception:
-            enriched.append(StudyListItem.model_validate(s))
+        item = StudyListItem.model_validate(s).model_dump()
+        respondents_target = int((s.audience_segmentation or {}).get("number_of_respondents") or 0)
+        item.update({
+            "total_responses": int(s.total_responses or 0),
+            "completed_responses": int(s.completed_responses or 0),
+            "abandoned_responses": int(s.abandoned_responses or 0),
+            "respondents_target": respondents_target,
+            "respondents_completed": int(s.completed_responses or 0),
+        })
+        enriched.append(StudyListItem(**item))
     return enriched
 
 

@@ -269,22 +269,52 @@ class StudyResponseService:
             user_details_dict = request.user_details.model_dump(exclude_none=True)
             combined_personal_info.update(user_details_dict)
         
-        # Create response session
-        response_data = StudyResponseCreate(
+        # Fast path: create StudyResponse inline to avoid extra reads/writes
+        from uuid import uuid4 as _uuid4
+        session_id = f"session_{_uuid4().hex[:16]}"
+        respondent_id = self._get_next_respondent_id(request.study_id)
+        # Compute total_tasks_assigned robustly without extra loops
+        total_tasks_assigned = 0
+        try:
+            tasks_obj = study.tasks
+            if isinstance(tasks_obj, list):
+                total_tasks_assigned = len(tasks_obj)
+            elif isinstance(tasks_obj, dict):
+                per_resp = tasks_obj.get(str(respondent_id))
+                if isinstance(per_resp, list):
+                    total_tasks_assigned = len(per_resp)
+                else:
+                    total_tasks_assigned = len(tasks_obj)
+        except Exception:
+            total_tasks_assigned = 0
+
+        new_response = StudyResponse(
             study_id=request.study_id,
+            session_id=session_id,
+            respondent_id=respondent_id,
+            total_tasks_assigned=total_tasks_assigned,
             session_start_time=datetime.utcnow(),
             personal_info=combined_personal_info if combined_personal_info else None,
             ip_address=ip_address,
             user_agent=user_agent,
-            total_tasks_assigned=len(study.tasks)
+            browser_info=None,
+            last_activity=datetime.utcnow(),
+            status='in_progress',
+            is_abandoned=False,
+            is_completed=False
         )
-        
-        response = self.create_response(response_data)
-        
+
+        self.db.add(new_response)
+        self.db.commit()
+        self.db.refresh(new_response)
+
+        # Update study counters asynchronously in spirit (but here inline single call)
+        self._update_study_counters(request.study_id)
+
         return StartStudyResponse(
-            session_id=response.session_id,
-            respondent_id=response.respondent_id,
-            total_tasks_assigned=response.total_tasks_assigned,
+            session_id=new_response.session_id,
+            respondent_id=new_response.respondent_id,
+            total_tasks_assigned=new_response.total_tasks_assigned,
             study_info={
                 "id": str(study.id),
                 "title": study.title,
@@ -304,95 +334,149 @@ class StudyResponseService:
         if response.is_completed:
             raise HTTPException(status_code=400, detail="Study already completed")
         
-        # Create completed task record
+        # Create completed task record (fast path - no heavy enrichment)
+        now_utc = datetime.utcnow()
+        # Accept visibility payload from either elements_shown_in_task or elements_shown
+        try:
+            raw_visibility = (
+                getattr(request, 'elements_shown_in_task', None)
+                or getattr(request, 'elements_shown', None)
+                or {}
+            )
+        except Exception:
+            raw_visibility = {}
+
+        # Build a name-keyed visibility map for grid studies
+        name_visibility: Dict[str, int] = {}
+        study_row: Optional[Study] = self.db.get(Study, response.study_id)
+        if study_row and str(study_row.study_type) == 'grid':
+            # Load element id->name map in E-number order
+            elements = self.db.execute(
+                select(StudyElement).where(StudyElement.study_id == study_row.id)
+            ).scalars().all()
+            id_to_name: Dict[str, str] = {str(e.element_id).upper(): e.name for e in elements}
+
+            # If client didn't send anything, try fallback from study.tasks
+            payload = raw_visibility
+            if not isinstance(payload, dict) or len(payload) == 0:
+                try:
+                    if isinstance(study_row.tasks, dict):
+                        rk = str(response.respondent_id)
+                        tasks_for_r = study_row.tasks.get(rk)
+                        if isinstance(tasks_for_r, list) and 0 <= response.current_task_index < len(tasks_for_r):
+                            task_def = tasks_for_r[response.current_task_index] or {}
+                        else:
+                            task_def = study_row.tasks.get(str(response.current_task_index), {}) or {}
+                        payload = task_def.get('elements_shown_in_task') or task_def.get('elements_shown') or {}
+                except Exception:
+                    payload = {}
+
+            # If payload is a JSON string, parse
+            if isinstance(payload, str):
+                try:
+                    import json
+                    payload = json.loads(payload)
+                except Exception:
+                    payload = {}
+
+            # Normalize to name->0/1
+            if isinstance(payload, dict):
+                for eid, name in id_to_name.items():
+                    val = payload.get(eid)
+                    if val is None:
+                        # Try content-based or by name key
+                        val = payload.get(f"{eid}_content") or payload.get(name) or payload.get(f"{name}_content")
+                        if isinstance(val, str):
+                            present = 1 if val.strip() else 0
+                        else:
+                            try:
+                                present = int(val) if val in (0,1) else (1 if val else 0)
+                            except Exception:
+                                present = 0
+                    else:
+                        try:
+                            present = int(val) if val in (0,1) else (1 if val else 0)
+                        except Exception:
+                            present = 0
+                    name_visibility[name.replace(' ', '_')] = 1 if present == 1 else 0
+        else:
+            # Non-grid or no study: keep as-is if dict, else empty
+            name_visibility = raw_visibility if isinstance(raw_visibility, dict) else {}
         task_data = CompletedTaskCreate(
             task_id=request.task_id,
             respondent_id=response.respondent_id,
             task_index=response.current_task_index,
-            elements_shown_in_task={},  # Will be populated from study.tasks below
-            task_start_time=datetime.utcnow() - timedelta(seconds=request.task_duration_seconds),
-            task_completion_time=datetime.utcnow(),
+            elements_shown_in_task=name_visibility,
+            task_start_time=now_utc - timedelta(seconds=request.task_duration_seconds),
+            task_completion_time=now_utc,
             task_duration_seconds=request.task_duration_seconds,
             rating_given=request.rating_given,
-            rating_timestamp=datetime.utcnow()
+            rating_timestamp=now_utc
         )
-        
+
         completed_task = CompletedTask(**task_data.model_dump())
         completed_task.study_response_id = response.id
-        
-        # Populate elements_shown/task metadata from study.tasks
-        study: Study = self.db.get(Study, response.study_id)
-        try:
-            elements_shown_in_task: Dict[str, Any] = {}
-            elements_shown_content: Optional[Dict[str, Any]] = None
-            task_context: Optional[Dict[str, Any]] = None
-            
-            if study and isinstance(study.tasks, dict):
-                respondent_key = str(response.respondent_id)
-                tasks_for_respondent = study.tasks.get(respondent_key)
-                if isinstance(tasks_for_respondent, list):
-                    if 0 <= response.current_task_index < len(tasks_for_respondent):
-                        task_def = tasks_for_respondent[response.current_task_index] or {}
-                    else:
-                        task_def = {}
-                else:
-                    # Index-keyed dict format: tasks_for_respondent is None, tasks are at top level as {"0": {...}, ...}
-                    task_def = study.tasks.get(str(response.current_task_index), {}) or {}
 
-                # Attempt multiple possible field names
-                elements_shown_in_task = (
-                    task_def.get("elements_shown_in_task")
-                    or task_def.get("elements_shown")
-                    or {}
-                )
-                elements_shown_content = task_def.get("elements_shown_content")
-                task_context = {
-                    "main_question": study.main_question,
-                    "orientation_text": study.orientation_text,
-                    "rating_scale": study.rating_scale,
-                    "generated_task_id": task_def.get("task_id"),
-                }
-            
-            completed_task.elements_shown_in_task = elements_shown_in_task or {}
-            if elements_shown_content is not None:
-                completed_task.elements_shown_content = elements_shown_content
-            # Helpful duplicates for backward compatibility
-            if not getattr(completed_task, "elements_shown", None):
-                completed_task.elements_shown = elements_shown_in_task or None
-            if study and study.study_type == 'layer' and not getattr(completed_task, "layers_shown_in_task", None):
-                completed_task.layers_shown_in_task = elements_shown_content or None
-            
-            # Set task metadata
-            if study:
-                completed_task.task_type = study.study_type
-            if task_context:
-                completed_task.task_context = task_context
-        except Exception:
-            # Best-effort population; proceed even if tasks structure is unexpected
-            pass
-        
+        # For layer studies, persist which layers/images were shown for this task
+        if study_row and str(study_row.study_type) == 'layer':
+            layer_payload: Any = None
+            # Try request fields first if present in future clients
+            try:
+                layer_payload = getattr(request, 'layers_shown_in_task', None) or getattr(request, 'elements_shown_content', None)
+            except Exception:
+                layer_payload = None
+            # Fallback to task definition from study.tasks
+            if layer_payload is None or layer_payload == {}:
+                try:
+                    task_def = None
+                    if isinstance(study_row.tasks, dict):
+                        rk = str(response.respondent_id)
+                        tasks_for_r = study_row.tasks.get(rk)
+                        if isinstance(tasks_for_r, list) and 0 <= response.current_task_index - 1 < len(tasks_for_r):
+                            task_def = tasks_for_r[response.current_task_index - 1] or {}
+                        else:
+                            task_def = study_row.tasks.get(str(response.current_task_index - 1), {}) or {}
+                    if isinstance(task_def, dict):
+                        layer_payload = task_def.get('layers_shown_in_task') or task_def.get('elements_shown_content')
+                except Exception:
+                    layer_payload = None
+            if layer_payload is not None:
+                # Prefer saving to layers_shown_in_task, keep elements_shown_content for backward compatibility
+                if completed_task.layers_shown_in_task is None:
+                    completed_task.layers_shown_in_task = layer_payload
+                if completed_task.elements_shown_content is None:
+                    completed_task.elements_shown_content = layer_payload
+
         self.db.add(completed_task)
-        
-        # Update response progress
-        response.completed_tasks_count += 1
-        response.current_task_index += 1
-        response.completion_percentage = (response.completed_tasks_count / response.total_tasks_assigned) * 100.0
-        response.last_activity = datetime.utcnow()
-        
-        # Add element interactions if provided
+
+        # Update response progress (no extra reads)
+        response.completed_tasks_count = (response.completed_tasks_count or 0) + 1
+        response.current_task_index = (response.current_task_index or 0) + 1
+        try:
+            total_assigned = int(response.total_tasks_assigned or 0)
+            done = int(response.completed_tasks_count or 0)
+            response.completion_percentage = (done / total_assigned * 100.0) if total_assigned > 0 else 0.0
+        except Exception:
+            response.completion_percentage = 0.0
+        response.last_activity = now_utc
+
+        # Bulk insert element interactions if provided
         if request.element_interactions:
+            interactions = []
             for interaction_data in request.element_interactions:
                 interaction = ElementInteraction(**interaction_data.model_dump())
                 interaction.study_response_id = response.id
-                self.db.add(interaction)
-        
-        # Check if study is complete (after this submission)
+                interactions.append(interaction)
+            if interactions:
+                self.db.bulk_save_objects(interactions)
+
+        # Mark complete if done
         is_complete = response.current_task_index >= (response.total_tasks_assigned or 0)
         if is_complete:
             self._mark_response_completed(response)
-        
+
+        # Single commit at end
         self.db.commit()
-        self.db.refresh(response)
         
         return SubmitTaskResponse(
             success=True,
@@ -768,6 +852,279 @@ class StudyResponseService:
             return raw
         except Exception:
             return getattr(answer, 'answer', None)
+
+    # ---------- Optimized CSV Export (bulk queries, no N+1) ----------
+    def generate_csv_rows_for_study_optimized(self, study_id: UUID) -> Iterable[List[Any]]:
+        """High-performance CSV flattener for a study.
+        Minimizes queries by bulk-loading responses, tasks, and answers.
+        """
+        from sqlalchemy import select, func
+
+        # Basic study and questions
+        study: Optional[Study] = self.db.get(Study, study_id)
+        if not study:
+            raise HTTPException(status_code=404, detail="Study not found")
+
+        # Load responses for this study
+        responses: List[StudyResponse] = self.db.execute(
+            select(StudyResponse).where(StudyResponse.study_id == study_id)
+        ).scalars().all()
+        if not responses:
+            # Header only
+            yield ["Panelist", "Gender", "Age", "Task", "Rating", "ResponseTime"]
+            return
+
+        response_ids = [r.id for r in responses]
+
+        # Bulk load tasks and answers
+        all_tasks: List[CompletedTask] = self.db.execute(
+            select(CompletedTask)
+            .where(CompletedTask.study_response_id.in_(response_ids))
+        ).scalars().all()
+
+        all_answers: List[ClassificationAnswer] = self.db.execute(
+            select(ClassificationAnswer)
+            .where(ClassificationAnswer.study_response_id.in_(response_ids))
+        ).scalars().all()
+
+        # Group by response
+        tasks_by_response: Dict[UUID, List[CompletedTask]] = {}
+        for t in all_tasks:
+            tasks_by_response.setdefault(t.study_response_id, []).append(t)
+        for lst in tasks_by_response.values():
+            lst.sort(key=lambda x: (x.task_index or 0))
+
+        answers_by_response: Dict[UUID, List[ClassificationAnswer]] = {}
+        for a in all_answers:
+            answers_by_response.setdefault(a.study_response_id, []).append(a)
+
+        # Questions and option maps
+        question_id_to_col: Dict[str, str] = {}
+        question_id_to_options: Dict[str, Dict[str, str]] = {}
+        questions = self.db.execute(
+            select(StudyClassificationQuestion)
+            .where(StudyClassificationQuestion.study_id == study_id)
+            .order_by(StudyClassificationQuestion.order)
+        ).scalars().all()
+        next_q_num = 1
+        for q in questions:
+            question_id_to_col[q.question_id] = (q.question_text or f"QQ{next_q_num}")
+            next_q_num += 1
+            options_map: Dict[str, str] = {}
+            if isinstance(q.answer_options, list):
+                for opt in q.answer_options:
+                    if not isinstance(opt, dict):
+                        continue
+                    text = opt.get("text") or opt.get("label") or opt.get("name")
+                    if text is None:
+                        continue
+                    for key_name in ("id", "value", "code", "label"):
+                        if key_name in opt and opt[key_name] is not None:
+                            options_map[str(opt[key_name])] = text
+            if options_map:
+                question_id_to_options[q.question_id] = options_map
+
+        # Discover layer keys across all tasks (only for layer studies). For grid we add per-element headers elsewhere.
+        layer_keys_set: set[str] = set()
+        synthetic_layer_len = 0
+        if str(study.study_type) == 'layer':
+            for t in all_tasks:
+                data = t.layers_shown_in_task or t.elements_shown_content
+                if isinstance(data, dict):
+                    for k in data.keys():
+                        if isinstance(k, str):
+                            layer_keys_set.add(k)
+                elif isinstance(data, list):
+                    try:
+                        synthetic_layer_len = max(synthetic_layer_len, len(data))
+                    except Exception:
+                        pass
+
+        def sort_key(layer_key: str) -> tuple[int, int]:
+            import re
+            m2 = re.search(r"(\d+)[ _-](\d+)$", layer_key)
+            if m2:
+                return (int(m2.group(1)), int(m2.group(2)))
+            m1 = re.search(r"(\d+)$", layer_key)
+            if m1:
+                return (int(m1.group(1)), 0)
+            return (9999, 9999)
+
+        layer_keys: List[str] = sorted(layer_keys_set, key=sort_key) if layer_keys_set else []
+        # If no explicit dict keys found but list-based structure exists, synthesize generic keys Layer_1..N
+        if not layer_keys and synthetic_layer_len > 0:
+            layer_keys = [f"Layer_{i}" for i in range(1, synthetic_layer_len + 1)]
+
+        # Friendly headers for layer keys
+        layer_key_to_header: Dict[str, str] = {}
+        if layer_keys and layer_keys_set:
+            for t in all_tasks:
+                data = t.layers_shown_in_task or t.elements_shown_in_task or t.elements_shown_content
+                if not isinstance(data, dict):
+                    continue
+                for key in layer_keys:
+                    if key in layer_key_to_header:
+                        continue
+                    val = data.get(key)
+                    if isinstance(val, dict):
+                        image_name = (val.get("name") or val.get("alt_text") or "").strip()
+                        layer_label = (val.get("layer_name") or "").strip()
+                        left = layer_label.replace(" ", "_") if layer_label else key.replace(" ", "_")
+                        header_value = left
+                        if image_name:
+                            header_value = f"{left}_{image_name.replace(' ', '_')}"
+                        layer_key_to_header[key] = header_value or key
+                if len(layer_key_to_header) == len(layer_keys):
+                    break
+
+        # Grid headers (element names by E-number order)
+        grid_element_headers: List[str] = []
+        if str(study.study_type) == 'grid':
+            elements = self.db.execute(
+                select(StudyElement).where(StudyElement.study_id == study_id)
+            ).scalars().all()
+            def elem_sort_key(el: StudyElement) -> int:
+                import re
+                m = re.search(r"(\d+)$", str(el.element_id))
+                return int(m.group(1)) if m else 9999
+            elements_sorted = sorted(elements, key=elem_sort_key)
+            # Preserve original names for matching; headers will be sanitized for CSV
+            grid_element_headers = [e.name for e in elements_sorted]
+            grid_element_ids = [str(e.element_id).upper() for e in elements_sorted]
+        else:
+            grid_element_ids = []
+
+        # Build header
+        header: List[str] = ["Panelist"]
+        header.extend([question_id_to_col[qid] for qid in question_id_to_col])
+        header.extend(["Gender", "Age", "Task"])
+        if grid_element_headers:
+            # Sanitize headers minimally for CSV (replace commas with underscores)
+            def sanitize_header(s: str) -> str:
+                return s.replace(',', '_').replace('\n', ' ').replace('\r', ' ').strip()
+            header.extend([sanitize_header(h) for h in grid_element_headers])
+        elif layer_keys:
+            header.extend([layer_key_to_header.get(k, k.replace(' ', '_')) for k in layer_keys])
+        header.extend(["Rating", "ResponseTime"])
+        yield header
+
+        # Helper: age
+        def compute_age(personal_info: Optional[Dict[str, Any]]) -> Optional[int]:
+            if not personal_info:
+                return None
+            dob_str = personal_info.get("dob") or personal_info.get("date_of_birth")
+            if not dob_str:
+                return personal_info.get("age")
+            try:
+                from datetime import date
+                year, month, day = [int(x) for x in str(dob_str).split("-")[:3]]
+                born = date(year, month, day)
+                today = date.today()
+                return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+            except Exception:
+                return None
+
+        # Emit rows
+        for resp in responses:
+            answer_list = answers_by_response.get(resp.id, [])
+            answer_map: Dict[Any, Any] = {}
+            for a in answer_list:
+                options_map = question_id_to_options.get(a.question_id)
+                answer_map[a.question_id] = self._format_classification_answer(a, options_map)
+
+            gender = resp.personal_info.get("gender") if resp.personal_info else None
+            age_val = compute_age(resp.personal_info)
+
+            for t in tasks_by_response.get(resp.id, []):
+                row: List[Any] = []
+                row.append(resp.session_id)
+                for qid in question_id_to_col.keys():
+                    row.append(answer_map.get(qid))
+                row.append(gender)
+                row.append(age_val)
+                row.append((t.task_index or 0) + 1)
+
+                if grid_element_headers:
+                    data = t.elements_shown_in_task or t.elements_shown or {}
+                    # If string JSON, attempt to parse
+                    if isinstance(data, str):
+                        try:
+                            import json
+                            data = json.loads(data)
+                        except Exception:
+                            data = {}
+                    # Build normalized maps
+                    def norm_key(s: str) -> str:
+                        import re
+                        s = s.lower().strip()
+                        s = re.sub(r"[\s,;:/\\]+", "_", s)
+                        s = re.sub(r"_+", "_", s)
+                        return s
+                    data_norm: Dict[str, Any] = {}
+                    if isinstance(data, dict):
+                        for k, v in data.items():
+                            if isinstance(k, str):
+                                data_norm[norm_key(k)] = v
+                    # Emit presence per element name with fallbacks: name -> EID -> content
+                    for eid, name in zip(grid_element_ids, grid_element_headers):
+                        present = None
+                        if data_norm:
+                            # Name-based
+                            nk = norm_key(name)
+                            if nk in data_norm:
+                                try:
+                                    present = int(data_norm[nk])
+                                except Exception:
+                                    present = 1 if data_norm[nk] else 0
+                            # EID-based
+                            if present is None:
+                                vid = data_norm.get(norm_key(eid))
+                                if vid is not None:
+                                    try:
+                                        present = int(vid)
+                                    except Exception:
+                                        present = 1 if vid else 0
+                            # content-based
+                            if present is None:
+                                urlv = data_norm.get(norm_key(f"{eid}_content")) or data_norm.get(norm_key(f"{name}_content"))
+                                present = 1 if (isinstance(urlv, str) and urlv.strip()) else 0
+                        row.append(1 if present else 0)
+                elif layer_keys:
+                    layer_data = t.layers_shown_in_task or t.elements_shown_in_task or t.elements_shown_content or {}
+                    for key in layer_keys:
+                        value = 0
+                        if isinstance(layer_data, dict):
+                            v = layer_data.get(key)
+                            if isinstance(v, dict):
+                                vis = v.get("visible")
+                                if vis is None:
+                                    vis = True if len(v.keys()) > 0 else False
+                                value = 1 if bool(vis) else 0
+                            else:
+                                try:
+                                    value = 1 if int(v) != 0 else 0
+                                except Exception:
+                                    value = 1 if bool(v) else 0
+                        elif isinstance(layer_data, list) and key.startswith("Layer_"):
+                            try:
+                                idx = int(key.split("_", 1)[1]) - 1
+                                if 0 <= idx < len(layer_data):
+                                    item = layer_data[idx]
+                                    if isinstance(item, dict):
+                                        vis = item.get("visible")
+                                        if vis is None:
+                                            vis = True if len(item.keys()) > 0 else False
+                                        value = 1 if bool(vis) else 0
+                                    else:
+                                        value = 1 if bool(item) else 0
+                            except Exception:
+                                value = 0
+                        row.append(value)
+
+                row.append(float(t.rating_given))
+                row.append(float(t.task_duration_seconds or 0.0))
+
+                yield row
     
     def abandon_study(self, session_id: str, request: AbandonStudyRequest) -> bool:
         """Mark a study response as abandoned."""

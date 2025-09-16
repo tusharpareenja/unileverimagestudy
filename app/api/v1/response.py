@@ -624,7 +624,7 @@ async def export_study_flattened_csv(
         writer = csv.writer(buffer)
         batch_size = 500
         counter = 0
-        for row in service.generate_csv_rows_for_study(study_id):
+        for row in service.generate_csv_rows_for_study_optimized(study_id):
             writer.writerow(row)
             counter += 1
             if counter % batch_size == 0:
