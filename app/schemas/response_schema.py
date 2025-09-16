@@ -285,6 +285,27 @@ class SubmitTaskResponse(BaseModel):
     is_study_complete: bool = False
     completion_percentage: float
 
+class BulkSubmitTaskItem(BaseModel):
+    """Single task item for bulk submission"""
+    task_id: str
+    rating_given: int = Field(..., ge=1, le=9)
+    task_duration_seconds: float = Field(..., ge=0.0)
+    elements_shown_in_task: Optional[Dict[str, Any]] = None
+    elements_shown_content: Optional[Dict[str, Any]] = None
+    element_interactions: Optional[List[ElementInteractionCreate]] = None
+
+class BulkSubmitTasksRequest(BaseModel):
+    """Bulk submit multiple completed tasks in order"""
+    tasks: List[BulkSubmitTaskItem]
+
+class BulkSubmitTasksResponse(BaseModel):
+    """Response after bulk task submission"""
+    success: bool
+    submitted_count: int
+    next_task_index: Optional[int] = None
+    is_study_complete: bool = False
+    completion_percentage: float
+
 class SubmitClassificationRequest(BaseModel):
     """Request to submit classification answers"""
     answers: List[ClassificationAnswerCreate]

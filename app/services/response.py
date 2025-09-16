@@ -20,7 +20,7 @@ from app.schemas.response_schema import (
     CompletedTaskCreate, ClassificationAnswerCreate,
     ElementInteractionCreate, TaskSessionCreate,
     StartStudyRequest, StartStudyResponse, SubmitTaskRequest,
-    SubmitTaskResponse, SubmitClassificationRequest,
+    SubmitTaskResponse, SubmitClassificationRequest, BulkSubmitTasksRequest, BulkSubmitTasksResponse,
     AbandonStudyRequest, StudyAnalytics, ResponseAnalytics
 )
 
@@ -501,6 +501,102 @@ class StudyResponseService:
         self.db.commit()
         
         return True
+
+    def submit_tasks_bulk(self, session_id: str, request: BulkSubmitTasksRequest) -> BulkSubmitTasksResponse:
+        """Submit multiple completed tasks in a single transaction (optimized for large payloads)."""
+        response = self.get_response_by_session(session_id)
+        if not response:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if response.is_completed:
+            raise HTTPException(status_code=400, detail="Study already completed")
+
+        now_utc = datetime.utcnow()
+        study_row: Optional[Study] = self.db.get(Study, response.study_id)
+
+        # Preload element name->url once for grid enrichment
+        name_to_url: Dict[str, str] = {}
+        if study_row and str(study_row.study_type) == 'grid':
+            elems = self.db.execute(
+                select(StudyElement.name, StudyElement.content).where(StudyElement.study_id == response.study_id)
+            ).all()
+            name_to_url = {str(n).replace(' ', '_'): c for (n, c) in elems}
+
+        tasks_to_insert: List[CompletedTask] = []
+        interactions_to_insert: List[ElementInteraction] = []
+        submitted = 0
+
+        for item in request.tasks or []:
+            # Build task model
+            task_model = CompletedTask(
+                task_id=item.task_id,
+                respondent_id=response.respondent_id,
+                task_index=response.current_task_index,
+                elements_shown_in_task=item.elements_shown_in_task or {},
+                elements_shown_content=item.elements_shown_content or None,
+                task_start_time=now_utc - timedelta(seconds=item.task_duration_seconds),
+                task_completion_time=now_utc,
+                task_duration_seconds=item.task_duration_seconds,
+                rating_given=item.rating_given,
+                rating_timestamp=now_utc,
+            )
+            task_model.study_response_id = response.id
+
+            # Grid enrichment for content map if presence provided but content missing
+            if name_to_url and task_model.elements_shown_in_task and not task_model.elements_shown_content:
+                content_map: Dict[str, str] = {}
+                for k, v in (task_model.elements_shown_in_task or {}).items():
+                    try:
+                        shown = int(v) == 1
+                    except Exception:
+                        shown = bool(v)
+                    if shown:
+                        url = name_to_url.get(str(k))
+                        if url:
+                            content_map[str(k)] = url
+                if content_map:
+                    task_model.elements_shown_content = content_map
+
+            tasks_to_insert.append(task_model)
+
+            # Queue interactions
+            if item.element_interactions:
+                for interaction_data in item.element_interactions:
+                    interaction = ElementInteraction(**interaction_data.model_dump())
+                    interaction.study_response_id = response.id
+                    interactions_to_insert.append(interaction)
+
+            # Update progress counters in-memory
+            response.completed_tasks_count = (response.completed_tasks_count or 0) + 1
+            response.current_task_index = (response.current_task_index or 0) + 1
+            submitted += 1
+
+            # Stop early if completed
+            if response.current_task_index >= (response.total_tasks_assigned or 0):
+                self._mark_response_completed(response)
+                break
+
+        # Bulk insert
+        if tasks_to_insert:
+            self.db.bulk_save_objects(tasks_to_insert)
+        if interactions_to_insert:
+            self.db.bulk_save_objects(interactions_to_insert)
+
+        # Finalize response progress
+        total_assigned = int(response.total_tasks_assigned or 0)
+        done = int(response.completed_tasks_count or 0)
+        response.completion_percentage = (done / total_assigned * 100.0) if total_assigned > 0 else 0.0
+        response.last_activity = now_utc
+
+        self.db.commit()
+
+        is_complete = bool(response.is_completed)
+        return BulkSubmitTasksResponse(
+            success=True,
+            submitted_count=submitted,
+            next_task_index=None if is_complete else response.current_task_index,
+            is_study_complete=is_complete,
+            completion_percentage=float(response.completion_percentage or 0.0)
+        )
 
     # ---------- CSV Export ----------
 

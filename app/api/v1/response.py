@@ -18,6 +18,7 @@ from app.models.user_model import User
 from app.schemas.response_schema import (
     StudyResponseOut, StudyResponseDetail, StudyResponseListItem,
     StartStudyRequest, StartStudyResponse, SubmitTaskRequest, SubmitTaskResponse,
+    BulkSubmitTasksRequest, BulkSubmitTasksResponse,
     SubmitClassificationRequest, SubmitClassificationResponse,
     AbandonStudyRequest, AbandonStudyResponse, UpdateUserDetailsRequest,
     StudyAnalytics, ResponseAnalytics, CompletedTaskOut,
@@ -58,6 +59,19 @@ async def submit_task(
     """
     service = StudyResponseService(db)
     return service.submit_task(session_id, request)
+
+@router.post("/submit-tasks-bulk", response_model=BulkSubmitTasksResponse)
+async def submit_tasks_bulk(
+    session_id: str,
+    request: BulkSubmitTasksRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Submit multiple completed tasks for a study session in one request.
+    Tasks are applied in the order provided; progress and completion are updated accordingly.
+    """
+    service = StudyResponseService(db)
+    return service.submit_tasks_bulk(session_id, request)
 
 @router.post("/submit-classification", response_model=SubmitClassificationResponse)
 async def submit_classification(
@@ -622,7 +636,7 @@ async def export_study_flattened_csv(
         import io
         buffer = io.StringIO()
         writer = csv.writer(buffer)
-        batch_size = 500
+        batch_size = 5000
         counter = 0
         for row in service.generate_csv_rows_for_study_optimized(study_id):
             writer.writerow(row)
