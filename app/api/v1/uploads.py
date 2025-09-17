@@ -52,20 +52,30 @@ async def upload_images(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    # Run uploads concurrently to reduce total wall time
-    loop = asyncio.get_running_loop()
-    tasks = [loop.run_in_executor(None, upload_file, f) for f in (files or [])]
+    # Bounded concurrency to improve stability and overall throughput under load
+    max_concurrency = 8
+    sem = asyncio.Semaphore(max_concurrency)
 
-    results = []
-    errors = []
-    completed = await asyncio.gather(*tasks, return_exceptions=True)
-    for idx, outcome in enumerate(completed):
-        if isinstance(outcome, Exception):
-            msg = str(outcome) if isinstance(outcome, ValueError) else "Upload failed"
-            errors.append({"index": idx, "error": msg})
-        else:
-            secure_url, public_id = outcome
-            results.append({"secure_url": secure_url, "public_id": public_id, "index": idx})
+    async def _upload_one(idx: int, f: UploadFile):
+        async with sem:
+            try:
+                secure_url, public_id = await asyncio.to_thread(upload_file, f)
+                return {"index": idx, "ok": True, "secure_url": secure_url, "public_id": public_id}
+            except Exception as exc:  # ValueError -> validation; others -> generic failure
+                msg = str(exc) if isinstance(exc, ValueError) else "Upload failed"
+                return {"index": idx, "ok": False, "error": msg}
+
+    tasks = [asyncio.create_task(_upload_one(i, f)) for i, f in enumerate(files or [])]
+    completed = await asyncio.gather(*tasks)
+
+    results = [
+        {"secure_url": it["secure_url"], "public_id": it["public_id"], "index": it["index"]}
+        for it in completed if it.get("ok")
+    ]
+    errors = [
+        {"index": it["index"], "error": it.get("error", "Upload failed")}
+        for it in completed if not it.get("ok")
+    ]
 
     return {"results": results, "errors": errors}
 

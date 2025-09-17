@@ -224,40 +224,34 @@ async def list_responses(
     service = StudyResponseService(db)
     
     if study_id:
-        # Verify user owns the study
+        # Optimized: lightweight ownership check
         from app.services import study as study_service
-        # study_service = study_service
-        study = study_service.get_study(db, study_id, current_user.id)
-        
-        if not study or study.creator_id != current_user.id:
+        if not study_service.get_study_exists(db, study_id, current_user.id):
             raise HTTPException(
                 status_code=403,
                 detail="Access denied to this study"
             )
         
-        responses = service.get_responses_by_study(study_id, limit, offset)
+        # Use SQL-level filtering for better performance
+        responses = service.get_responses_by_study_filtered(
+            study_id, limit, offset, is_completed, is_abandoned
+        )
     else:
         # Get all studies owned by user and their responses
         from app.services import study as study_service
-        # study_service = study_service
         user_studies, _ = study_service.list_studies(db, current_user.id)
         study_ids = [study.id for study in user_studies]
         
         if not study_ids:
             return []
         
-        # Get responses for all user's studies
+        # Get responses for all user's studies with SQL-level filtering
         responses = []
         for study_id in study_ids:
-            study_responses = service.get_responses_by_study(study_id, limit, offset)
+            study_responses = service.get_responses_by_study_filtered(
+                study_id, limit, offset, is_completed, is_abandoned
+            )
             responses.extend(study_responses)
-    
-    # Apply additional filters
-    if is_completed is not None:
-        responses = [r for r in responses if r.is_completed == is_completed]
-    
-    if is_abandoned is not None:
-        responses = [r for r in responses if r.is_abandoned == is_abandoned]
     
     return responses
 

@@ -4,6 +4,7 @@ from typing import List, Optional, Dict, Any, Literal
 from uuid import UUID
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Dict, Optional
 
 StudyType = Literal['grid', 'layer']
 StudyStatus = Literal['draft', 'active', 'paused', 'completed']
@@ -133,6 +134,15 @@ class StudyListItem(BaseModel):
     respondents_target: int | None = 0
     respondents_completed: int | None = 0
     model_config = ConfigDict(from_attributes=True)
+
+
+class StudyPublicMinimal(BaseModel):
+    id: UUID
+    title: str
+    study_type: str
+    respondents_target: int
+
+    model_config = ConfigDict(from_attributes=False)
 
 class StudyOut(BaseModel):
     id: UUID

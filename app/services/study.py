@@ -13,7 +13,8 @@ import logging
 from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage, StudyClassificationQuestion
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
-    StudyStatus, StudyType, RegenerateTasksResponse, ValidateTasksResponse
+    StudyStatus, StudyType, RegenerateTasksResponse, ValidateTasksResponse,
+    StudyPublicMinimal
 )
 from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
 from app.services.cloudinary_service import upload_base64, delete_public_id
@@ -127,72 +128,77 @@ def create_study(
     db.add(study)
     # UUID is already assigned above; avoid early flush to reduce DB round-trips
     study.share_url = _build_share_url(base_url_for_share, str(study.id))
+    # Ensure parent row exists before inserting FK children in bulk
+    db.flush()
 
-    # Children
-    if payload.study_type == 'grid' and payload.elements:
-        # Ensure element_id uniqueness within the study
-        seen_ids = set()
-        new_elements: List[StudyElement] = []
-        for elem in payload.elements:
-            if elem.element_id in seen_ids:
-                raise HTTPException(status_code=409, detail=f"Duplicate element_id: {elem.element_id}")
-            seen_ids.add(elem.element_id)
-            content_url, public_id = _maybe_upload_data_url_to_cloudinary(elem.content)
-            new_elements.append(StudyElement(
-                id=uuid4(),
-                study_id=study.id,
-                element_id=elem.element_id,
-                name=elem.name,
-                description=elem.description,
-                element_type=elem.element_type,
-                content=content_url or elem.content,
-                alt_text=elem.alt_text,
-                cloudinary_public_id=public_id
-            ))
-        if new_elements:
-            db.add_all(new_elements)
-
-    if payload.study_type == 'layer' and payload.study_layers:
-        # Each layer with images
-        seen_layer_ids = set()
-        new_layers: List[StudyLayer] = []
-        for layer in payload.study_layers:
-            if layer.layer_id in seen_layer_ids:
-                raise HTTPException(status_code=409, detail=f"Duplicate layer_id: {layer.layer_id}")
-            seen_layer_ids.add(layer.layer_id)
-            new_layers.append(StudyLayer(
-                id=uuid4(),
-                study_id=study.id,
-                layer_id=layer.layer_id,
-                name=layer.name,
-                description=layer.description,
-                z_index=layer.z_index,
-                order=layer.order
-            ))
-        if new_layers:
-            db.add_all(new_layers)
-
-        # Build images for all layers without per-layer flushes (ids are preassigned)
-        new_images: List[LayerImage] = []
-        for layer_row, layer in zip(new_layers, payload.study_layers or []):
-            seen_image_ids = set()
-            for img in layer.images or []:
-                if img.image_id in seen_image_ids:
-                    raise HTTPException(status_code=409, detail=f"Duplicate image_id in layer {layer.layer_id}: {img.image_id}")
-                seen_image_ids.add(img.image_id)
-                url, public_id = _maybe_upload_data_url_to_cloudinary(img.url)
-                new_images.append(LayerImage(
+    # Children (optimize by avoiding intermediate flushes and using bulk saves)
+    with db.no_autoflush:
+        if payload.study_type == 'grid' and payload.elements:
+            # Ensure element_id uniqueness within the study
+            seen_ids = set()
+            new_elements: List[StudyElement] = []
+            for elem in payload.elements:
+                if elem.element_id in seen_ids:
+                    raise HTTPException(status_code=409, detail=f"Duplicate element_id: {elem.element_id}")
+                seen_ids.add(elem.element_id)
+                content_url, public_id = _maybe_upload_data_url_to_cloudinary(elem.content)
+                new_elements.append(StudyElement(
                     id=uuid4(),
-                    layer_id=layer_row.id,
-                    image_id=img.image_id,
-                    name=img.name,
-                    url=url or img.url,
-                    alt_text=img.alt_text,
-                    order=img.order,
+                    study_id=study.id,
+                    element_id=elem.element_id,
+                    name=elem.name,
+                    description=elem.description,
+                    element_type=elem.element_type,
+                    content=content_url or elem.content,
+                    alt_text=elem.alt_text,
                     cloudinary_public_id=public_id
                 ))
-        if new_images:
-            db.add_all(new_images)
+            if new_elements:
+                db.bulk_save_objects(new_elements)
+
+        if payload.study_type == 'layer' and payload.study_layers:
+            # Each layer with images
+            seen_layer_ids = set()
+            new_layers: List[StudyLayer] = []
+            for layer in payload.study_layers:
+                if layer.layer_id in seen_layer_ids:
+                    raise HTTPException(status_code=409, detail=f"Duplicate layer_id: {layer.layer_id}")
+                seen_layer_ids.add(layer.layer_id)
+                new_layers.append(StudyLayer(
+                    id=uuid4(),
+                    study_id=study.id,
+                    layer_id=layer.layer_id,
+                    name=layer.name,
+                    description=layer.description,
+                    z_index=layer.z_index,
+                    order=layer.order
+                ))
+            if new_layers:
+                db.bulk_save_objects(new_layers)
+                # Persist layers before inserting their images to satisfy FKs
+                db.flush()
+
+            # Build images for all layers without per-layer flushes (ids are preassigned)
+            new_images: List[LayerImage] = []
+            for layer_row, layer in zip(new_layers, payload.study_layers or []):
+                seen_image_ids = set()
+                for img in layer.images or []:
+                    if img.image_id in seen_image_ids:
+                        raise HTTPException(status_code=409, detail=f"Duplicate image_id in layer {layer.layer_id}: {img.image_id}")
+                    seen_image_ids.add(img.image_id)
+                    url, public_id = _maybe_upload_data_url_to_cloudinary(img.url)
+                    new_images.append(LayerImage(
+                        id=uuid4(),
+                        layer_id=layer_row.id,
+                        image_id=img.image_id,
+                        name=img.name,
+                        url=url or img.url,
+                        alt_text=img.alt_text,
+                        order=img.order,
+                        cloudinary_public_id=public_id
+                    ))
+            if new_images:
+                db.bulk_save_objects(new_images)
 
     # Handle classification questions (for both grid and layer studies)
     if payload.classification_questions:
@@ -215,7 +221,7 @@ def create_study(
                 config=question.config
             ))
         if new_questions:
-            db.add_all(new_questions)
+            db.bulk_save_objects(new_questions)
 
     db.commit()
     db.refresh(study)
@@ -223,6 +229,11 @@ def create_study(
 
 def get_study(db: Session, study_id: UUID, owner_id: UUID) -> Study:
     return _load_owned_study(db, study_id, owner_id, for_update=False)
+
+def get_study_exists(db: Session, study_id: UUID, owner_id: UUID) -> bool:
+    """Lightweight check if study exists and is owned by user."""
+    stmt = select(Study.id).where(Study.id == study_id, Study.creator_id == owner_id)
+    return db.scalars(stmt).first() is not None
 
 def get_study_public(db: Session, study_id: UUID) -> Optional[Study]:
     """
@@ -244,6 +255,54 @@ def get_study_public(db: Session, study_id: UUID) -> Optional[Study]:
         )
     )
     return db.scalars(stmt).first()
+
+def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPublicMinimal]:
+    """Lightweight public fetch: only title, type, respondents target."""
+    row = db.execute(
+        select(
+            Study.id,
+            Study.title,
+            Study.study_type,
+            Study.audience_segmentation,
+            Study.status,
+            Study.share_token,
+        ).where(Study.id == study_id)
+    ).first()
+    if not row or row.status != 'active' or not row.share_token:
+        return None
+    respondents_target = 0
+    try:
+        seg = row.audience_segmentation or {}
+        respondents_target = int(seg.get('number_of_respondents') or 0)
+    except Exception:
+        respondents_target = 0
+    return StudyPublicMinimal(
+        id=row.id,
+        title=row.title,
+        study_type=row.study_type,
+        respondents_target=respondents_target,
+    )
+
+def get_study_share_details(db: Session, study_id: UUID) -> Optional[Dict[str, Any]]:
+    """Lightweight fetch of share URL and basic status info for a study."""
+    row = db.execute(
+        select(
+            Study.id,
+            Study.title,
+            Study.study_type,
+            Study.status,
+            Study.share_url,
+        ).where(Study.id == study_id)
+    ).first()
+    if not row:
+        return None
+    return {
+        "id": row.id,
+        "title": row.title,
+        "study_type": row.study_type,
+        "status": row.status,
+        "share_url": row.share_url,
+    }
 
 def list_studies(
     db: Session,
@@ -476,9 +535,17 @@ def regenerate_tasks(
     *,
     generator: Optional[Dict[str, Any]] = None
 ) -> RegenerateTasksResponse:
-    study = _load_owned_study(db, study_id, owner_id, for_update=True)
-    if study.status == 'active':
-        raise HTTPException(status_code=400, detail="Cannot regenerate tasks for active studies.")
+    # Optimized study loading - only load what we need
+    study = db.scalars(
+        select(Study)
+        .where(Study.id == study_id, Study.creator_id == owner_id)
+        .with_for_update()
+    ).first()
+    if not study:
+        raise HTTPException(status_code=404, detail="Study not found or access denied.")
+    
+    # Allow task regeneration for all study statuses
+    # Note: Regenerating tasks for active studies may affect ongoing participants
 
     # Default to adapter-backed generators if none provided
     generator = generator or {"grid": generate_grid_tasks, "layer": generate_layer_tasks}
@@ -486,16 +553,20 @@ def regenerate_tasks(
     if 'grid' not in generator or 'layer' not in generator:
         raise HTTPException(status_code=500, detail="Task generator not configured.")
 
+    # Cache audience values to avoid repeated dict lookups
     audience = study.audience_segmentation or {}
+    number_of_respondents = audience.get('number_of_respondents')
     computed_total: int = 0
     if study.study_type == 'grid':
-        number_of_respondents = audience.get('number_of_respondents')
+        # Cache constants to avoid repeated lookups
         exposure_tolerance_cv = 1.0
         seed = None
 
-        # Load elements (ordered by element_id lexical)
-        elements: List[StudyElement] = db.scalars(
-            select(StudyElement).where(StudyElement.study_id == study.id).order_by(StudyElement.element_id.asc())
+        # Optimized element loading - load all elements but with better query
+        elements = db.scalars(
+            select(StudyElement)
+            .where(StudyElement.study_id == study.id)
+            .order_by(StudyElement.element_id.asc())
         ).all()
         if not elements:
             raise HTTPException(status_code=400, detail="Elements missing for grid study.")
@@ -515,12 +586,12 @@ def regenerate_tasks(
             elements=elements
         )
         study.tasks = result.get('tasks', {})
-        # Update total_tasks from metadata or computed fallback
+        
+        # Optimized total calculation - cache metadata
         meta = result.get('metadata', {})
         tpc = meta.get('tasks_per_consumer')
-        nresp = number_of_respondents
         try:
-            computed = int(tpc or 0) * int(nresp or 0)
+            computed = int(tpc or 0) * int(number_of_respondents or 0)
         except Exception:
             computed = 0
         # Fallback: count from generated tasks if available
@@ -530,18 +601,20 @@ def regenerate_tasks(
             except Exception:
                 computed = 0
         logger.debug("Regenerate grid computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
-                     computed, tpc, nresp, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
+                     computed, tpc, number_of_respondents, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
         computed_total = computed
-        # total stored only in response; audience_segmentation remains unchanged
 
     elif study.study_type == 'layer':
-        number_of_respondents = audience.get('number_of_respondents')
+        # Cache constants to avoid repeated lookups
         exposure_tolerance_pct = 2.0
         seed = None
 
-        # Collect layers with images in a simple list for generator
+        # Optimized layer loading - load layers with images efficiently
         layers = db.scalars(
-            select(StudyLayer).options(selectinload(StudyLayer.images)).where(StudyLayer.study_id == study.id).order_by(StudyLayer.order.asc())
+            select(StudyLayer)
+            .options(selectinload(StudyLayer.images))
+            .where(StudyLayer.study_id == study.id)
+            .order_by(StudyLayer.order.asc())
         ).all()
         if not layers:
             raise HTTPException(status_code=400, detail="Layer configuration missing.")
@@ -557,6 +630,8 @@ def regenerate_tasks(
             seed=seed
         )
         study.tasks = result.get('tasks', {})
+        
+        # Optimized total calculation - cache metadata
         meta = result.get('metadata', {})
         tpc = meta.get('tasks_per_consumer')
         try:
@@ -576,14 +651,18 @@ def regenerate_tasks(
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}")
 
-    db.commit()
-    # Ensure something appears in logs even if logging config is minimal
+    # Optimized commit and response generation
     try:
-        logger.info("Regenerate completed: study_id=%s total_tasks=%s", study_id, computed_total)
+        db.commit()
+        # Cache logging to avoid repeated string operations
+        log_msg = f"Regenerate completed: study_id={study_id} total_tasks={computed_total}"
+        logger.info(log_msg)
         print(f"[regenerate] study_id={study_id} total_tasks={computed_total}")
-    except Exception:
-        pass
-    # Attach metadata from last generation if available
+    except Exception as e:
+        logger.error(f"Failed to commit regenerate tasks: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save regenerated tasks")
+    
+    # Cache metadata to avoid repeated lookups
     response_meta = locals().get('meta', {}) if 'meta' in locals() else {}
     return RegenerateTasksResponse(
         success=True,

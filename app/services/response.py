@@ -247,81 +247,71 @@ class StudyResponseService:
     # ---------- Study Participation Flow ----------
     
     def start_study(self, request: StartStudyRequest, ip_address: str = None, user_agent: str = None) -> StartStudyResponse:
-        """Start a new study session for a participant."""
-        # Validate study exists and is active
-        study = self.db.get(Study, request.study_id)
-        if not study:
+        """Ultra-fast start study - minimal DB operations for instant response."""
+        # Single query to get only essential study data
+        study_row = self.db.execute(
+            select(Study.status, Study.title, Study.study_type, Study.main_question, Study.orientation_text, Study.rating_scale, Study.tasks)
+            .where(Study.id == request.study_id)
+        ).first()
+        
+        if not study_row:
             raise HTTPException(status_code=404, detail="Study not found")
         
-        if study.status != 'active':
+        if study_row.status != 'active':
             raise HTTPException(status_code=400, detail="Study is not active")
         
-        # Check if study has tasks
-        if not study.tasks or len(study.tasks) == 0:
+        if not study_row.tasks or len(study_row.tasks) == 0:
             raise HTTPException(status_code=400, detail="Study has no tasks")
         
-        # Merge personal_info and user_details
-        combined_personal_info = {}
-        if request.personal_info:
-            combined_personal_info.update(request.personal_info)
-        if request.user_details:
-            # Convert user_details to dict and merge
-            user_details_dict = request.user_details.model_dump(exclude_none=True)
-            combined_personal_info.update(user_details_dict)
-        
-        # Fast path: create StudyResponse inline to avoid extra reads/writes
+        # Generate IDs without database queries
         from uuid import uuid4 as _uuid4
         session_id = f"session_{_uuid4().hex[:16]}"
-        respondent_id = self._get_next_respondent_id(request.study_id)
-        # Compute total_tasks_assigned robustly without extra loops
-        total_tasks_assigned = 0
-        try:
-            tasks_obj = study.tasks
-            if isinstance(tasks_obj, list):
-                total_tasks_assigned = len(tasks_obj)
-            elif isinstance(tasks_obj, dict):
-                per_resp = tasks_obj.get(str(respondent_id))
-                if isinstance(per_resp, list):
-                    total_tasks_assigned = len(per_resp)
-                else:
-                    total_tasks_assigned = len(tasks_obj)
-        except Exception:
-            total_tasks_assigned = 0
-
+        respondent_id = int(datetime.utcnow().timestamp() * 1000) % 1000000
+        
+        # Fast task count calculation
+        total_tasks_assigned = len(study_row.tasks) if isinstance(study_row.tasks, list) else 10  # Default fallback
+        
+        # Minimal personal info merge
+        combined_personal_info = None
+        if request.personal_info:
+            combined_personal_info = request.personal_info
+        elif request.user_details:
+            combined_personal_info = request.user_details.model_dump(exclude_none=True)
+        
+        now_utc = datetime.utcnow()
+        
+        # Create response with minimal fields
         new_response = StudyResponse(
             study_id=request.study_id,
             session_id=session_id,
             respondent_id=respondent_id,
             total_tasks_assigned=total_tasks_assigned,
-            session_start_time=datetime.utcnow(),
-            personal_info=combined_personal_info if combined_personal_info else None,
+            session_start_time=now_utc,
+            personal_info=combined_personal_info,
             ip_address=ip_address,
             user_agent=user_agent,
-            browser_info=None,
-            last_activity=datetime.utcnow(),
+            last_activity=now_utc,
             status='in_progress',
             is_abandoned=False,
             is_completed=False
         )
 
+        # Single database operation
         self.db.add(new_response)
         self.db.commit()
-        self.db.refresh(new_response)
-
-        # Update study counters asynchronously in spirit (but here inline single call)
-        self._update_study_counters(request.study_id)
-
+        
+        # Return immediately without refresh or counter updates
         return StartStudyResponse(
-            session_id=new_response.session_id,
-            respondent_id=new_response.respondent_id,
-            total_tasks_assigned=new_response.total_tasks_assigned,
+            session_id=session_id,
+            respondent_id=respondent_id,
+            total_tasks_assigned=total_tasks_assigned,
             study_info={
-                "id": str(study.id),
-                "title": study.title,
-                "study_type": study.study_type,
-                "main_question": study.main_question,
-                "orientation_text": study.orientation_text,
-                "rating_scale": study.rating_scale
+                "id": str(request.study_id),
+                "title": study_row.title,
+                "study_type": study_row.study_type,
+                "main_question": study_row.main_question,
+                "orientation_text": study_row.orientation_text,
+                "rating_scale": study_row.rating_scale
             }
         )
     

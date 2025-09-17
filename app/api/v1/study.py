@@ -14,7 +14,7 @@ from app.models.study_model import Study
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus,
-    GenerateTasksRequest, GenerateTasksResult
+    GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal
 )
 from app.services import study as study_service
 from app.services.response import StudyResponseService
@@ -125,13 +125,38 @@ def check_study_ownership_endpoint(
     return {"is_owner": is_owner, "is_active": is_active}
 
 
-@router.get("/public/{study_id}", response_model=StudyOut)
+@router.get("/public/{study_id}")
 def get_study_public_endpoint(
     study_id: UUID,
     db: Session = Depends(get_db),
 ):
     """
     Get study information for public access (no authentication required).
+    Only returns studies that are active and have a share_token.
+    """
+    minimal = study_service.get_study_public_minimal(db=db, study_id=study_id)
+    if not minimal:
+        raise HTTPException(
+            status_code=404, 
+            detail="Study not found or not publicly accessible"
+        )
+    # Return minimal json directly for speed
+    return {
+        "id": str(minimal.id),
+        "title": minimal.title,
+        "study_type": minimal.study_type,
+        "respondents_target": minimal.respondents_target,
+    }
+
+
+@router.get("/public/{study_id}/details", response_model=StudyOut)
+def get_study_public_details_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Get complete study details for public access (no authentication required).
+    Returns full study information including elements, layers, and classification questions.
     Only returns studies that are active and have a share_token.
     """
     study = study_service.get_study_public(db=db, study_id=study_id)
@@ -141,6 +166,26 @@ def get_study_public_endpoint(
             detail="Study not found or not publicly accessible"
         )
     return study
+
+
+@router.get("/share/details")
+def get_study_share_details_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Public: fetch only share_url, status, title, and study_type for a study.
+    """
+    info = study_service.get_study_share_details(db=db, study_id=study_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="Study not found")
+    return {
+        "id": str(info.get("id")),
+        "title": info.get("title"),
+        "study_type": info.get("study_type"),
+        "status": info.get("status"),
+        "share_url": info.get("share_url"),
+    }
 
 
 @router.put("/{study_id}", response_model=StudyOut)

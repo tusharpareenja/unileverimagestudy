@@ -1,6 +1,10 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, AliasChoices
 
 class Settings(BaseSettings):
+    # Pydantic Settings config (v2)
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     DATABASE_URL: str
     SECRET_KEY: str
     
@@ -16,13 +20,58 @@ class Settings(BaseSettings):
     CLOUDINARY_API_SECRET: str | None = None
     CLOUDINARY_FOLDER: str = "unilever_image_study"
     
+    # Azure Blob Storage Settings (support multiple env var names via validation aliases)
+    AZURE_STORAGE_CONNECTION_STRING: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "AZURE_STORAGE_CONNECTION_STRING",
+            "azure_storage_connection_string",
+        ),
+    )
+    AZURE_STORAGE_ACCOUNT_NAME: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "AZURE_STORAGE_ACCOUNT_NAME",
+            "azure_storage_account_name",
+        ),
+    )
+    AZURE_STORAGE_ACCOUNT_KEY: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "AZURE_STORAGE_ACCOUNT_KEY",
+            "azure_storage_account_key",
+        ),
+    )
+    AZURE_STORAGE_CONTAINER: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "AZURE_STORAGE_CONTAINER",
+            "AZURE_STORAGE_CONTAINER_NAME",
+            "azure_storage_container_name",
+            "azure_storage_container",
+        ),
+    )
+    AZURE_STORAGE_PUBLIC_BASE_URL: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "AZURE_STORAGE_PUBLIC_BASE_URL",
+            "azure_storage_public_base_url",
+            "AZURE_STORAGE_BASE_URL",
+            "azure_storage_base_url",
+        ),
+    )  # Optional override for CDN/frontdoor
+    AZURE_STORAGE_SAS_TOKEN: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "AZURE_STORAGE_SAS_TOKEN",
+            "azure_storage_sas_token",
+            "AZURE_BLOB_SAS_TOKEN",
+            "azure_blob_sas_token",
+        ),
+    )  # Optional, appended to URLs for private containers
+    
     # Application Settings
     BASE_URL: str = "http://localhost:3000"  # Base URL for share links in frontend
-
-    
-
-    class Config:
-        env_file = ".env"
 
 settings = Settings()
 
