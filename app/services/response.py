@@ -216,6 +216,30 @@ class StudyResponseService:
             .offset(offset)
         )
         return list(self.db.execute(stmt).scalars().all())
+
+    def get_responses_by_study_filtered(
+        self,
+        study_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+        is_completed: Optional[bool] = None,
+        is_abandoned: Optional[bool] = None,
+    ) -> List[StudyResponse]:
+        """Get responses for a study with optional SQL-level completion/abandon filters."""
+        conditions = [StudyResponse.study_id == study_id]
+        if is_completed is not None:
+            conditions.append(StudyResponse.is_completed == is_completed)
+        if is_abandoned is not None:
+            conditions.append(StudyResponse.is_abandoned == is_abandoned)
+
+        stmt = (
+            select(StudyResponse)
+            .where(and_(*conditions))
+            .order_by(desc(StudyResponse.created_at))
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(self.db.execute(stmt).scalars().all())
     
     def update_response(self, response_id: UUID, update_data: StudyResponseUpdate) -> Optional[StudyResponse]:
         """Update a study response."""
