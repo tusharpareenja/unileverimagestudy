@@ -144,6 +144,22 @@ class StudyPublicMinimal(BaseModel):
 
     model_config = ConfigDict(from_attributes=False)
 
+class StudyBasicDetails(BaseModel):
+    """Basic study details for authenticated users - includes core study info without heavy data"""
+    id: UUID
+    title: str
+    status: StudyStatus
+    study_type: StudyType
+    created_at: datetime
+    background: str
+    main_question: str
+    orientation_text: str
+    rating_scale: RatingScale
+    study_config: Optional[Dict[str, Any]] = None  # For additional configuration
+    classification_questions: Optional[List[StudyClassificationQuestionOut]] = None
+    
+    model_config = ConfigDict(from_attributes=True)
+
 class StudyOut(BaseModel):
     id: UUID
     title: str

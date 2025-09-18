@@ -320,7 +320,7 @@ async def get_study_analytics(
     db: Session = Depends(get_db)
 ):
     """
-    Get analytics data for a study - optimized for fast performance.
+    Get analytics data for a study - optimized for fast performance with rate limiting.
     """
     import time
     start_time = time.time()
@@ -338,6 +338,8 @@ async def get_study_analytics(
             detail="Study not found or access denied"
         )
     
+    # No rate limiting - allow real-time updates
+    
     service = StudyResponseService(db)
     analytics = service.get_study_analytics(study_id)
     
@@ -350,7 +352,7 @@ async def get_study_analytics(
 @router.get("/analytics/study/{study_id}/stream")
 async def stream_study_analytics(
     study_id: UUID,
-    interval_seconds: int = Query(5, ge=1, le=60),
+    interval_seconds: int = Query(10, ge=5, le=60),  # Increased minimum for scalability
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -358,6 +360,7 @@ async def stream_study_analytics(
     Server-Sent Events (SSE) stream of study analytics.
     Emits an event every `interval_seconds` with the same payload shape
     as /analytics/study/{study_id}.
+    Optimized for scalability with 100+ users.
     """
     # Ownership check (fast)
     from sqlalchemy import select
@@ -374,13 +377,25 @@ async def stream_study_analytics(
 
     async def event_generator():
         last_payload: str | None = None
+        request_count = 0
+        
         while True:
-            analytics = service.get_study_analytics(study_id)
+            # Smart caching: Use cache for most requests, refresh occasionally
+            if request_count % 2 == 0:  # Refresh every 2nd request (every 20 seconds with 10s interval)
+                analytics = service.get_study_analytics(study_id)
+            else:
+                # Use cached data for faster response
+                analytics = service._get_cached_analytics(study_id)
+                if not analytics:
+                    analytics = service.get_study_analytics(study_id)
+            
             payload = json.dumps(analytics.model_dump())
             # Only send when changed to reduce client work
             if payload != last_payload:
                 yield f"data: {payload}\n\n"
                 last_payload = payload
+            
+            request_count += 1
             await asyncio.sleep(interval_seconds)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

@@ -14,7 +14,7 @@ from app.models.study_model import Study
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus,
-    GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal
+    GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal, StudyBasicDetails
 )
 from app.services import study as study_service
 from app.services.response import StudyResponseService
@@ -80,6 +80,26 @@ def get_study_endpoint(
     current_user: User = Depends(get_current_active_user),
 ):
     return study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+
+
+@router.get("/{study_id}/basic", response_model=StudyBasicDetails)
+def get_study_basic_details_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Get basic study details (no authentication required).
+    Returns core study information including:
+    - Study title, status, type, created date
+    - Background, main question, orientation text
+    - Rating scale configuration
+    - Study config (audience segmentation)
+    - Classification questions
+    """
+    details = study_service.get_study_basic_details_public(db=db, study_id=study_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Study not found")
+    return details
 
 
 @router.get("/private/{study_id}", response_model=StudyOut)

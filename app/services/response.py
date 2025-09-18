@@ -1233,6 +1233,9 @@ class StudyResponseService:
         # Update study counters
         self._update_study_counters(response.study_id)
         
+        # Invalidate analytics cache since data changed
+        self.invalidate_analytics_cache(response.study_id)
+        
         return True
     
     def check_and_mark_abandoned_sessions(self) -> int:
@@ -1293,23 +1296,29 @@ class StudyResponseService:
     # ---------- Analytics and Reporting ----------
     
     def get_study_analytics(self, study_id: UUID) -> StudyAnalytics:
-        """Get analytics data for a study - ultra-optimized with minimal queries."""
+        """Get analytics data for a study - ultra-optimized with raw SQL for maximum speed."""
         # Serve from short-lived cache if present
         cache_key = str(study_id)
         cached = StudyResponseService._analytics_cache.get(cache_key)
         now = time.time()
         if cached and cached[0] > now:
             return cached[1]
-        # Single query to get all response statistics
-        stats_query = select(
-            func.count(StudyResponse.id).label('total_responses'),
-            func.count(StudyResponse.id).filter(StudyResponse.is_completed == True).label('completed_responses'),
-            func.count(StudyResponse.id).filter(StudyResponse.is_abandoned == True).label('abandoned_responses'),
-            func.count(StudyResponse.id).filter(StudyResponse.status == 'in_progress').label('in_progress_responses'),
-            func.avg(StudyResponse.total_study_duration).filter(StudyResponse.is_completed == True).label('avg_duration')
-        ).where(StudyResponse.study_id == study_id)
         
-        result = self.db.execute(stats_query).first()
+        # Ultra-fast raw SQL query for all statistics
+        from sqlalchemy import text
+        
+        stats_query = text("""
+            SELECT 
+                COUNT(*) as total_responses,
+                COUNT(*) FILTER (WHERE is_completed = true) as completed_responses,
+                COUNT(*) FILTER (WHERE is_abandoned = true) as abandoned_responses,
+                COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress_responses,
+                AVG(total_study_duration) FILTER (WHERE is_completed = true) as avg_duration
+            FROM study_responses 
+            WHERE study_id = :study_id
+        """)
+        
+        result = self.db.execute(stats_query, {"study_id": study_id}).first()
         
         total_responses = result.total_responses or 0
         completed_responses = result.completed_responses or 0
@@ -1321,7 +1330,7 @@ class StudyResponseService:
         completion_rate = (completed_responses / total_responses * 100) if total_responses > 0 else 0
         abandonment_rate = (abandoned_responses / total_responses * 100) if total_responses > 0 else 0
         
-        # Simplified analytics - return empty data if no responses to avoid expensive queries
+        # Ultra-fast analytics - return minimal data if no responses
         if total_responses == 0:
             return StudyAnalytics(
                 total_responses=0,
@@ -1335,11 +1344,11 @@ class StudyResponseService:
                 timing_distributions={"task_durations": [], "average_duration": 0, "min_duration": 0, "max_duration": 0, "total_tasks": 0}
             )
         
-        # Get element heatmap (optimized)
-        element_heatmap = self._get_element_heatmap_optimized(study_id)
+        # Get minimal element heatmap (raw SQL)
+        element_heatmap = self._get_element_heatmap_ultra_fast(study_id)
         
-        # Get timing distributions (optimized)
-        timing_distributions = self._get_timing_distributions_optimized(study_id)
+        # Get minimal timing distributions (raw SQL)
+        timing_distributions = self._get_timing_distributions_ultra_fast(study_id)
         
         analytics = StudyAnalytics(
             total_responses=total_responses,
@@ -1352,10 +1361,25 @@ class StudyResponseService:
             element_heatmap=element_heatmap,
             timing_distributions=timing_distributions
         )
-        # Update cache
-        ttl = getattr(StudyResponseService, "_analytics_ttl_seconds", 15)
+        # Smart caching: Short TTL but with invalidation on data changes
+        ttl = getattr(StudyResponseService, "_analytics_ttl_seconds", 10)  # 10 seconds for scalability
         StudyResponseService._analytics_cache[cache_key] = (now + ttl, analytics)
         return analytics
+    
+    def _get_cached_analytics(self, study_id: UUID) -> Optional[StudyAnalytics]:
+        """Get cached analytics data without triggering a new query."""
+        cache_key = str(study_id)
+        cached = StudyResponseService._analytics_cache.get(cache_key)
+        now = time.time()
+        if cached and cached[0] > now:
+            return cached[1]
+        return None
+    
+    def invalidate_analytics_cache(self, study_id: UUID) -> None:
+        """Invalidate analytics cache when data changes."""
+        cache_key = str(study_id)
+        if cache_key in StudyResponseService._analytics_cache:
+            del StudyResponseService._analytics_cache[cache_key]
     
     def get_response_analytics(self, response_id: UUID) -> Optional[ResponseAnalytics]:
         """Get detailed analytics for a specific response."""
@@ -1470,20 +1494,26 @@ class StudyResponseService:
         
         self.db.commit()
     
-    def _get_element_heatmap_optimized(self, study_id: UUID) -> Dict[str, Any]:
-        """Get element interaction heatmap data - ultra-optimized with aggregation."""
-        # Single query with aggregation to get heatmap data
-        heatmap_query = select(
-            ElementInteraction.element_id,
-            func.sum(ElementInteraction.view_time_seconds).label('total_view_time'),
-            func.sum(ElementInteraction.hover_count).label('total_hovers'),
-            func.sum(ElementInteraction.click_count).label('total_clicks'),
-            func.count(ElementInteraction.id).label('interaction_count')
-        ).join(StudyResponse).where(
-            StudyResponse.study_id == study_id
-        ).group_by(ElementInteraction.element_id).limit(50)  # Limit to prevent excessive data
+    def _get_element_heatmap_ultra_fast(self, study_id: UUID) -> Dict[str, Any]:
+        """Get element interaction heatmap data - ultra-fast with raw SQL and minimal data."""
+        from sqlalchemy import text
         
-        results = self.db.execute(heatmap_query).all()
+        # Ultra-fast raw SQL with minimal data
+        heatmap_query = text("""
+            SELECT 
+                ei.element_id,
+                SUM(ei.view_time_seconds) as total_view_time,
+                SUM(ei.hover_count) as total_hovers,
+                SUM(ei.click_count) as total_clicks,
+                COUNT(ei.id) as interaction_count
+            FROM element_interactions ei
+            JOIN study_responses sr ON ei.study_response_id = sr.id
+            WHERE sr.study_id = :study_id
+            GROUP BY ei.element_id
+            LIMIT 20
+        """)
+        
+        results = self.db.execute(heatmap_query, {"study_id": study_id}).fetchall()
         
         heatmap = {}
         for result in results:
@@ -1496,33 +1526,41 @@ class StudyResponseService:
         
         return heatmap
     
-    def _get_timing_distributions_optimized(self, study_id: UUID) -> Dict[str, Any]:
-        """Get timing distribution data - ultra-optimized with single query."""
-        # Single query to get all timing statistics
-        timing_query = select(
-            func.avg(CompletedTask.task_duration_seconds).label('avg_duration'),
-            func.min(CompletedTask.task_duration_seconds).label('min_duration'),
-            func.max(CompletedTask.task_duration_seconds).label('max_duration'),
-            func.count(CompletedTask.id).label('total_tasks')
-        ).join(StudyResponse).where(
-            StudyResponse.study_id == study_id
-        )
+    def _get_timing_distributions_ultra_fast(self, study_id: UUID) -> Dict[str, Any]:
+        """Get timing distribution data - ultra-fast with raw SQL and minimal sampling."""
+        from sqlalchemy import text
         
-        result = self.db.execute(timing_query).first()
+        # Ultra-fast raw SQL for timing statistics
+        timing_query = text("""
+            SELECT 
+                AVG(ct.task_duration_seconds) as avg_duration,
+                MIN(ct.task_duration_seconds) as min_duration,
+                MAX(ct.task_duration_seconds) as max_duration,
+                COUNT(ct.id) as total_tasks
+            FROM completed_tasks ct
+            JOIN study_responses sr ON ct.study_response_id = sr.id
+            WHERE sr.study_id = :study_id
+        """)
+        
+        result = self.db.execute(timing_query, {"study_id": study_id}).first()
         
         if not result or result.total_tasks == 0:
             return {"task_durations": [], "average_duration": 0, "min_duration": 0, "max_duration": 0, "total_tasks": 0}
         
-        # Get sample durations for distribution (very limited to ensure fast response)
-        sample_durations = self.db.execute(
-            select(CompletedTask.task_duration_seconds)
-            .join(StudyResponse)
-            .where(StudyResponse.study_id == study_id)
-            .limit(100)  # Very small limit for fast response
-        ).scalars().all()
+        # Get minimal sample for distribution (ultra-small limit for speed)
+        sample_query = text("""
+            SELECT ct.task_duration_seconds
+            FROM completed_tasks ct
+            JOIN study_responses sr ON ct.study_response_id = sr.id
+            WHERE sr.study_id = :study_id
+            ORDER BY ct.task_completion_time DESC
+            LIMIT 20
+        """)
+        
+        sample_durations = [row[0] for row in self.db.execute(sample_query, {"study_id": study_id}).fetchall()]
         
         return {
-            "task_durations": list(sample_durations),
+            "task_durations": sample_durations,
             "average_duration": float(result.avg_duration or 0),
             "min_duration": float(result.min_duration or 0),
             "max_duration": float(result.max_duration or 0),

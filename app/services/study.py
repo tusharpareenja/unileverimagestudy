@@ -706,3 +706,104 @@ def validate_tasks(
         issues.append(f"Unsupported study type {study.study_type}")
 
     return ValidateTasksResponse(validation_passed=len(issues) == 0, issues=issues, totals=totals)
+
+
+def get_study_basic_details(db: Session, study_id: UUID, owner_id: UUID) -> Optional[Dict[str, Any]]:
+    """
+    Get basic study details for authenticated users.
+    Returns core study information without heavy data like tasks, elements, or layers.
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    
+    # Optimized query to get basic study details with classification questions
+    study = db.scalars(
+        select(Study)
+        .options(selectinload(Study.classification_questions))
+        .where(Study.id == study_id, Study.creator_id == owner_id)
+    ).first()
+    
+    if not study:
+        return None
+    
+    # Build study config from audience segmentation
+    study_config = {}
+    if study.audience_segmentation:
+        study_config.update(study.audience_segmentation)
+    
+    return {
+        "id": study.id,
+        "title": study.title,
+        "status": study.status,
+        "study_type": study.study_type,
+        "created_at": study.created_at,
+        "background": study.background,
+        "main_question": study.main_question,
+        "orientation_text": study.orientation_text,
+        "rating_scale": study.rating_scale,
+        "study_config": study_config,
+        "classification_questions": study.classification_questions
+    }
+
+
+def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict[str, Any]]:
+    """
+    Get basic study details for public access (no authentication required).
+    Ultra-fast query with minimal data loading using raw SQL for maximum speed.
+    """
+    from sqlalchemy import text
+    
+    # Ultra-fast raw SQL query - only essential fields
+    query = text("""
+        SELECT id, title, status, study_type, created_at, background, 
+               main_question, orientation_text, rating_scale, iped_parameters
+        FROM studies 
+        WHERE id = :study_id
+    """)
+    
+    result = db.execute(query, {"study_id": study_id}).first()
+    
+    if not result:
+        return None
+    
+    # Build study config from audience segmentation (stored as iped_parameters)
+    study_config = {}
+    if result.iped_parameters:
+        study_config.update(result.iped_parameters)
+    
+    # Load classification questions separately with a fast query
+    classification_query = text("""
+        SELECT id, question_id, question_text, question_type, is_required, 
+               "order", answer_options, config
+        FROM study_classification_questions 
+        WHERE study_id = :study_id
+        ORDER BY "order"
+    """)
+    
+    classification_results = db.execute(classification_query, {"study_id": study_id}).fetchall()
+    classification_questions = []
+    for row in classification_results:
+        classification_questions.append({
+            "id": row.id,
+            "question_id": row.question_id,
+            "question_text": row.question_text,
+            "question_type": row.question_type,
+            "is_required": row.is_required,
+            "order": row.order,
+            "answer_options": row.answer_options,
+            "config": row.config
+        })
+    
+    return {
+        "id": result.id,
+        "title": result.title,
+        "status": result.status,
+        "study_type": result.study_type,
+        "created_at": result.created_at,
+        "background": result.background,
+        "main_question": result.main_question,
+        "orientation_text": result.orientation_text,
+        "rating_scale": result.rating_scale,
+        "study_config": study_config,
+        "classification_questions": classification_questions
+    }
