@@ -666,3 +666,61 @@ async def export_study_flattened_csv(
         "Content-Disposition": f"attachment; filename={filename}"
     }
     return StreamingResponse(csv_generator(), media_type="text/csv", headers=headers)
+
+@router.get("/respondent/{respondent_id}/study/{study_id}/info")
+async def get_respondent_study_info(
+    respondent_id: int,
+    study_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """
+    Get study information for a specific respondent including classification questions 
+    and tasks assigned to that respondent (tasks[respondent_id]).
+    This endpoint is public and doesn't require authentication.
+    """
+    service = StudyResponseService(db)
+    
+    # Get study details
+    from app.services import study as study_service
+    study = study_service.get_study_basic_details_public(db, study_id)
+    if not study:
+        raise HTTPException(
+            status_code=404,
+            detail="Study not found"
+        )
+    
+    # Get classification questions for this study
+    from app.models.study_model import StudyClassificationQuestion
+    classification_questions = db.execute(
+        select(StudyClassificationQuestion)
+        .where(StudyClassificationQuestion.study_id == study_id)
+        .order_by(StudyClassificationQuestion.order)
+    ).scalars().all()
+    
+    # Get tasks assigned to this specific respondent (tasks[respondent_id])
+    respondent_tasks = service.get_respondent_tasks(study_id, respondent_id)
+    
+    return {
+        "respondent_id": respondent_id,
+        "study_id": str(study_id),
+        "study_info": {
+            "id": str(study["id"]),
+            "title": study["title"],
+            "study_type": study["study_type"],
+            "main_question": study["main_question"],
+            "orientation_text": study["orientation_text"],
+            "rating_scale": study["rating_scale"]
+        },
+        "classification_questions": [
+            {
+                "question_id": q.question_id,
+                "question_text": q.question_text,
+                "question_type": q.question_type,
+                "answer_options": q.answer_options,
+                "order": q.order,
+                "is_required": q.is_required
+            }
+            for q in classification_questions
+        ],
+        "assigned_tasks": respondent_tasks
+    }

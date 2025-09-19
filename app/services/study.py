@@ -6,11 +6,12 @@ from uuid import UUID, uuid4
 from datetime import datetime
 
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, and_
 from fastapi import HTTPException, status
 import logging
 
 from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage, StudyClassificationQuestion
+from app.models.response_model import StudyResponse
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
     StudyStatus, StudyType, RegenerateTasksResponse, ValidateTasksResponse,
@@ -312,21 +313,56 @@ def list_studies(
     page: int = 1,
     per_page: int = 10
 ) -> Tuple[List[Study], int]:
-    base_stmt = select(Study).where(Study.creator_id == owner_id)
+    # Build correlated subqueries for counters so results always match analytics
+    total_subq = (
+        select(func.count(StudyResponse.id))
+        .where(StudyResponse.study_id == Study.id)
+        .correlate(Study)
+        .scalar_subquery()
+    )
+    completed_subq = (
+        select(func.count(StudyResponse.id))
+        .where(and_(StudyResponse.study_id == Study.id, StudyResponse.is_completed == True))
+        .correlate(Study)
+        .scalar_subquery()
+    )
+    abandoned_subq = (
+        select(func.count(StudyResponse.id))
+        .where(and_(StudyResponse.study_id == Study.id, StudyResponse.is_abandoned == True))
+        .correlate(Study)
+        .scalar_subquery()
+    )
+    avg_duration_subq = (
+        select(func.avg(StudyResponse.total_study_duration))
+        .where(and_(StudyResponse.study_id == Study.id, StudyResponse.is_completed == True))
+        .correlate(Study)
+        .scalar_subquery()
+    )
+
+    base_stmt = (
+        select(
+            Study,
+            total_subq.label("total_responses_calc"),
+            completed_subq.label("completed_responses_calc"),
+            abandoned_subq.label("abandoned_responses_calc"),
+            avg_duration_subq.label("avg_duration_calc"),
+        )
+        .where(Study.creator_id == owner_id)
+    )
     count_stmt = select(func.count()).select_from(Study).where(Study.creator_id == owner_id)
     if status_filter:
         base_stmt = base_stmt.where(Study.status == status_filter)
         count_stmt = count_stmt.where(Study.status == status_filter)
 
     total = db.scalar(count_stmt) or 0
-    seq_items = db.scalars(
+    rows = db.execute(
         base_stmt
         .order_by(desc(Study.created_at))
         .offset((page - 1) * per_page)
         .limit(per_page)
     ).all()
-    items: List[Study] = list(seq_items)
-    return items, int(total)
+    # Return list of rows containing (Study, derived counters)
+    return rows, int(total)
 
 def update_study(
     db: Session,

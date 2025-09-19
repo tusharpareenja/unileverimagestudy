@@ -48,7 +48,7 @@ def list_studies_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    studies, _total = study_service.list_studies(
+    rows, _total = study_service.list_studies(
         db=db,
         owner_id=current_user.id,
         status_filter=status_filter,
@@ -56,18 +56,27 @@ def list_studies_endpoint(
         per_page=per_page,
     )
     # Lightweight enrichment: only the counters needed for the list card
-    if not studies:
-        return studies
+    if not rows:
+        return []
     enriched: List[StudyListItem] = []
-    for s in studies:
+    for row in rows:
+        # row is (Study, total_calc, completed_calc, abandoned_calc, avg_duration_calc)
+        s = row[0]
+        total_calc = int(row[1] or 0)
+        completed_calc = int(row[2] or 0)
+        abandoned_calc = int(row[3] or 0)
+        avg_duration_calc = float(row[4] or 0)
         item = StudyListItem.model_validate(s).model_dump()
         respondents_target = int((s.audience_segmentation or {}).get("number_of_respondents") or 0)
         item.update({
-            "total_responses": int(s.total_responses or 0),
-            "completed_responses": int(s.completed_responses or 0),
-            "abandoned_responses": int(s.abandoned_responses or 0),
+            "total_responses": total_calc,
+            "completed_responses": completed_calc,
+            "abandoned_responses": abandoned_calc,
             "respondents_target": respondents_target,
-            "respondents_completed": int(s.completed_responses or 0),
+            "respondents_completed": completed_calc,
+            "average_duration": avg_duration_calc,
+            "completion_rate": (completed_calc / total_calc * 100) if total_calc else 0,
+            "abandonment_rate": (abandoned_calc / total_calc * 100) if total_calc else 0,
         })
         enriched.append(StudyListItem(**item))
     return enriched

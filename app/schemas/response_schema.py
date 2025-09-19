@@ -236,8 +236,8 @@ class StudyResponseListItem(BaseModel):
     personal_info: Optional[Dict[str, Any]] = None
     is_completed: bool
     is_abandoned: bool
-    completion_percentage: float
-    total_study_duration: float
+    completion_percentage: Optional[float] = None
+    total_study_duration: Optional[float] = None
     session_start_time: datetime
     session_end_time: Optional[datetime] = None
     last_activity: Optional[datetime] = None

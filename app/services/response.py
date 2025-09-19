@@ -115,6 +115,57 @@ class StudyResponseService:
         stmt = select(StudyResponse).where(StudyResponse.session_id == session_id)
         return self.db.execute(stmt).scalar_one_or_none()
     
+    def get_response_by_respondent_id(self, respondent_id: int) -> Optional[StudyResponse]:
+        """Get a study response by respondent ID."""
+        stmt = select(StudyResponse).where(StudyResponse.respondent_id == respondent_id)
+        return self.db.execute(stmt).scalar_one_or_none()
+    
+    def get_response_by_respondent_and_study(self, respondent_id: int, study_id: UUID) -> Optional[StudyResponse]:
+        """Get a study response by respondent ID and study ID."""
+        stmt = select(StudyResponse).where(
+            and_(
+                StudyResponse.respondent_id == respondent_id,
+                StudyResponse.study_id == study_id
+            )
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+    
+    def get_respondent_ids_for_study(self, study_id: UUID) -> List[int]:
+        """Get all respondent IDs for a specific study."""
+        stmt = select(StudyResponse.respondent_id).where(StudyResponse.study_id == study_id)
+        results = self.db.execute(stmt).scalars().all()
+        return list(results)
+    
+    def get_respondent_tasks(self, study_id: UUID, respondent_id: int) -> List[Dict[str, Any]]:
+        """Get tasks assigned to a specific respondent."""
+        # Get the study to access tasks
+        study = self.db.get(Study, study_id)
+        if not study or not study.tasks:
+            return []
+        
+        # Handle different task structures
+        if isinstance(study.tasks, list):
+            # Flat list of tasks - return all tasks
+            return study.tasks
+        elif isinstance(study.tasks, dict):
+            # Per-respondent tasks or index-keyed tasks
+            respondent_key = str(respondent_id)
+            if respondent_key in study.tasks:
+                tasks = study.tasks[respondent_key]
+                if isinstance(tasks, list):
+                    return tasks
+                else:
+                    return [tasks] if tasks else []
+            else:
+                # Fallback: return tasks keyed by numeric strings (0, 1, 2, ...)
+                numeric_tasks = []
+                for key, value in study.tasks.items():
+                    if key.isdigit():
+                        numeric_tasks.append(value)
+                return numeric_tasks
+        
+        return []
+    
     def get_response_detail_by_session(self, session_id: str) -> Optional[StudyResponse]:
         """Get a study response by session ID with related details, optimized for speed."""
         stmt = (
@@ -287,13 +338,13 @@ class StudyResponseService:
         if not study_row.tasks or len(study_row.tasks) == 0:
             raise HTTPException(status_code=400, detail="Study has no tasks")
         
-        # Generate IDs without database queries
+        # Generate IDs - session_id without DB query, respondent_id with proper sequential logic
         from uuid import uuid4 as _uuid4
         session_id = f"session_{_uuid4().hex[:16]}"
-        respondent_id = int(datetime.utcnow().timestamp() * 1000) % 1000000
+        respondent_id = self._get_next_respondent_id(request.study_id)
         
-        # Fast task count calculation
-        total_tasks_assigned = len(study_row.tasks) if isinstance(study_row.tasks, list) else 10  # Default fallback
+        # Fast task count calculation - get tasks for this specific respondent
+        total_tasks_assigned = self._calculate_respondent_task_count(study_row.tasks, respondent_id)
         
         # Minimal personal info merge
         combined_personal_info = None
@@ -319,7 +370,7 @@ class StudyResponseService:
             is_abandoned=False,
             is_completed=False
         )
-
+        
         # Single database operation
         self.db.add(new_response)
         self.db.commit()
@@ -427,10 +478,10 @@ class StudyResponseService:
             rating_given=request.rating_given,
             rating_timestamp=now_utc
         )
-
+        
         completed_task = CompletedTask(**task_data.model_dump())
         completed_task.study_response_id = response.id
-
+        
         # For layer studies, persist which layers/images were shown for this task
         if study_row and str(study_row.study_type) == 'layer':
             layer_payload: Any = None
@@ -460,9 +511,9 @@ class StudyResponseService:
                     completed_task.layers_shown_in_task = layer_payload
                 if completed_task.elements_shown_content is None:
                     completed_task.elements_shown_content = layer_payload
-
+        
         self.db.add(completed_task)
-
+        
         # Update response progress (no extra reads)
         response.completed_tasks_count = (response.completed_tasks_count or 0) + 1
         response.current_task_index = (response.current_task_index or 0) + 1
@@ -483,12 +534,12 @@ class StudyResponseService:
                 interactions.append(interaction)
             if interactions:
                 self.db.bulk_save_objects(interactions)
-
+        
         # Mark complete if done
         is_complete = response.current_task_index >= (response.total_tasks_assigned or 0)
         if is_complete:
             self._mark_response_completed(response)
-
+        
         # Single commit at end
         self.db.commit()
         
@@ -712,7 +763,7 @@ class StudyResponseService:
             select(CompletedTask)
             .where(CompletedTask.study_response_id.in_(response_ids))
             .order_by(CompletedTask.study_response_id, CompletedTask.task_index)
-        ).scalars().all()
+            ).scalars().all()
         from collections import defaultdict
         tasks_by_response: Dict[UUID, List[CompletedTask]] = defaultdict(list)
         for t in tasks_seq:
@@ -1458,13 +1509,41 @@ class StudyResponseService:
     # ---------- Helper Methods ----------
     
     def _get_next_respondent_id(self, study_id: UUID) -> int:
-        """Get the next available respondent ID for a study."""
-        max_respondent = self.db.execute(
-            select(func.max(StudyResponse.respondent_id))
+        """Get the next available respondent ID for a study, starting from 1."""
+        # Count existing responses for this study to get the next sequential ID
+        existing_count = self.db.execute(
+            select(func.count(StudyResponse.id))
             .where(StudyResponse.study_id == study_id)
         ).scalar()
         
-        return (max_respondent or 0) + 1
+        return existing_count + 1
+    
+    def _calculate_respondent_task_count(self, tasks: Any, respondent_id: int) -> int:
+        """Calculate the number of tasks assigned to a specific respondent."""
+        if not tasks:
+            return 0
+        
+        if isinstance(tasks, list):
+            # Flat list of tasks - all respondents get all tasks
+            return len(tasks)
+        elif isinstance(tasks, dict):
+            # Per-respondent tasks or index-keyed tasks
+            respondent_key = str(respondent_id)
+            if respondent_key in tasks:
+                respondent_tasks = tasks[respondent_key]
+                if isinstance(respondent_tasks, list):
+                    return len(respondent_tasks)
+                else:
+                    return 1 if respondent_tasks else 0
+            else:
+                # Fallback: count all numeric keys (0, 1, 2, ...)
+                numeric_count = 0
+                for key, value in tasks.items():
+                    if key.isdigit() and value:
+                        numeric_count += 1
+                return numeric_count
+        
+        return 0
     
     def _mark_response_completed(self, response: StudyResponse) -> None:
         """Mark a response as completed, handling timezone-aware timestamps."""
