@@ -161,21 +161,35 @@ def get_study_public_endpoint(
 ):
     """
     Get study information for public access (no authentication required).
-    Only returns studies that are active and have a share_token.
+    Handles different study statuses with appropriate messaging.
     """
-    minimal = study_service.get_study_public_minimal(db=db, study_id=study_id)
-    if not minimal:
-        raise HTTPException(
-            status_code=404, 
-            detail="Study not found or not publicly accessible"
-        )
-    # Return minimal json directly for speed
-    return {
-        "id": str(minimal.id),
-        "title": minimal.title,
-        "study_type": minimal.study_type,
-        "respondents_target": minimal.respondents_target,
-    }
+    result = study_service.get_study_public_with_status_check(db=db, study_id=study_id)
+    
+    # Check if there's an error in the result
+    if "error" in result:
+        if result["error"] == "Study not found":
+            raise HTTPException(
+                status_code=404, 
+                detail=result["message"]
+            )
+        elif result["error"] == "Study is paused":
+            raise HTTPException(
+                status_code=403, 
+                detail=result["message"]
+            )
+        elif result["error"] == "Study is completed":
+            raise HTTPException(
+                status_code=410, 
+                detail=result["message"]
+            )
+        else:
+            raise HTTPException(
+                status_code=403, 
+                detail=result["message"]
+            )
+    
+    # Return the study data if no errors
+    return result
 
 
 @router.get("/public/{study_id}/details", response_model=StudyOut)

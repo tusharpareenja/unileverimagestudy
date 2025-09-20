@@ -109,6 +109,40 @@ class UserLoginResponse(BaseModel):
     tokens: Token
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Schema for forgot password request"""
+    username_or_email: str = Field(..., min_length=3, description="Username or email address")
+
+    @validator('username_or_email')
+    def validate_username_or_email(cls, v):
+        if '@' in v:
+            # If contains @, validate as email
+            if len(v) < 5:
+                raise ValueError('Email must be at least 5 characters long')
+        else:
+            # If no @, validate as username
+            if len(v) < 3:
+                raise ValueError('Username must be at least 3 characters long')
+        return v.lower().strip()
+
+
+class ResetPasswordRequest(BaseModel):
+    """Schema for password reset request"""
+    token: str = Field(..., min_length=32, description="Password reset token")
+    new_password: str = Field(..., min_length=6, description="New password")
+
+    @validator('new_password')
+    def validate_new_password(cls, v):
+        if len(v) < 6:
+            raise ValueError('Password must be at least 6 characters long')
+        return v
+
+
+class PasswordResetResponse(BaseModel):
+    """Schema for password reset response"""
+    message: str
+
+
 # Rebuild models to resolve forward references
 def rebuild_models():
     """Rebuild all models to resolve forward references"""

@@ -269,7 +269,9 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
             Study.share_token,
         ).where(Study.id == study_id)
     ).first()
-    if not row or row.status != 'active' or not row.share_token:
+    if not row:
+        return None
+    if row.status != 'active' or not row.share_token:
         return None
     respondents_target = 0
     try:
@@ -282,7 +284,65 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
         title=row.title,
         study_type=row.study_type,
         respondents_target=respondents_target,
+        status=row.status,
     )
+
+def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str, Any]:
+    """Get study with status checking and appropriate messaging."""
+    row = db.execute(
+        select(
+            Study.id,
+            Study.title,
+            Study.study_type,
+            Study.audience_segmentation,
+            Study.status,
+            Study.share_token,
+        ).where(Study.id == study_id)
+    ).first()
+    
+    if not row:
+        return {
+            "error": "Study not found",
+            "message": "The study you are looking for does not exist."
+        }
+    
+    # Handle different statuses
+    if row.status in ['draft', 'paused']:
+        return {
+            "error": "Study is paused",
+            "message": "This study is currently paused. Please ask the owner to activate the study.",
+            "status": row.status
+        }
+    
+    if row.status == 'completed':
+        return {
+            "error": "Study is completed",
+            "message": "This study has been completed.",
+            "status": row.status
+        }
+    
+    if row.status != 'active' or not row.share_token:
+        return {
+            "error": "Study not accessible",
+            "message": "This study is not currently accessible.",
+            "status": row.status
+        }
+    
+    # Study is active and accessible
+    respondents_target = 0
+    try:
+        seg = row.audience_segmentation or {}
+        respondents_target = int(seg.get('number_of_respondents') or 0)
+    except Exception:
+        respondents_target = 0
+    
+    return {
+        "id": str(row.id),
+        "title": row.title,
+        "study_type": row.study_type,
+        "respondents_target": respondents_target,
+        "status": row.status,
+    }
 
 def get_study_share_details(db: Session, study_id: UUID) -> Optional[Dict[str, Any]]:
     """Lightweight fetch of share URL and basic status info for a study."""

@@ -412,7 +412,7 @@ class StudyResponseService:
             raw_visibility = {}
 
         # Build a name-keyed visibility map for grid studies
-        name_visibility: Dict[str, int] = {}
+        name_visibility: Dict[str, Any] = {}
         study_row: Optional[Study] = self.db.get(Study, response.study_id)
         if study_row and str(study_row.study_type) == 'grid':
             # Load element id->name map in E-number order
@@ -464,6 +464,54 @@ class StudyResponseService:
                         except Exception:
                             present = 0
                     name_visibility[name.replace(' ', '_')] = 1 if present == 1 else 0
+        elif study_row and str(study_row.study_type) == 'layer':
+            # For layer studies, include z-index information in elements_shown_in_task
+            from app.models.study_model import StudyLayer, LayerImage
+            
+            # Get layer structure with z-index information
+            layers = self.db.execute(
+                select(StudyLayer)
+                .where(StudyLayer.study_id == study_row.id)
+                .order_by(StudyLayer.order)
+            ).scalars().all()
+            
+            # Create layer name to z-index mapping
+            layer_name_to_z_index: Dict[str, int] = {}
+            for layer in layers:
+                layer_name_to_z_index[layer.name] = layer.z_index
+            
+            # Process the raw visibility data to include z-index
+            if isinstance(raw_visibility, dict):
+                for key, value in raw_visibility.items():
+                    if isinstance(key, str):
+                        # Extract layer name from key (e.g., "background_1" -> "background")
+                        import re
+                        match = re.search(r"^(.+?)_(\d+)$", key)
+                        if match:
+                            layer_name = match.group(1)
+                            image_num = match.group(2)
+                            
+                            # Get z-index for this layer
+                            z_index = layer_name_to_z_index.get(layer_name, 0)
+                            
+                            # Create enhanced visibility data with z-index
+                            if isinstance(value, dict):
+                                # If already a dict, add z_index to it
+                                enhanced_value = value.copy()
+                                enhanced_value["z_index"] = z_index
+                                name_visibility[key] = enhanced_value
+                            else:
+                                # If simple value, create dict with visibility and z_index
+                                name_visibility[key] = {
+                                    "visible": 1 if value else 0,
+                                    "z_index": z_index
+                                }
+                        else:
+                            # Fallback for keys that don't match pattern
+                            name_visibility[key] = value
+            else:
+                # If not a dict, keep as-is
+                name_visibility = raw_visibility if isinstance(raw_visibility, dict) else {}
         else:
             # Non-grid or no study: keep as-is if dict, else empty
             name_visibility = raw_visibility if isinstance(raw_visibility, dict) else {}
@@ -592,17 +640,70 @@ class StudyResponseService:
 
         for item in request.tasks or []:
             # Build task model
+            elements_shown_in_task = item.elements_shown_in_task or {}
+            
+            # For layer studies, enhance elements_shown_in_task with z-index information
+            if study_row and str(study_row.study_type) == 'layer' and isinstance(elements_shown_in_task, dict):
+                from app.models.study_model import StudyLayer, LayerImage
+                
+                # Get layer structure with z-index information
+                layers = self.db.execute(
+                    select(StudyLayer)
+                    .where(StudyLayer.study_id == study_row.id)
+                    .order_by(StudyLayer.order)
+                ).scalars().all()
+                
+                # Create layer name to z-index mapping
+                layer_name_to_z_index: Dict[str, int] = {}
+                for layer in layers:
+                    layer_name_to_z_index[layer.name] = layer.z_index
+                
+                # Enhance elements_shown_in_task with z-index information
+                enhanced_elements_shown = {}
+                for key, value in elements_shown_in_task.items():
+                    if isinstance(key, str):
+                        # Extract layer name from key (e.g., "background_1" -> "background")
+                        import re
+                        match = re.search(r"^(.+?)_(\d+)$", key)
+                        if match:
+                            layer_name = match.group(1)
+                            image_num = match.group(2)
+                            
+                            # Get z-index for this layer
+                            z_index = layer_name_to_z_index.get(layer_name, 0)
+                            
+                            # Create enhanced visibility data with z-index
+                            if isinstance(value, dict):
+                                # If already a dict, add z_index to it
+                                enhanced_value = value.copy()
+                                enhanced_value["z_index"] = z_index
+                                enhanced_elements_shown[key] = enhanced_value
+                            else:
+                                # If simple value, create dict with visibility and z_index
+                                enhanced_elements_shown[key] = {
+                                    "visible": 1 if value else 0,
+                                    "z_index": z_index
+                                }
+                        else:
+                            # Fallback for keys that don't match pattern
+                            enhanced_elements_shown[key] = value
+                    else:
+                        enhanced_elements_shown[key] = value
+                
+                elements_shown_in_task = enhanced_elements_shown
+            
             task_model = CompletedTask(
                 task_id=item.task_id,
                 respondent_id=response.respondent_id,
                 task_index=response.current_task_index,
-                elements_shown_in_task=item.elements_shown_in_task or {},
+                elements_shown_in_task=elements_shown_in_task,
                 elements_shown_content=item.elements_shown_content or None,
                 task_start_time=now_utc - timedelta(seconds=item.task_duration_seconds),
                 task_completion_time=now_utc,
                 task_duration_seconds=item.task_duration_seconds,
                 rating_given=item.rating_given,
                 rating_timestamp=now_utc,
+                task_type=str(study_row.study_type) if study_row and study_row.study_type else None
             )
             task_model.study_response_id = response.id
 
@@ -799,17 +900,32 @@ class StudyResponseService:
 
         ordered_layers = sorted(layer_to_max_image.keys(), key=layer_order_key)
 
-        # Build final layer columns list in order
+        # Build final layer columns list in order - use actual layer names
         layer_headers: List[str] = []
         layer_slots: List[tuple[str, int]] = []
-        for base_label in ordered_layers:
-            display = (layer_to_display.get(base_label) or base_label).strip().replace(" ", "_")
-            max_idx = layer_to_max_image.get(base_label, 0)
-            for idx in range(1, max_idx + 1):
-                img_name = slot_to_image_name.get((base_label, idx))
-                header = f"{display}_{img_name.replace(' ', '_')}" if img_name else f"{display}_{idx}"
-                layer_headers.append(header)
-                layer_slots.append((base_label, idx))
+        
+        # Get layer structure from database to create proper ordering
+        from app.models.study_model import StudyLayer, LayerImage
+        
+        # Get layers ordered by their order field
+        layers = self.db.execute(
+            select(StudyLayer)
+            .where(StudyLayer.study_id == study_id)
+            .order_by(StudyLayer.order)
+        ).scalars().all()
+        
+        # Create ordered list of layer names based on database order
+        ordered_layer_names = [layer.name for layer in layers]
+        
+        # Process layers in database order
+        for layer_name in ordered_layer_names:
+            if layer_name in layer_to_max_image:
+                max_idx = layer_to_max_image[layer_name]
+                for idx in range(1, max_idx + 1):
+                    # Use actual layer name with image index
+                    header = f"{layer_name}_{idx}"
+                    layer_headers.append(header)
+                    layer_slots.append((layer_name, idx))
 
         # Build header (elements for grid fetched once)
         header: List[str] = ["Panelist"]
@@ -1111,32 +1227,70 @@ class StudyResponseService:
                 return (int(m1.group(1)), 0)
             return (9999, 9999)
 
-        layer_keys: List[str] = sorted(layer_keys_set, key=sort_key) if layer_keys_set else []
+        # Sort layer keys by database layer order instead of alphabetical
+        layer_keys: List[str] = []
+        if layer_keys_set:
+            # Get layer structure from database to create proper ordering
+            from app.models.study_model import StudyLayer, LayerImage
+            
+            # Get layers ordered by their order field
+            layers = self.db.execute(
+                select(StudyLayer)
+                .where(StudyLayer.study_id == study_id)
+                .order_by(StudyLayer.order)
+            ).scalars().all()
+            
+            # Create ordered list of layer names based on database order
+            ordered_layer_names = [layer.name for layer in layers]
+            
+            # Sort layer keys by database order
+            layer_keys = []
+            for layer_name in ordered_layer_names:
+                # Find all keys that start with this layer name
+                matching_keys = [key for key in layer_keys_set if key.startswith(layer_name + "_")]
+                # Sort by image number
+                matching_keys.sort(key=lambda x: int(x.split("_")[-1]) if x.split("_")[-1].isdigit() else 0)
+                layer_keys.extend(matching_keys)
+            
+            # Add any remaining keys that don't match layer names
+            remaining_keys = [key for key in layer_keys_set if key not in layer_keys]
+            layer_keys.extend(remaining_keys)
         # If no explicit dict keys found but list-based structure exists, synthesize generic keys Layer_1..N
         if not layer_keys and synthetic_layer_len > 0:
             layer_keys = [f"Layer_{i}" for i in range(1, synthetic_layer_len + 1)]
 
-        # Friendly headers for layer keys
+        # Friendly headers for layer keys - use actual layer names
         layer_key_to_header: Dict[str, str] = {}
         if layer_keys and layer_keys_set:
-            for t in all_tasks:
-                data = t.layers_shown_in_task or t.elements_shown_in_task or t.elements_shown_content
-                if not isinstance(data, dict):
-                    continue
-                for key in layer_keys:
-                    if key in layer_key_to_header:
-                        continue
-                    val = data.get(key)
-                    if isinstance(val, dict):
-                        image_name = (val.get("name") or val.get("alt_text") or "").strip()
-                        layer_label = (val.get("layer_name") or "").strip()
-                        left = layer_label.replace(" ", "_") if layer_label else key.replace(" ", "_")
-                        header_value = left
-                        if image_name:
-                            header_value = f"{left}_{image_name.replace(' ', '_')}"
-                        layer_key_to_header[key] = header_value or key
-                if len(layer_key_to_header) == len(layer_keys):
-                    break
+            # Get layer structure from database to create proper ordering
+            from app.models.study_model import StudyLayer, LayerImage
+            
+            # Get layers ordered by their order field
+            layers = self.db.execute(
+                select(StudyLayer)
+                .where(StudyLayer.study_id == study_id)
+                .order_by(StudyLayer.order)
+            ).scalars().all()
+            
+            # Create mapping from layer names to their database order
+            layer_name_to_order: Dict[str, int] = {}
+            for layer_order, layer in enumerate(layers, 1):
+                layer_name_to_order[layer.name] = layer_order
+            
+            # Map discovered keys to proper layer names
+            for key in layer_keys:
+                # Extract layer name from key (e.g., "background_1" -> "background")
+                import re
+                match = re.search(r"^(.+?)_(\d+)$", key)
+                if match:
+                    layer_name = match.group(1)
+                    image_num = match.group(2)
+                    
+                    # Use the actual layer name with image number
+                    layer_key_to_header[key] = f"{layer_name}_{image_num}"
+                else:
+                    # Fallback to original key
+                    layer_key_to_header[key] = key
 
         # Grid headers (element names by E-number order)
         grid_element_headers: List[str] = []

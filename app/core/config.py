@@ -71,7 +71,16 @@ class Settings(BaseSettings):
     )  # Optional, appended to URLs for private containers
     
     # Application Settings
-    BASE_URL: str = "http://localhost:3000"  # Base URL for share links in frontend
+    BASE_URL: str = "https://mindgenome.vercel.app"  # Base URL for share links in frontend
+    
+    # SMTP Email Settings
+    SMTP_SERVER: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    FROM_EMAIL: str 
+    APP_NAME: str = "Unilever Image Study"
+    FRONTEND_URL: str = "https://mindgenome.vercel.app"
 
 settings = Settings()
 

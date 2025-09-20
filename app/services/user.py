@@ -1,13 +1,14 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import logging
 
 from app.models.user_model import User
 from app.schemas.user_schema import UserRegister, UserUpdate, PasswordChange, UserResponse
-from app.core.security import get_password_hash, verify_password, create_token_pair, refresh_access_token
+from app.core.security import get_password_hash, verify_password, create_token_pair, refresh_access_token, generate_password_reset_token
+from app.services.email_service import email_service
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +224,115 @@ class UserService:
             return None
         
         return new_tokens
+    
+    def request_password_reset(self, username_or_email: str) -> bool:
+        """
+        Request password reset for user
+        
+        Args:
+            username_or_email: Username or email of the user
+            
+        Returns:
+            bool: True if reset request processed (always returns True for security)
+        """
+        try:
+            # Find user by username or email
+            if '@' in username_or_email:
+                user = self.get_user_by_email(username_or_email)
+            else:
+                user = self.get_user_by_username(username_or_email)
+            
+            if not user:
+                # Always return True for security (don't reveal if user exists)
+                logger.info(f"Password reset requested for non-existent user: {username_or_email}")
+                return True
+            
+            # Generate reset token and expiration (1 hour from now)
+            reset_token = generate_password_reset_token()
+            reset_expires = datetime.utcnow() + timedelta(hours=1)
+            
+            # Update user with reset token
+            user.password_reset_token = reset_token
+            user.password_reset_expires = reset_expires
+            user.updated_at = datetime.utcnow()
+            self.db.commit()
+            
+            # Send password reset email
+            email_sent = email_service.send_password_reset_email(
+                user_email=user.email,
+                user_name=user.name,
+                reset_token=reset_token
+            )
+            
+            if email_sent:
+                logger.info(f"Password reset email sent to {user.email}")
+            else:
+                logger.error(f"Failed to send password reset email to {user.email}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error processing password reset request for {username_or_email}: {str(e)}")
+            # Always return True for security
+            return True
+    
+    def reset_password(self, token: str, new_password: str) -> bool:
+        """
+        Reset user password using token
+        
+        Args:
+            token: Password reset token
+            new_password: New password
+            
+        Returns:
+            bool: True if password reset successfully, False otherwise
+        """
+        try:
+            # Find user by reset token
+            user = self.db.query(User).filter(
+                User.password_reset_token == token,
+                User.password_reset_expires > datetime.utcnow(),
+                User.is_active == True
+            ).first()
+            
+            if not user:
+                logger.warning(f"Invalid or expired password reset token: {token}")
+                return False
+            
+            # Update password and clear reset token
+            user.password_hash = get_password_hash(new_password)
+            user.password_reset_token = None
+            user.password_reset_expires = None
+            user.updated_at = datetime.utcnow()
+            self.db.commit()
+            
+            logger.info(f"Password reset successfully for user: {user.username}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error resetting password with token {token}: {str(e)}")
+            self.db.rollback()
+            return False
+    
+    def get_user_by_reset_token(self, token: str) -> Optional[User]:
+        """
+        Get user by password reset token (for validation)
+        
+        Args:
+            token: Password reset token
+            
+        Returns:
+            User if token is valid and not expired, None otherwise
+        """
+        try:
+            return self.db.query(User).filter(
+                User.password_reset_token == token,
+                User.password_reset_expires > datetime.utcnow(),
+                User.is_active == True
+            ).first()
+        except Exception as e:
+            logger.error(f"Error getting user by reset token: {str(e)}")
+            return None
 
 
 # Convenience functions for direct use
@@ -260,3 +370,21 @@ def refresh_user_tokens(db: Session, refresh_token: str) -> Optional[dict]:
     """Refresh user tokens - convenience function"""
     service = UserService(db)
     return service.refresh_user_tokens(refresh_token)
+
+
+def request_password_reset(db: Session, username_or_email: str) -> bool:
+    """Request password reset - convenience function"""
+    service = UserService(db)
+    return service.request_password_reset(username_or_email)
+
+
+def reset_password(db: Session, token: str, new_password: str) -> bool:
+    """Reset password - convenience function"""
+    service = UserService(db)
+    return service.reset_password(token, new_password)
+
+
+def get_user_by_reset_token(db: Session, token: str) -> Optional[User]:
+    """Get user by reset token - convenience function"""
+    service = UserService(db)
+    return service.get_user_by_reset_token(token)

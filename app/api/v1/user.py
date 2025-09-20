@@ -8,11 +8,12 @@ from app.db.session import get_db
 from app.schemas.user_schema import (
     UserLogin, UserRegister, UserResponse, UserUpdate, 
     PasswordChange, Token, TokenRefresh, TokenRefreshResponse,
-    UserLoginResponse
+    UserLoginResponse, ForgotPasswordRequest, ResetPasswordRequest, PasswordResetResponse
 )
 from app.services.user import (
     authenticate_user_with_tokens, create_user_with_tokens,
-    refresh_user_tokens, UserService
+    refresh_user_tokens, UserService, request_password_reset,
+    reset_password, get_user_by_reset_token
 )
 from app.core.dependencies import get_current_user, get_current_active_user
 from app.models.user_model import User
@@ -256,3 +257,105 @@ async def check_email_available(
         "email": email,
         "available": available
     }
+
+
+@router.post("/forgot-password", response_model=PasswordResetResponse)
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Request password reset for user
+    """
+    try:
+        # Process password reset request
+        success = request_password_reset(db, request.username_or_email)
+        
+        if success:
+            return PasswordResetResponse(
+                message="If an account with that username/email exists, a password reset link has been sent."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to process password reset request"
+            )
+            
+    except Exception as e:
+        logger.exception("Error in forgot password endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process password reset request"
+        )
+
+
+@router.post("/reset-password", response_model=PasswordResetResponse)
+async def reset_password_endpoint(
+    request: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Reset user password using token
+    """
+    try:
+        # Validate token first
+        user = get_user_by_reset_token(db, request.token)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired reset token"
+            )
+        
+        # Reset password
+        success = reset_password(db, request.token, request.new_password)
+        
+        if success:
+            return PasswordResetResponse(
+                message="Password has been reset successfully. You can now login with your new password."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to reset password. Please try again."
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error in reset password endpoint")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reset password"
+        )
+
+
+@router.get("/validate-reset-token/{token}")
+async def validate_reset_token(
+    token: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Validate password reset token
+    """
+    try:
+        user = get_user_by_reset_token(db, token)
+        
+        if user:
+            return {
+                "valid": True,
+                "message": "Token is valid"
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired reset token"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error validating reset token")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to validate reset token"
+        )

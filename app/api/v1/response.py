@@ -124,6 +124,44 @@ async def get_session(
             detail="Session not found"
         )
     
+    # Get study layer information with z-index for layer studies
+    study_layers = []
+    if response.study_id:
+        from app.models.study_model import StudyLayer, LayerImage
+        from sqlalchemy.orm import selectinload
+        
+        # Get layers with images and z-index information
+        layers = db.execute(
+            select(StudyLayer)
+            .options(selectinload(StudyLayer.images))
+            .where(StudyLayer.study_id == response.study_id)
+            .order_by(StudyLayer.order)
+        ).scalars().all()
+        
+        for layer in layers:
+            layer_images = []
+            for image in layer.images:
+                layer_images.append({
+                    "id": str(image.id),
+                    "name": image.name,
+                    "url": image.url,
+                    "alt_text": image.alt_text,
+                    "order": image.order,
+                    "z_index": layer.z_index  # Use layer's z_index for all images in this layer
+                })
+            
+            study_layers.append({
+                "id": str(layer.id),
+                "name": layer.name,
+                "order": layer.order,
+                "z_index": layer.z_index,
+                "images": layer_images
+            })
+    
+    # Add layer information to response
+    response_dict = StudyResponseDetail.model_validate(response).model_dump()
+    response_dict["study_layers"] = study_layers
+    
     # Map classification answer codes to human-readable labels using study configuration
     try:
         if response and getattr(response, "study_id", None):
@@ -152,6 +190,8 @@ async def get_session(
 
             # Convert ORM -> Pydantic dict
             resp_out = StudyResponseDetail.model_validate(response).model_dump()
+            # Add layer information to the response
+            resp_out["study_layers"] = study_layers
             # Transform answers
             for ans in resp_out.get("classification_answers", []) or []:
                 qid = ans.get("question_id")
@@ -184,7 +224,7 @@ async def get_session(
         # Fallback to raw response if mapping fails
         pass
 
-    return StudyResponseDetail.model_validate(response)
+    return response_dict
 
 @router.put("/session/{session_id}/user-details")
 async def update_user_details(
