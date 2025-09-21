@@ -142,6 +142,8 @@ class StudyPublicMinimal(BaseModel):
     study_type: str
     respondents_target: int
     status: str
+    orientation_text: str
+    language: str
 
     model_config = ConfigDict(from_attributes=False)
 

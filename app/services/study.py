@@ -267,6 +267,8 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
             Study.audience_segmentation,
             Study.status,
             Study.share_token,
+            Study.orientation_text,
+            Study.language,
         ).where(Study.id == study_id)
     ).first()
     if not row:
@@ -285,6 +287,8 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
         study_type=row.study_type,
         respondents_target=respondents_target,
         status=row.status,
+        orientation_text=row.orientation_text,
+        language=row.language,
     )
 
 def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str, Any]:
@@ -297,6 +301,8 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
             Study.audience_segmentation,
             Study.status,
             Study.share_token,
+            Study.orientation_text,
+            Study.language,
         ).where(Study.id == study_id)
     ).first()
     
@@ -342,6 +348,8 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
         "study_type": row.study_type,
         "respondents_target": respondents_target,
         "status": row.status,
+        "orientation_text": row.orientation_text,
+        "language": row.language,
     }
 
 def get_study_share_details(db: Session, study_id: UUID) -> Optional[Dict[str, Any]]:
