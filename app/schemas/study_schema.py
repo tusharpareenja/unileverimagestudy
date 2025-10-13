@@ -26,14 +26,27 @@ class AudienceSegmentation(BaseModel):
     age_distribution: Optional[Dict[str, float]] = None
 
 class StudyElementIn(BaseModel):
-    element_id: str = Field(..., max_length=10)  # e.g., E1
+    element_id: UUID  # UUID instead of string
     name: str = Field(..., max_length=100)
     description: Optional[str] = None
     element_type: ElementType
     content: str
     alt_text: Optional[str] = None
+    # Link to category (required for grid elements) - UUID
+    category_id: UUID
 
 class StudyElementOut(StudyElementIn):
+    id: UUID
+    # Optional denormalized relation for convenience when reading
+    category: Optional["StudyCategoryOut"] = None
+    model_config = ConfigDict(from_attributes=True)
+
+class StudyCategoryIn(BaseModel):
+    category_id: UUID  # UUID instead of string
+    name: str = Field(..., max_length=100)
+    order: int = 0
+
+class StudyCategoryOut(StudyCategoryIn):
     id: UUID
     model_config = ConfigDict(from_attributes=True)
 
@@ -94,11 +107,14 @@ class StudyBase(BaseModel):
     main_question: str
     orientation_text: str
     study_type: StudyType
+    # Optional global background image URL to render behind all tasks
+    background_image_url: Optional[str] = None
     rating_scale: RatingScale
     audience_segmentation: AudienceSegmentation
 
 class StudyCreate(StudyBase):
     # For grid studies, provide elements; for layer studies, provide study_layers
+    categories: Optional[List[StudyCategoryIn]] = None
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
     classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
@@ -109,6 +125,7 @@ class StudyUpdate(BaseModel):
     language: Optional[str] = Field(None, max_length=10)
     main_question: Optional[str] = None
     orientation_text: Optional[str] = None
+    background_image_url: Optional[str] = None
     rating_scale: Optional[RatingScale] = None
     audience_segmentation: Optional[AudienceSegmentation] = None
     # Replacing full collections (server should decide whether allowed while active)
@@ -171,10 +188,12 @@ class StudyOut(BaseModel):
     main_question: str
     orientation_text: str
     study_type: StudyType
+    background_image_url: Optional[str] = None
     rating_scale: RatingScale
     audience_segmentation: AudienceSegmentation
 
     # Children
+    categories: Optional[List[StudyCategoryOut]] = None
     elements: Optional[List[StudyElementOut]] = None
     study_layers: Optional[List[StudyLayerOut]] = None
     classification_questions: Optional[List[StudyClassificationQuestionOut]] = None
@@ -217,6 +236,7 @@ class GenerateTasksRequest(BaseModel):
     study_id: Optional[UUID] = None
     study_type: StudyType
     audience_segmentation: AudienceSegmentation
+    categories: Optional[List[StudyCategoryIn]] = None
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
     exposure_tolerance_cv: Optional[float] = None

@@ -10,7 +10,7 @@ from sqlalchemy import select, func, desc, and_
 from fastapi import HTTPException, status
 import logging
 
-from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage, StudyClassificationQuestion
+from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage, StudyClassificationQuestion, StudyCategory
 from app.models.response_model import StudyResponse
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
@@ -115,6 +115,7 @@ def create_study(
         main_question=payload.main_question,
         orientation_text=payload.orientation_text,
         study_type=payload.study_type,  # enum compatible
+        background_image_url=payload.background_image_url,
         rating_scale=payload.rating_scale.model_dump(),
         audience_segmentation=payload.audience_segmentation.model_dump(exclude_none=True),
         tasks=None,
@@ -135,6 +136,28 @@ def create_study(
     # Children (optimize by avoiding intermediate flushes and using bulk saves)
     with db.no_autoflush:
         if payload.study_type == 'grid' and payload.elements:
+            # Create categories first if provided
+            category_map = {}  # category_id -> category_uuid
+            if payload.categories:
+                new_categories: List[StudyCategory] = []
+                seen_category_ids = set()
+                for cat in payload.categories:
+                    if cat.category_id in seen_category_ids:
+                        raise HTTPException(status_code=409, detail=f"Duplicate category_id: {cat.category_id}")
+                    seen_category_ids.add(cat.category_id)
+                    category_uuid = uuid4()
+                    category_map[cat.category_id] = category_uuid
+                    new_categories.append(StudyCategory(
+                        id=category_uuid,
+                        study_id=study.id,
+                        category_id=cat.category_id,  # Now using UUID directly
+                        name=cat.name,
+                        order=cat.order
+                    ))
+                if new_categories:
+                    db.bulk_save_objects(new_categories)
+                    db.flush()  # Ensure categories exist before linking elements
+            
             # Ensure element_id uniqueness within the study
             seen_ids = set()
             new_elements: List[StudyElement] = []
@@ -142,10 +165,16 @@ def create_study(
                 if elem.element_id in seen_ids:
                     raise HTTPException(status_code=409, detail=f"Duplicate element_id: {elem.element_id}")
                 seen_ids.add(elem.element_id)
+                
+                # Validate category_id exists
+                if elem.category_id not in category_map:
+                    raise HTTPException(status_code=400, detail=f"Category {elem.category_id} not found in provided categories")
+                
                 content_url, public_id = _maybe_upload_data_url_to_cloudinary(elem.content)
                 new_elements.append(StudyElement(
                     id=uuid4(),
                     study_id=study.id,
+                    category_id=category_map[elem.category_id],
                     element_id=elem.element_id,
                     name=elem.name,
                     description=elem.description,
@@ -475,6 +504,8 @@ def update_study(
         study.main_question = payload.main_question
     if payload.orientation_text is not None:
         study.orientation_text = payload.orientation_text
+    if payload.background_image_url is not None:
+        study.background_image_url = payload.background_image_url
     if payload.rating_scale is not None:
         _validate_rating_scale(payload.rating_scale.model_dump())
         study.rating_scale = payload.rating_scale.model_dump()
@@ -687,7 +718,9 @@ def regenerate_tasks(
             number_of_respondents=number_of_respondents,
             exposure_tolerance_cv=exposure_tolerance_cv,
             seed=seed,
-            elements=elements
+            elements=elements,
+            db=db,
+            study_id=str(study.id)
         )
         study.tasks = result.get('tasks', {})
         
@@ -733,6 +766,15 @@ def regenerate_tasks(
             exposure_tolerance_pct=exposure_tolerance_pct,
             seed=seed
         )
+        # Attach optional background image URL to metadata for client rendering
+        try:
+            if isinstance(result, dict):
+                meta_tmp = result.get('metadata') or {}
+                if isinstance(meta_tmp, dict):
+                    meta_tmp['background_image_url'] = getattr(study, 'background_image_url', None)
+                    result['metadata'] = meta_tmp
+        except Exception:
+            pass
         study.tasks = result.get('tasks', {})
         
         # Optimized total calculation - cache metadata
@@ -860,7 +902,7 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
     # Ultra-fast raw SQL query - only essential fields
     query = text("""
         SELECT id, title, status, study_type, created_at, background, 
-               main_question, orientation_text, rating_scale, iped_parameters
+               main_question, orientation_text, rating_scale, iped_parameters, language
         FROM studies 
         WHERE id = :study_id
     """)
@@ -908,6 +950,7 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         "main_question": result.main_question,
         "orientation_text": result.orientation_text,
         "rating_scale": result.rating_scale,
+        "language": result.language,
         "study_config": study_config,
         "classification_questions": classification_questions
     }

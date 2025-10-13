@@ -19,3 +19,7 @@ env/
 
 # Database files
 *.sqlite3
+
+# reset database
+reset_database.py
+manual_reset_commands.md

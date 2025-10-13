@@ -24,6 +24,8 @@ class Study(Base):
     main_question = Column(Text, nullable=False)
     orientation_text = Column(Text, nullable=False)
     study_type = Column(study_type_enum, nullable=False)
+    # Optional global background image URL for layer/grid rendering
+    background_image_url = Column(Text, nullable=True)
 
     # JSON configs
     rating_scale = Column(JSONB, nullable=False)         # {min_value, max_value in {5,7,9}, labels...}
@@ -49,6 +51,8 @@ class Study(Base):
 
     # Relations
     creator = relationship("User", back_populates="studies", lazy="selectin", passive_deletes=True)
+    # Grid categories for grouping elements
+    categories = relationship("StudyCategory", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     elements = relationship("StudyElement", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     layers = relationship("StudyLayer", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     classification_questions = relationship("StudyClassificationQuestion", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
@@ -61,17 +65,41 @@ class Study(Base):
         Index('idx_studies_study_type', 'study_type'),
     )
 
+class StudyCategory(Base):
+    """
+    Grid categories for grouping elements, e.g., 'a', 'b', 'c' with order.
+    """
+    __tablename__ = "study_categories"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    study_id = Column(UUID(as_uuid=True), ForeignKey('studies.id', ondelete='CASCADE'), nullable=False, index=True)
+
+    category_id = Column(UUID(as_uuid=True), nullable=False)  # UUID instead of string
+    name = Column(String(100), nullable=False)
+    order = Column(Integer, nullable=False, default=0)
+
+    study = relationship("Study", back_populates="categories", lazy="selectin")
+    elements = relationship("StudyElement", back_populates="category", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint('study_id', 'category_id', name='uq_study_categories_category_id'),
+        Index('idx_study_categories_study_id_category_id', 'study_id', 'category_id'),
+        Index('idx_study_categories_study_id_order', 'study_id', 'order'),
+    )
+
 class StudyElement(Base):
     """
-    For grid studies (flat elements E1..En).
-    Keep element_id like E1, E2, ... for parity with legacy tasks.
+    Grid elements now belong to a category.
     """
     __tablename__ = "study_elements"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     study_id = Column(UUID(as_uuid=True), ForeignKey('studies.id', ondelete='CASCADE'), nullable=False, index=True)
 
-    element_id = Column(String(10), nullable=False)  # E1, E2, ...
+    # Category foreign key
+    category_id = Column(UUID(as_uuid=True), ForeignKey('study_categories.id', ondelete='CASCADE'), nullable=False, index=True)
+
+    element_id = Column(UUID(as_uuid=True), nullable=False)  # UUID for element
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     element_type = Column(element_type_enum, nullable=False)  # image|text
@@ -80,10 +108,12 @@ class StudyElement(Base):
     alt_text = Column(String(200), nullable=True)
 
     study = relationship("Study", back_populates="elements", lazy="selectin")
+    category = relationship("StudyCategory", back_populates="elements", lazy="selectin")
 
     __table_args__ = (
         UniqueConstraint('study_id', 'element_id', name='uq_study_elements_element_id'),
         Index('idx_study_elements_study_id_element_id', 'study_id', 'element_id'),
+        Index('idx_study_elements_category_id', 'category_id'),
     )
 
 class StudyLayer(Base):

@@ -338,6 +338,9 @@ def generate_tasks_from_body_endpoint(
     if payload.study_type == 'grid':
         if not payload.elements or len(payload.elements) == 0:
             raise HTTPException(status_code=400, detail="Grid study requires elements")
+        if not payload.categories or len(payload.categories) == 0:
+            raise HTTPException(status_code=400, detail="Grid study requires categories")
+        
         num_elements = len(payload.elements)
         elements = []
         # Use StudyElement dataclass shape lightly: only content is used in generator for grid
@@ -345,13 +348,32 @@ def generate_tasks_from_body_endpoint(
             class _Tmp:
                 content: str = e.content
             elements.append(_Tmp())
-        result = generate_grid_tasks(
-            num_elements=num_elements,
-            tasks_per_consumer=None,
+        
+        # Build categories_data from payload for v2 functions
+        categories_data = []
+        for cat in payload.categories:
+            cat_elements = [e for e in payload.elements if e.category_id == cat.category_id]
+            categories_data.append({
+                "category_name": cat.name,
+                "elements": [
+                    {
+                        "element_id": str(el.element_id),  # Convert UUID to string
+                        "name": el.name,
+                        "content": el.content,
+                        "alt_text": el.alt_text or el.name,
+                        "element_type": el.element_type,
+                    }
+                    for el in cat_elements
+                ]
+            })
+        
+        # Use v2 function directly with categories_data
+        from app.services.task_generation_core import generate_grid_tasks_v2
+        result = generate_grid_tasks_v2(
+            categories_data=categories_data,
             number_of_respondents=payload.audience_segmentation.number_of_respondents,
             exposure_tolerance_cv=payload.exposure_tolerance_cv or 1.0,
             seed=payload.seed,
-            elements=elements,
         )
         if study_row is not None:
             study_row.tasks = result.get('tasks', {})

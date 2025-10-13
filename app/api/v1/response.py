@@ -739,7 +739,24 @@ async def get_respondent_study_info(
     
     # Get tasks assigned to this specific respondent (tasks[respondent_id])
     respondent_tasks = service.get_respondent_tasks(study_id, respondent_id)
-    
+
+    # Build lightweight metadata: tasks_per_consumer, respondents target, background image url
+    from app.models.study_model import Study as StudyModel
+    meta_row = db.execute(
+        select(StudyModel.background_image_url, StudyModel.audience_segmentation)
+        .where(StudyModel.id == study_id)
+    ).first()
+    background_image_url = None
+    respondents_target = 0
+    if meta_row:
+        background_image_url = meta_row.background_image_url
+        try:
+            seg = meta_row.audience_segmentation or {}
+            respondents_target = int(seg.get('number_of_respondents') or 0)
+        except Exception:
+            respondents_target = 0
+    tasks_per_consumer = len(respondent_tasks or [])
+
     return {
         "respondent_id": respondent_id,
         "study_id": str(study_id),
@@ -749,7 +766,13 @@ async def get_respondent_study_info(
             "study_type": study["study_type"],
             "main_question": study["main_question"],
             "orientation_text": study["orientation_text"],
-            "rating_scale": study["rating_scale"]
+            "rating_scale": study["rating_scale"],
+            "language": study["language"]
+        },
+        "metadata": {
+            "tasks_per_consumer": tasks_per_consumer,
+            "number_of_respondents": respondents_target,
+            "background_image_url": background_image_url,
         },
         "classification_questions": [
             {
