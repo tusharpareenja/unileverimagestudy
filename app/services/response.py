@@ -559,6 +559,60 @@ class StudyResponseService:
                     completed_task.layers_shown_in_task = layer_payload
                 if completed_task.elements_shown_content is None:
                     completed_task.elements_shown_content = layer_payload
+        # For grid studies, if elements_shown_content is missing, hydrate from generated tasks
+        if study_row and str(study_row.study_type) == 'grid':
+            try:
+                if completed_task.elements_shown_content is None and isinstance(study_row.tasks, dict):
+                    # Resolve respondent and task index from task_id when possible
+                    rid_from_task = None
+                    idx_from_task = None
+                    try:
+                        parts = str(request.task_id).split('_')
+                        if len(parts) == 2:
+                            rid_from_task = int(parts[0])
+                            idx_from_task = int(parts[1])
+                    except Exception:
+                        rid_from_task = None
+                        idx_from_task = None
+
+                    # Prefer exact respondent key; try 0-based then 1-based
+                    candidate_keys = []
+                    if rid_from_task is not None:
+                        candidate_keys.extend([str(rid_from_task), str(max(0, rid_from_task - 1))])
+                    candidate_keys.extend([str(response.respondent_id), str(max(0, (response.respondent_id or 0) - 1))])
+                    tasks_for_r = None
+                    for k in candidate_keys:
+                        val = (study_row.tasks or {}).get(k)
+                        if isinstance(val, list):
+                            tasks_for_r = val
+                            break
+                    if isinstance(tasks_for_r, list):
+                        # Use index from task_id when present; else current_task_index (1-based -> 0-based)
+                        idx = idx_from_task if isinstance(idx_from_task, int) else max(0, (response.current_task_index or 1) - 1)
+                        if 0 <= idx < len(tasks_for_r):
+                            tdef = tasks_for_r[idx]
+                            if isinstance(tdef, dict):
+                                esc = tdef.get('elements_shown_content')
+                                if esc:
+                                    # Store name, url, visible per key; normalize key to CategoryName_ImageName
+                                    out_map = {}
+                                    vis_map = completed_task.elements_shown_in_task or {}
+                                    for k, v in esc.items():
+                                        if isinstance(v, dict):
+                                            # Derive category name from key like "Category 1_4"
+                                            cat_name = k.rsplit('_', 1)[0] if isinstance(k, str) and '_' in k else ''
+                                            elem_name = v.get('name')
+                                            new_key = f"{cat_name}_{elem_name}" if cat_name and elem_name else k
+                                            out_map[new_key] = {
+                                                "name": elem_name,
+                                                "url": v.get('content'),
+                                                "visible": 1 if vis_map.get(k) or vis_map.get(new_key) else 0,
+                                            }
+                                        else:
+                                            out_map[k] = None
+                                    completed_task.elements_shown_content = out_map
+            except Exception:
+                pass
         
         self.db.add(completed_task)
         
@@ -707,20 +761,75 @@ class StudyResponseService:
             )
             task_model.study_response_id = response.id
 
-            # Grid enrichment for content map if presence provided but content missing
-            if name_to_url and task_model.elements_shown_in_task and not task_model.elements_shown_content:
-                content_map: Dict[str, str] = {}
-                for k, v in (task_model.elements_shown_in_task or {}).items():
-                    try:
-                        shown = int(v) == 1
-                    except Exception:
-                        shown = bool(v)
-                    if shown:
-                        url = name_to_url.get(str(k))
-                        if url:
-                            content_map[str(k)] = url
-                if content_map:
-                    task_model.elements_shown_content = content_map
+            # Grid enrichment for content map if missing
+            if study_row and str(study_row.study_type) == 'grid' and task_model.elements_shown_in_task and not task_model.elements_shown_content:
+                enriched = None
+                # Try: resolve from Study.tasks by task_id
+                try:
+                    rid = None
+                    tidx = None
+                    parts = str(item.task_id).split('_')
+                    if len(parts) == 2:
+                        rid = int(parts[0])
+                        tidx = int(parts[1])
+                    # Candidate respondent keys: exact, zero-based variant, session respondent ids
+                    candidate_keys = [
+                        str(rid), str(max(0, (rid or 0) - 1)),
+                        str(response.respondent_id), str(max(0, (response.respondent_id or 0) - 1))
+                    ]
+                    tasks_for_r = None
+                    for key in candidate_keys:
+                        val = (study_row.tasks or {}).get(key)
+                        if isinstance(val, list):
+                            tasks_for_r = val
+                            break
+                    if isinstance(tasks_for_r, list) and isinstance(tidx, int) and 0 <= tidx < len(tasks_for_r):
+                        tdef = tasks_for_r[tidx]
+                        if isinstance(tdef, dict):
+                            esc = tdef.get('elements_shown_content')
+                            if esc:
+                                out_map: Dict[str, Any] = {}
+                                vis_map = task_model.elements_shown_in_task or {}
+                                for k, v in esc.items():
+                                    if isinstance(v, dict):
+                                        # Normalize key to CategoryName_ImageName using category from k (CategoryName_Index)
+                                        cat_name = k.rsplit('_', 1)[0] if isinstance(k, str) and '_' in k else ''
+                                        elem_name = v.get('name')
+                                        new_key = f"{cat_name}_{elem_name}" if cat_name and elem_name else k
+                                        out_map[new_key] = {
+                                            "name": elem_name,
+                                            "url": v.get('content'),
+                                            "visible": 1 if vis_map.get(k) or vis_map.get(new_key) else 0,
+                                        }
+                                    else:
+                                        out_map[k] = None
+                                enriched = out_map
+                except Exception:
+                    enriched = None
+                # Fallback: use preloaded element name->url map, but we don't know element names from index; store minimal
+                if not enriched and name_to_url:
+                    out_map2: Dict[str, Any] = {}
+                    for k, v in (task_model.elements_shown_in_task or {}).items():
+                        try:
+                            shown = int(v) == 1
+                        except Exception:
+                            shown = bool(v)
+                        if shown:
+                            url = name_to_url.get(str(k)) or name_to_url.get(str(k).replace(' ', '_'))
+                            out_map2[str(k)] = {
+                                "name": None,
+                                "url": url,
+                                "visible": 1,
+                            }
+                        else:
+                            out_map2[str(k)] = {
+                                "name": None,
+                                "url": None,
+                                "visible": 0,
+                            }
+                    enriched = out_map2
+                if enriched:
+                    task_model.elements_shown_content = enriched
 
             tasks_to_insert.append(task_model)
 
@@ -927,25 +1036,32 @@ class StudyResponseService:
                     layer_headers.append(header)
                     layer_slots.append((layer_name, idx))
 
-        # Build header (elements for grid fetched once)
+        # Build header (for grid: CategoryName_ImageName columns)
         header: List[str] = ["Panelist"]
         header.extend([question_id_to_col[qid] for qid in question_id_to_col])
         header.extend(["Gender", "Age", "Task"])
-        # If study is grid, add grid element columns (ElementName flags and content URLs)
-        # Otherwise, add layer columns
+        # If study is grid, add CategoryName_ImageName columns; else add layer columns
         study_obj: Optional[Study] = self.db.get(Study, study_id)
         is_grid = bool(study_obj and str(study_obj.study_type) == 'grid')
-        grid_element_names: List[str] = []
+        grid_columns: List[tuple[str, str, int]] = []  # (cat_name, element_name, one_based_index_within_cat)
         if is_grid:
-            # Load elements for this study in stable order (by element_id)
-            elements = self.db.execute(
-                select(StudyElement.name)
-                .where(StudyElement.study_id == study_id)
-                .order_by(StudyElement.element_id)
-            ).all()
-            grid_element_names = [str(name).replace(' ', '_') for (name,) in elements]
-            # Add presence columns only (no *_content columns)
-            header.extend(grid_element_names)
+            # Load categories with elements to build deterministic headers
+            from app.models.study_model import StudyCategory, StudyElement
+            categories = self.db.execute(
+                select(StudyCategory)
+                .where(StudyCategory.study_id == study_id)
+                .order_by(StudyCategory.order)
+            ).scalars().all()
+            for cat in categories:
+                elements = self.db.execute(
+                    select(StudyElement)
+                    .where(StudyElement.study_id == study_id, StudyElement.category_id == cat.id)
+                    .order_by(StudyElement.element_id)
+                ).scalars().all()
+                for idx, el in enumerate(elements, start=1):
+                    grid_columns.append((cat.name, el.name, idx))
+            # Headers as CategoryName_ImageName
+            header.extend([f"{c}_{e}" for (c, e, _) in grid_columns])
         else:
             # Layer columns: all slots per layer in numeric order with attached image names
             header.extend(layer_headers)
@@ -1008,44 +1124,44 @@ class StudyResponseService:
                 row.append(t.task_index + 1)
 
                 if is_grid:
-                    # Grid: read elements_shown_in_task and write presence per element name
+                    # Grid: presence determined by elements_shown_in_task keys like "CategoryName_Index"
                     grid_data = t.elements_shown_in_task or t.elements_shown or {}
-                    # Normalize presence map: ignore *_content keys, support element_id or name keys
                     presence_map: Dict[str, int] = {}
-                    presence_map_lower: Dict[str, int] = {}
                     if isinstance(grid_data, dict):
                         for k, v in grid_data.items():
                             if not isinstance(k, str) or k.endswith('_content'):
                                 continue
                             try:
-                                presence_val = int(v) if v in (0, 1) else (1 if v else 0)
+                                val = int(v) if v in (0, 1) else (1 if v else 0)
                             except Exception:
-                                presence_val = 1 if v else 0
-                            key_norm = k.strip()
-                            presence_map[key_norm] = presence_val
-                            presence_map_lower[key_norm.lower()] = presence_val
-                    # Load elements in stable order and map by either id or name
-                    elements = self.db.execute(
-                        select(StudyElement).where(StudyElement.study_id == study_id).order_by(StudyElement.element_id)
-                    ).scalars().all()
-                    for e in elements:
+                                val = 1 if v else 0
+                            presence_map[k.strip()] = val
+                            presence_map[k.strip().replace(' ', '_')] = val
+                            presence_map[k.strip().lower()] = val
+                    content_map = t.elements_shown_content if isinstance(t.elements_shown_content, dict) else {}
+                    # Emit per header using the category + index mapping; fallback checks content_map by CategoryName_Index
+                    for (cat_name, el_name, one_idx) in grid_columns:
                         candidates = [
-                            str(e.element_id or '').strip(),
-                            str(e.name or '').strip(),
-                            str((e.name or '').replace(' ', '_')).strip(),
+                            f"{cat_name}_{one_idx}",
+                            f"{cat_name.replace(' ', '_')}_{one_idx}",
+                            f"{cat_name.lower()}_{one_idx}",
                         ]
-                        presence = 0
+                        present = 0
                         for cand in candidates:
-                            if not cand:
-                                continue
                             if cand in presence_map:
-                                presence = presence_map[cand]
+                                present = presence_map[cand]
                                 break
-                            lc = cand.lower()
-                            if lc in presence_map_lower:
-                                presence = presence_map_lower[lc]
+                            if cand.lower() in presence_map:
+                                present = presence_map[cand.lower()]
                                 break
-                        row.append(presence)
+                        if present == 0 and content_map:
+                            # Fallback: content_map keys are usually CategoryName_Index
+                            for cand in candidates:
+                                v = content_map.get(cand)
+                                if isinstance(v, dict) and (v.get('url') or v.get('name')):
+                                    present = 1
+                                    break
+                        row.append(present)
                 else:
                     # Layer: visibility per ordered slots
                     layer_data = t.layers_shown_in_task or t.elements_shown_content or {}
@@ -1292,32 +1408,33 @@ class StudyResponseService:
                     # Fallback to original key
                     layer_key_to_header[key] = key
 
-        # Grid headers (element names by E-number order)
-        grid_element_headers: List[str] = []
+        # Grid headers (CategoryName_ImageName by category order and element_id)
+        grid_columns_opt: List[tuple[str, str, int]] = []  # (cat_name, element_name, one_based_index)
         if str(study.study_type) == 'grid':
-            elements = self.db.execute(
-                select(StudyElement).where(StudyElement.study_id == study_id)
+            from app.models.study_model import StudyCategory, StudyElement
+            categories = self.db.execute(
+                select(StudyCategory)
+                .where(StudyCategory.study_id == study_id)
+                .order_by(StudyCategory.order)
             ).scalars().all()
-            def elem_sort_key(el: StudyElement) -> int:
-                import re
-                m = re.search(r"(\d+)$", str(el.element_id))
-                return int(m.group(1)) if m else 9999
-            elements_sorted = sorted(elements, key=elem_sort_key)
-            # Preserve original names for matching; headers will be sanitized for CSV
-            grid_element_headers = [e.name for e in elements_sorted]
-            grid_element_ids = [str(e.element_id).upper() for e in elements_sorted]
-        else:
-            grid_element_ids = []
+            for cat in categories:
+                elements = self.db.execute(
+                    select(StudyElement)
+                    .where(StudyElement.study_id == study_id, StudyElement.category_id == cat.id)
+                    .order_by(StudyElement.element_id)
+                ).scalars().all()
+                for idx, el in enumerate(elements, start=1):
+                    grid_columns_opt.append((cat.name, el.name, idx))
 
         # Build header
         header: List[str] = ["Panelist"]
         header.extend([question_id_to_col[qid] for qid in question_id_to_col])
         header.extend(["Gender", "Age", "Task"])
-        if grid_element_headers:
+        if grid_columns_opt:
             # Sanitize headers minimally for CSV (replace commas with underscores)
             def sanitize_header(s: str) -> str:
                 return s.replace(',', '_').replace('\n', ' ').replace('\r', ' ').strip()
-            header.extend([sanitize_header(h) for h in grid_element_headers])
+            header.extend([sanitize_header(f"{c}_{e}") for (c, e, _) in grid_columns_opt])
         elif layer_keys:
             header.extend([layer_key_to_header.get(k, k.replace(' ', '_')) for k in layer_keys])
         header.extend(["Rating", "ResponseTime"])
@@ -1359,51 +1476,43 @@ class StudyResponseService:
                 row.append(age_val)
                 row.append((t.task_index or 0) + 1)
 
-                if grid_element_headers:
-                    data = t.elements_shown_in_task or t.elements_shown or {}
-                    # If string JSON, attempt to parse
-                    if isinstance(data, str):
-                        try:
-                            import json
-                            data = json.loads(data)
-                        except Exception:
-                            data = {}
-                    # Build normalized maps
-                    def norm_key(s: str) -> str:
-                        import re
-                        s = s.lower().strip()
-                        s = re.sub(r"[\s,;:/\\]+", "_", s)
-                        s = re.sub(r"_+", "_", s)
-                        return s
-                    data_norm: Dict[str, Any] = {}
-                    if isinstance(data, dict):
-                        for k, v in data.items():
+                if grid_columns_opt:
+                    # Use elements_shown_in_task CategoryName_Index keys; fallback to elements_shown_content
+                    presence_raw = t.elements_shown_in_task or t.elements_shown or {}
+                    presence_map: Dict[str, int] = {}
+                    if isinstance(presence_raw, dict):
+                        for k, v in presence_raw.items():
                             if isinstance(k, str):
-                                data_norm[norm_key(k)] = v
-                    # Emit presence per element name with fallbacks: name -> EID -> content
-                    for eid, name in zip(grid_element_ids, grid_element_headers):
-                        present = None
-                        if data_norm:
-                            # Name-based
-                            nk = norm_key(name)
-                            if nk in data_norm:
                                 try:
-                                    present = int(data_norm[nk])
+                                    presence_map[k.strip()] = int(v) if v in (0, 1) else (1 if v else 0)
                                 except Exception:
-                                    present = 1 if data_norm[nk] else 0
-                            # EID-based
-                            if present is None:
-                                vid = data_norm.get(norm_key(eid))
-                                if vid is not None:
-                                    try:
-                                        present = int(vid)
-                                    except Exception:
-                                        present = 1 if vid else 0
-                            # content-based
-                            if present is None:
-                                urlv = data_norm.get(norm_key(f"{eid}_content")) or data_norm.get(norm_key(f"{name}_content"))
-                                present = 1 if (isinstance(urlv, str) and urlv.strip()) else 0
-                        row.append(1 if present else 0)
+                                    presence_map[k.strip()] = 1 if v else 0
+                                # also store normalized spacings
+                                presence_map[k.strip().replace(' ', '_')] = presence_map[k.strip()]
+                                presence_map[k.strip().lower()] = presence_map[k.strip()]
+                    content_map = t.elements_shown_content if isinstance(t.elements_shown_content, dict) else {}
+                    for (cat_name, el_name, one_idx) in grid_columns_opt:
+                        # primary: CategoryName_Index
+                        candidates = [
+                            f"{cat_name}_{one_idx}",
+                            f"{cat_name.replace(' ', '_')}_{one_idx}",
+                            f"{cat_name.lower()}_{one_idx}",
+                        ]
+                        present = 0
+                        for cand in candidates:
+                            if cand in presence_map:
+                                present = presence_map[cand]
+                                break
+                            if cand.lower() in presence_map:
+                                present = presence_map[cand.lower()]
+                                break
+                        if present == 0 and content_map:
+                            # fallback: CategoryName_ImageName present in content_map
+                            header_key = f"{cat_name}_{el_name}"
+                            v = content_map.get(header_key) or content_map.get(header_key.replace(' ', '_'))
+                            if isinstance(v, dict) and (v.get('url') or v.get('name')):
+                                present = 1
+                        row.append(present)
                 elif layer_keys:
                     layer_data = t.layers_shown_in_task or t.elements_shown_in_task or t.elements_shown_content or {}
                     for key in layer_keys:
@@ -1526,12 +1635,8 @@ class StudyResponseService:
     
     def get_study_analytics(self, study_id: UUID) -> StudyAnalytics:
         """Get analytics data for a study - ultra-optimized with raw SQL for maximum speed."""
-        # Serve from short-lived cache if present
-        cache_key = str(study_id)
-        cached = StudyResponseService._analytics_cache.get(cache_key)
+        # Caching disabled: always compute fresh analytics
         now = time.time()
-        if cached and cached[0] > now:
-            return cached[1]
         
         # Ultra-fast raw SQL query for all statistics
         from sqlalchemy import text
@@ -1590,25 +1695,15 @@ class StudyResponseService:
             element_heatmap=element_heatmap,
             timing_distributions=timing_distributions
         )
-        # Smart caching: Short TTL but with invalidation on data changes
-        ttl = getattr(StudyResponseService, "_analytics_ttl_seconds", 10)  # 10 seconds for scalability
-        StudyResponseService._analytics_cache[cache_key] = (now + ttl, analytics)
         return analytics
     
     def _get_cached_analytics(self, study_id: UUID) -> Optional[StudyAnalytics]:
-        """Get cached analytics data without triggering a new query."""
-        cache_key = str(study_id)
-        cached = StudyResponseService._analytics_cache.get(cache_key)
-        now = time.time()
-        if cached and cached[0] > now:
-            return cached[1]
+        """Caching disabled; always recompute."""
         return None
     
     def invalidate_analytics_cache(self, study_id: UUID) -> None:
-        """Invalidate analytics cache when data changes."""
-        cache_key = str(study_id)
-        if cache_key in StudyResponseService._analytics_cache:
-            del StudyResponseService._analytics_cache[cache_key]
+        """Caching disabled; nothing to invalidate."""
+        return None
     
     def get_response_analytics(self, response_id: UUID) -> Optional[ResponseAnalytics]:
         """Get detailed analytics for a specific response."""

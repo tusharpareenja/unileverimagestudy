@@ -480,8 +480,8 @@ def update_study(
         if payload.status == 'completed':
             study.completed_at = datetime.utcnow()
         study.status = payload.status
-        # Generate tasks automatically when study transitions to active
-        if payload.status == 'active':
+        # Generate tasks on activation only if tasks are missing
+        if payload.status == 'active' and not study.tasks:
             try:
                 from app.services.study import regenerate_tasks
                 regenerate_tasks(

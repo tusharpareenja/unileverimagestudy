@@ -161,11 +161,52 @@ async def get_session(
     # Add layer information to response
     response_dict = StudyResponseDetail.model_validate(response).model_dump()
     response_dict["study_layers"] = study_layers
+    # Add optional study background image url
+    try:
+        if response and getattr(response, "study_id", None):
+            from app.models.study_model import Study as StudyModel
+            study_row = db.execute(
+                select(StudyModel).where(StudyModel.id == response.study_id)
+            ).scalar_one_or_none()
+            if study_row is not None:
+                response_dict["background_image_url"] = getattr(study_row, "background_image_url", None)
+    except Exception:
+        response_dict["background_image_url"] = None
+
+    # Enrich completed tasks with elements_shown_content from study.tasks if missing
+    try:
+        if response_dict.get("completed_tasks") and response_dict.get("study_id"):
+            from app.models.study_model import Study as StudyModel
+            study_row = db.execute(
+                select(StudyModel).where(StudyModel.id == response.study_id)
+            ).scalar_one_or_none()
+            if study_row and isinstance(study_row.tasks, dict):
+                # Respondent keys in generated tasks are 0-based; sessions may be 1-based.
+                resp_id = response_dict.get("respondent_id")
+                keys_to_try = [str(resp_id), str(max(0, (resp_id or 0) - 1))]
+                respondent_tasks = []
+                for k in keys_to_try:
+                    respondent_tasks = study_row.tasks.get(k)
+                    if respondent_tasks:
+                        break
+                index_to_content = {
+                    int(t.get("task_index")): t.get("elements_shown_content")
+                    for t in (respondent_tasks or []) if isinstance(t, dict)
+                }
+                for ct in response_dict.get("completed_tasks", []):
+                    if ct.get("elements_shown_content") is None:
+                        task_index = ct.get("task_index")
+                        if task_index in index_to_content:
+                            ct["elements_shown_content"] = index_to_content[task_index]
+    except Exception:
+        # Non-fatal enrichment
+        pass
     
     # Map classification answer codes to human-readable labels using study configuration
     try:
         if response and getattr(response, "study_id", None):
             from app.models.study_model import StudyClassificationQuestion
+            from app.models.study_model import Study as StudyModel
             # Build options map per question
             questions = db.execute(
                 select(StudyClassificationQuestion)
@@ -192,6 +233,14 @@ async def get_session(
             resp_out = StudyResponseDetail.model_validate(response).model_dump()
             # Add layer information to the response
             resp_out["study_layers"] = study_layers
+            # Ensure background_image_url is included (may be None)
+            try:
+                study_row2 = db.execute(
+                    select(StudyModel).where(StudyModel.id == response.study_id)
+                ).scalar_one_or_none()
+                resp_out["background_image_url"] = getattr(study_row2, "background_image_url", None) if study_row2 else None
+            except Exception:
+                resp_out["background_image_url"] = None
             # Transform answers
             for ans in resp_out.get("classification_answers", []) or []:
                 qid = ans.get("question_id")

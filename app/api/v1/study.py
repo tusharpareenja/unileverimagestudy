@@ -323,17 +323,40 @@ def generate_tasks_from_body_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    # Optional persistence path if study_id is provided and owned by user
-    persist_to_study: Optional[UUID] = payload.study_id
+    # Upsert draft study if requested (create if no study_id provided, else load to update)
+    from sqlalchemy import select
+    from app.models.study_model import Study as StudyModel
     study_row = None
-    if persist_to_study is not None:
-        from sqlalchemy import select
-        from app.models.study_model import Study
+    if payload.study_id is not None:
         study_row = db.scalars(
-            select(Study).where(Study.id == persist_to_study, Study.creator_id == current_user.id)
+            select(StudyModel).where(StudyModel.id == payload.study_id, StudyModel.creator_id == current_user.id)
         ).first()
         if not study_row:
             raise HTTPException(status_code=404, detail="Study not found or access denied.")
+    else:
+        # Create a new draft study if minimal required fields provided
+        if not payload.title or not payload.background or not payload.language or not payload.main_question or not payload.orientation_text:
+            raise HTTPException(status_code=400, detail="Missing required study fields for on-the-fly creation")
+        study_row = study_service.create_study(
+            db=db,
+            creator_id=current_user.id,
+            payload=StudyCreate(
+                title=payload.title,
+                background=payload.background,
+                language=payload.language,
+                main_question=payload.main_question,
+                orientation_text=payload.orientation_text,
+                study_type=payload.study_type,
+                background_image_url=payload.background_image_url,
+                rating_scale=payload.rating_scale or payload.rating_scale.__class__(**payload.rating_scale.model_dump()) if hasattr(payload.rating_scale, 'model_dump') else payload.rating_scale,
+                audience_segmentation=payload.audience_segmentation,
+                categories=payload.categories,
+                elements=payload.elements,
+                study_layers=payload.study_layers,
+                classification_questions=payload.classification_questions,
+            ),
+            base_url_for_share=settings.BASE_URL,
+        )
 
     if payload.study_type == 'grid':
         if not payload.elements or len(payload.elements) == 0:
@@ -375,10 +398,10 @@ def generate_tasks_from_body_endpoint(
             exposure_tolerance_cv=payload.exposure_tolerance_cv or 1.0,
             seed=payload.seed,
         )
-        if study_row is not None:
-            study_row.tasks = result.get('tasks', {})
-            db.commit()
-        return GenerateTasksResult(tasks=result.get('tasks', {}), metadata=result.get('metadata', {}))
+        # Persist tasks to draft study
+        study_row.tasks = result.get('tasks', {})
+        db.commit()
+        return GenerateTasksResult(tasks=result.get('tasks', {}), metadata={**result.get('metadata', {}), "study_id": str(study_row.id)})
     elif payload.study_type == 'layer':
         if not payload.study_layers or len(payload.study_layers) == 0:
             raise HTTPException(status_code=400, detail="Layer study requires study_layers")
@@ -403,9 +426,48 @@ def generate_tasks_from_body_endpoint(
             exposure_tolerance_pct=payload.exposure_tolerance_pct or 2.0,
             seed=payload.seed,
         )
-        if study_row is not None:
-            study_row.tasks = result.get('tasks', {})
-            db.commit()
-        return GenerateTasksResult(tasks=result.get('tasks', {}), metadata=result.get('metadata', {}))
+        # Persist tasks to draft study
+        study_row.tasks = result.get('tasks', {})
+        db.commit()
+        return GenerateTasksResult(tasks=result.get('tasks', {}), metadata={**result.get('metadata', {}), "study_id": str(study_row.id)})
     else:
         raise HTTPException(status_code=400, detail="Unsupported study_type")
+
+
+@router.put("/{study_id}/launch", response_model=StudyOut)
+def update_and_launch_study_endpoint(
+    study_id: UUID,
+    payload: StudyUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Fast path: update basic study details (if provided) and set study to active in one call.
+    Does not regenerate tasks; intended for non-task-affecting edits (e.g., title, text).
+    """
+    # Apply updates if any
+    if any([
+        payload.title is not None,
+        payload.background is not None,
+        payload.language is not None,
+        payload.main_question is not None,
+        payload.orientation_text is not None,
+        payload.background_image_url is not None,
+        payload.rating_scale is not None,
+        payload.classification_questions is not None,
+    ]):
+        study_service.update_study(
+            db=db,
+            study_id=study_id,
+            owner_id=current_user.id,
+            payload=payload,
+        )
+
+    # Set status to active (also updates share_url and timestamps)
+    study = study_service.change_status(
+        db=db,
+        study_id=study_id,
+        owner_id=current_user.id,
+        new_status='active',
+    )
+    return study

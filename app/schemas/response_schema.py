@@ -228,6 +228,7 @@ class StudyResponseDetail(StudyResponseOut):
     element_interactions: List[ElementInteractionOut] = []
     task_sessions: List[TaskSessionOut] = []
     study_layers: Optional[List[Dict[str, Any]]] = None
+    background_image_url: Optional[str] = None
 
 class StudyResponseListItem(BaseModel):
     """Lightweight response for listing"""

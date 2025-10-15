@@ -236,6 +236,15 @@ class GenerateTasksRequest(BaseModel):
     study_id: Optional[UUID] = None
     study_type: StudyType
     audience_segmentation: AudienceSegmentation
+    # Optional full study fields to create/update a draft study on the fly
+    title: Optional[str] = None
+    background: Optional[str] = None
+    language: Optional[str] = None
+    main_question: Optional[str] = None
+    orientation_text: Optional[str] = None
+    background_image_url: Optional[str] = None
+    rating_scale: Optional[RatingScale] = None
+    classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
     categories: Optional[List[StudyCategoryIn]] = None
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
