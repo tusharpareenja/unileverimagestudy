@@ -389,6 +389,42 @@ def generate_tasks_from_body_endpoint(
                     for el in cat_elements
                 ]
             })
+
+        # Feasibility preflight: try planning and locking T quickly; if it fails, raise 400 with guidance
+        try:
+            from app.services.task_generation_core import plan_T_E_auto, preflight_lock_T, MIN_ACTIVE_PER_ROW, GRID_MAX_ACTIVE
+            # Convert to category_info: {CategoryName: [CategoryName_1, ...]}
+            category_info: Dict[str, List[str]] = {}
+            for c in categories_data:
+                cname = c["category_name"]
+                category_info[cname] = [f"{cname}_{j+1}" for j in range(len(c["elements"]))]
+
+            if any(len(v) == 0 for v in category_info.values()):
+                raise HTTPException(status_code=400, detail="Each category must have at least 1 element")
+
+            mode = "grid"
+            max_active_per_row = min(GRID_MAX_ACTIVE, len(category_info))
+            T, E, A_map, avg_k, A_min_used = plan_T_E_auto(category_info, mode, max_active_per_row)
+            # Attempt to lock T (cheap attempts). If it raises, convert to HTTP 400 with advice
+            try:
+                _T_locked, _A_map_locked = preflight_lock_T(T, category_info, E, A_min_used, mode, max_active_per_row)
+            except RuntimeError as e:
+                # Build a simple advisory message for the frontend
+                # Heuristic: suggest adding at least 1 more element to any category with only 1
+                thin_cats = [cn for cn, arr in category_info.items() if len(arr) < 2]
+                advice = "; ".join([
+                    "Add more elements per category (≥2 recommended)",
+                    "Reduce tasks per respondent (T)",
+                    "Relax absence ratio"
+                ])
+                if thin_cats:
+                    advice = f"Categories with very few elements: {', '.join(thin_cats)}. " + advice
+                raise HTTPException(status_code=400, detail=f"Task generation not feasible with current elements/categories. {advice}")
+        except HTTPException:
+            raise
+        except Exception:
+            # If the quick preflight itself fails for unexpected reasons, proceed to generation as before
+            pass
         
         # Use v2 function directly with categories_data
         from app.services.task_generation_core import generate_grid_tasks_v2
@@ -420,6 +456,37 @@ def generate_tasks_from_body_endpoint(
         for L in payload.study_layers:
             imgs = [_TmpImg(img.name, img.url) for img in L.images or []]
             layers.append(_TmpLayer(L.name, imgs, L.z_index, L.order))
+
+        # Feasibility preflight for layer mode
+        try:
+            from app.services.task_generation_core import plan_T_E_auto, preflight_lock_T
+            # Convert to category_info: {LayerName: [LayerName_1, ...]}
+            category_info: Dict[str, List[str]] = {}
+            for L in payload.study_layers:
+                count = len(L.images or [])
+                category_info[L.name] = [f"{L.name}_{i+1}" for i in range(count)]
+            if any(len(v) == 0 for v in category_info.values()):
+                raise HTTPException(status_code=400, detail="Each layer must have at least 1 image")
+            mode = "layout"
+            max_active_per_row = len(category_info)
+            T, E, A_map, avg_k, A_min_used = plan_T_E_auto(category_info, mode, max_active_per_row)
+            try:
+                _T_locked, _A_map_locked = preflight_lock_T(T, category_info, E, A_min_used, mode, max_active_per_row)
+            except RuntimeError as e:
+                thin_layers = [cn for cn, arr in category_info.items() if len(arr) < 2]
+                advice = "; ".join([
+                    "Add more images per layer (≥2 recommended)",
+                    "Reduce tasks per respondent (T)",
+                    "Relax absence ratio"
+                ])
+                if thin_layers:
+                    advice = f"Layers with very few images: {', '.join(thin_layers)}. " + advice
+                raise HTTPException(status_code=400, detail=f"Task generation not feasible with current layers/images. {advice}")
+        except HTTPException:
+            raise
+        except Exception:
+            # On unexpected preflight errors, continue to generation
+            pass
         result = generate_layer_tasks(
             layers=layers,
             number_of_respondents=payload.audience_segmentation.number_of_respondents,
