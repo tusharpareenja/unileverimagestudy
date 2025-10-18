@@ -51,6 +51,10 @@ async def on_startup():
     background_task_service.task = asyncio.create_task(
         background_task_service.start_abandonment_checker(interval_minutes=30)
     )
+    
+    # Start task generation cleanup service
+    from app.services.background_task_service import background_task_service as task_service
+    await task_service.start_cleanup_task()
 
 @app.on_event("shutdown")
 async def on_shutdown():

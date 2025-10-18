@@ -44,16 +44,27 @@ def _ensure_study_type_constraints(payload: StudyCreate) -> None:
         raise HTTPException(status_code=400, detail="Unsupported study_type. Must be 'grid' or 'layer'.")
 
 def _validate_rating_scale(rating_scale: Dict[str, Any]) -> None:
+    logger.info(f"Validating rating scale: {rating_scale}")
+    
     required = ['min_value', 'max_value', 'min_label', 'max_label']
     for k in required:
         if k not in rating_scale:
+            logger.error(f"rating_scale missing '{k}'")
             raise HTTPException(status_code=400, detail=f"rating_scale missing '{k}'")
+    
     if rating_scale['max_value'] not in [5, 7, 9]:
+        logger.error(f"rating_scale.max_value {rating_scale['max_value']} not in [5, 7, 9]")
         raise HTTPException(status_code=400, detail="rating_scale.max_value must be one of 5, 7, 9.")
+    
     if not (1 <= int(rating_scale['min_value']) <= 9):
+        logger.error(f"rating_scale.min_value {rating_scale['min_value']} not in range 1-9")
         raise HTTPException(status_code=400, detail="rating_scale.min_value must be between 1 and 9 inclusive.")
+    
     if int(rating_scale['min_value']) > int(rating_scale['max_value']):
+        logger.error(f"rating_scale.min_value {rating_scale['min_value']} > max_value {rating_scale['max_value']}")
         raise HTTPException(status_code=400, detail="rating_scale.min_value cannot exceed max_value.")
+    
+    logger.info("Rating scale validation passed")
 
 def _generate_share_token() -> str:
     return uuid4().hex
@@ -467,12 +478,17 @@ def update_study(
     owner_id: UUID,
     payload: StudyUpdate
 ) -> Study:
+    logger.info(f"update_study called for study {study_id} by user {owner_id}")
+    logger.info(f"Payload: {payload.model_dump(exclude_none=True)}")
+    
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
     # Allow editing even when active (per new requirement)
 
     # Handle status change if provided (align with change_status rules)
     if payload.status is not None:
+        logger.info(f"Updating status to: {payload.status}")
         if payload.status not in ['draft', 'active', 'paused', 'completed']:
+            logger.error(f"Invalid status: {payload.status}")
             raise HTTPException(status_code=400, detail="Invalid status.")
         # transitions timestamps
         if payload.status == 'active' and (study.launched_at is None):
@@ -480,18 +496,7 @@ def update_study(
         if payload.status == 'completed':
             study.completed_at = datetime.utcnow()
         study.status = payload.status
-        # Generate tasks on activation only if tasks are missing
-        if payload.status == 'active' and not study.tasks:
-            try:
-                from app.services.study import regenerate_tasks
-                regenerate_tasks(
-                    db=db,
-                    study_id=study.id,
-                    owner_id=owner_id,
-                )
-            except Exception as ex:
-                # Non-fatal: keep study active even if task generation fails
-                logger.error("Task generation on activation failed: %s", ex)
+        # Allow status changes without task validation
 
     # Apply scalar updates
     if payload.title is not None:

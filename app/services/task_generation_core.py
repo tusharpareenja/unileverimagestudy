@@ -652,8 +652,11 @@ def preflight_lock_T(T: int, category_info: Dict[str, List[str]], E: int, A_min_
 
 # ============================ Public APIs (IDENTICAL OUTPUT) ============================
 
+from typing import Optional, Dict, Any, List, Callable
+
 def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: int,
-                           exposure_tolerance_cv: float = 1.0, seed: Optional[int] = None) -> Dict[str, Any]:
+                           exposure_tolerance_cv: float = 1.0, seed: Optional[int] = None,
+                           progress_callback: Optional[Callable[[int, int], None]] = None) -> Dict[str, Any]:
     """
     Generate tasks for grid studies using EXACT logic from the codebase.
     Returns structure identical to utils.task_generation.generate_grid_tasks_v2 (final exact version).
@@ -753,11 +756,21 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
                 completed_count += 1
                 current_time = time.strftime('%H:%M:%S', time.localtime())
                 print(f"✅ Built respondent {resp_id+1}/{N} at {current_time} ({completed_count}/{N} completed)")
+                if progress_callback is not None:
+                    try:
+                        progress_callback(completed_count, N)
+                    except Exception:
+                        pass
             except Exception as e:
                 completed_count += 1
                 current_time = time.strftime('%H:%M:%S', time.localtime())
                 print(f"❌ Failed to build respondent at {current_time}: {e}")
                 per_resp_reports[future_to_resp_id[future]] = {'status': 'failed', 'error': str(e)}
+                if progress_callback is not None:
+                    try:
+                        progress_callback(completed_count, N)
+                    except Exception:
+                        pass
 
     parallel_duration = time.time() - parallel_start
     print(f"⏱️ Parallel processing completed in {parallel_duration:.2f} seconds")
@@ -866,7 +879,8 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
 
 
 def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
-                            exposure_tolerance_pct: float = 2.0, seed: Optional[int] = None) -> Dict[str, Any]:
+                            exposure_tolerance_pct: float = 2.0, seed: Optional[int] = None,
+                            progress_callback: Optional[Callable[[int, int], None]] = None) -> Dict[str, Any]:
     """
     Generate tasks for the new layer structure using advanced algorithms (IDENTICAL OUTPUT).
     """
@@ -942,6 +956,11 @@ def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
             done += 1
             if done % 5 == 0 or done == N:
                 print(f"  • Completed {done}/{N} respondents")
+            if progress_callback is not None:
+                try:
+                    progress_callback(done, N)
+                except Exception:
+                    pass
 
     # Sort results
     all_rows_per_resp.sort(key=lambda t: t[0])

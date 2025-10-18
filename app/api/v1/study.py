@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Dict, Any
 from uuid import UUID
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
@@ -22,6 +23,122 @@ from app.services.task_generation_adapter import generate_grid_tasks, generate_l
 from app.core.config import settings
 
 router = APIRouter()
+
+
+def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents: int) -> Dict[str, Any]:
+    """Generate a small preview of tasks for immediate display while background job runs"""
+    # Generate tasks for just 1-3 respondents as a preview
+    preview_respondents = min(3, number_of_respondents)
+    
+    if payload.study_type == 'grid':
+        # Create a minimal preview for grid studies
+        if not payload.elements or not payload.categories:
+            return {}
+        
+        # Build categories data for preview
+        categories_data = []
+        for cat in payload.categories:
+            cat_elements = [e for e in payload.elements if e.category_id == cat.category_id]
+            categories_data.append({
+                "category_name": cat.name,
+                "elements": [
+                    {
+                        "element_id": str(el.element_id),
+                        "name": el.name,
+                        "content": el.content,
+                        "alt_text": el.alt_text or el.name,
+                        "element_type": el.element_type,
+                    }
+                    for el in cat_elements
+                ]
+            })
+        
+        # Generate preview tasks using the same algorithm but with fewer respondents
+        from app.services.task_generation_core import generate_grid_tasks_v2
+        try:
+            result = generate_grid_tasks_v2(
+                categories_data=categories_data,
+                number_of_respondents=preview_respondents,
+                exposure_tolerance_cv=payload.exposure_tolerance_cv or 1.0,
+                seed=payload.seed,
+            )
+            return result.get('tasks', {})
+        except Exception:
+            # If preview generation fails, return empty tasks
+            return {}
+    
+    elif payload.study_type == 'layer':
+        # Create a minimal preview for layer studies
+        if not payload.study_layers:
+            return {}
+        
+        # Build layers for preview
+        layers = []
+        for layer in payload.study_layers:
+            layer_obj = type('Layer', (), {
+                'name': layer.name,
+                'images': [type('Image', (), {
+                    'name': img.name,
+                    'url': img.url
+                }) for img in layer.images or []],
+                'z_index': layer.z_index,
+                'order': layer.order
+            })()
+            layers.append(layer_obj)
+        
+        # Generate preview tasks
+        from app.services.task_generation_adapter import generate_layer_tasks
+        try:
+            result = generate_layer_tasks(
+                layers=layers,
+                number_of_respondents=preview_respondents,
+                exposure_tolerance_pct=payload.exposure_tolerance_pct or 2.0,
+                seed=payload.seed,
+            )
+            return result.get('tasks', {})
+        except Exception:
+            # If preview generation fails, return empty tasks
+            return {}
+    
+    return {}
+
+
+def _ensure_study_exists(payload: GenerateTasksRequest, db: Session, current_user: User):
+    """Helper function to ensure study exists, creating it if necessary"""
+    from sqlalchemy import select
+    from app.models.study_model import Study as StudyModel
+    
+    if payload.study_id is not None:
+        study_row = db.scalars(
+            select(StudyModel).where(StudyModel.id == payload.study_id, StudyModel.creator_id == current_user.id)
+        ).first()
+        if not study_row:
+            raise HTTPException(status_code=404, detail="Study not found or access denied.")
+        return study_row
+    else:
+        # Create a new draft study if minimal required fields provided
+        if not payload.title or not payload.background or not payload.language or not payload.main_question or not payload.orientation_text:
+            raise HTTPException(status_code=400, detail="Missing required study fields for on-the-fly creation")
+        return study_service.create_study(
+            db=db,
+            creator_id=current_user.id,
+            payload=StudyCreate(
+                title=payload.title,
+                background=payload.background,
+                language=payload.language,
+                main_question=payload.main_question,
+                orientation_text=payload.orientation_text,
+                study_type=payload.study_type,
+                background_image_url=payload.background_image_url,
+                rating_scale=payload.rating_scale,
+                audience_segmentation=payload.audience_segmentation,
+                categories=payload.categories,
+                elements=payload.elements,
+                study_layers=payload.study_layers,
+                classification_questions=payload.classification_questions,
+            ),
+            base_url_for_share=settings.BASE_URL,
+        )
 
 
 @router.post("", response_model=StudyOut, status_code=status.HTTP_201_CREATED)
@@ -238,9 +355,37 @@ def update_study_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    return study_service.update_study(
-        db=db, study_id=study_id, owner_id=current_user.id, payload=payload
-    )
+    # Debug logging
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        logger.info(f"PUT /studies/{study_id} - User: {current_user.id}")
+        logger.info(f"Payload fields: {list(payload.model_dump(exclude_none=True).keys())}")
+        
+        # Log specific fields that might cause validation errors
+        if payload.rating_scale:
+            logger.info(f"Rating scale: {payload.rating_scale.model_dump()}")
+        if payload.status:
+            logger.info(f"Status: {payload.status}")
+        if payload.title:
+            logger.info(f"Title length: {len(payload.title)}")
+        
+        result = study_service.update_study(
+            db=db, study_id=study_id, owner_id=current_user.id, payload=payload
+        )
+        
+        logger.info(f"Study {study_id} updated successfully")
+        return result
+        
+    except HTTPException as e:
+        logger.error(f"HTTPException in PUT /studies/{study_id}: {e.detail} (status: {e.status_code})")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in PUT /studies/{study_id}: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @router.delete("/{study_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -323,6 +468,98 @@ def generate_tasks_from_body_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    # Check if we should use async processing for large studies
+    number_of_respondents = payload.audience_segmentation.number_of_respondents if payload.audience_segmentation else 0
+    
+    # Debug logging
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Requested respondents: {number_of_respondents}, threshold: {settings.MAX_RESPONDENTS_FOR_SYNC}")
+    logger.info(f"Using background processing: {number_of_respondents > settings.MAX_RESPONDENTS_FOR_SYNC}")
+    
+    if number_of_respondents > settings.MAX_RESPONDENTS_FOR_SYNC:
+        # Use async background processing for large studies
+        from app.services.background_task_service import background_task_service
+        
+        # Create study first if needed
+        study_row = _ensure_study_exists(payload, db, current_user)
+        
+        # Log whether this is a new study or existing study
+        if payload.study_id:
+            logger.info(f"Regenerating tasks for existing study {payload.study_id}")
+        else:
+            logger.info(f"Creating new study for task generation")
+        
+        # Create background job
+        job_id = background_task_service.create_job(
+            study_id=str(study_row.id),
+            user_id=str(current_user.id),
+            payload=payload.model_dump()
+        )
+        
+        # Debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Created background job {job_id} for {number_of_respondents} respondents")
+        
+        # Start the job asynchronously using a background thread
+        import threading
+        import asyncio
+        
+        def run_background_job():
+            """Run the background job in a separate thread with its own event loop"""
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            # Use a fresh DB session in this background thread
+            from app.db.session import SessionLocal
+            db_bg = SessionLocal()
+            try:
+                logger.info(f"Starting background job {job_id}")
+                # Start the async job and then await the returned task to completion
+                task = loop.run_until_complete(background_task_service.start_job(job_id, db_bg))
+                logger.info(f"Background job {job_id} started, awaiting completion...")
+                loop.run_until_complete(task)
+                logger.info(f"Background job {job_id} completed successfully")
+            except Exception as e:
+                logger.error(f"Background job {job_id} failed: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                # Update job status to failed if there's an error
+                job = background_task_service.get_job_status(job_id)
+                if job:
+                    from app.services.background_task_service import JobStatus
+                    job.status = JobStatus.FAILED
+                    job.error = str(e)
+                    job.message = f"Background job failed: {str(e)}"
+                    job.completed_at = datetime.utcnow()
+            finally:
+                try:
+                    db_bg.close()
+                except Exception:
+                    pass
+                loop.close()
+        
+        # Start the background job in a daemon thread
+        thread = threading.Thread(target=run_background_job, daemon=True)
+        thread.start()
+        
+        # Return only job metadata; frontend will poll for status/results
+        logger.info(f"Returning background job response for job {job_id}")
+        return GenerateTasksResult(
+            tasks={},
+            metadata={
+                "job_id": job_id,
+                "status": "started",
+                "message": f"Task generation started in background for {number_of_respondents} respondents",
+                "study_id": str(study_row.id)
+            }
+        )
+    
+    # Use synchronous processing for small studies (existing behavior)
     # Upsert draft study if requested (create if no study_id provided, else load to update)
     from sqlalchemy import select
     from app.models.study_model import Study as StudyModel
@@ -348,7 +585,7 @@ def generate_tasks_from_body_endpoint(
                 orientation_text=payload.orientation_text,
                 study_type=payload.study_type,
                 background_image_url=payload.background_image_url,
-                rating_scale=payload.rating_scale or payload.rating_scale.__class__(**payload.rating_scale.model_dump()) if hasattr(payload.rating_scale, 'model_dump') else payload.rating_scale,
+                rating_scale=payload.rating_scale,
                 audience_segmentation=payload.audience_segmentation,
                 categories=payload.categories,
                 elements=payload.elements,
@@ -530,6 +767,8 @@ def update_and_launch_study_endpoint(
             payload=payload,
         )
 
+    # Allow launching without task validation
+
     # Set status to active (also updates share_url and timestamps)
     study = study_service.change_status(
         db=db,
@@ -538,3 +777,122 @@ def update_and_launch_study_endpoint(
         new_status='active',
     )
     return study
+
+
+@router.get("/generate-tasks/status/{job_id}")
+def get_task_generation_status(
+    job_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Get the status of a task generation job"""
+    from app.services.background_task_service import background_task_service
+    
+    job = background_task_service.get_job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Check if user owns this job
+    if job.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    return {
+        "job_id": job.job_id,
+        "study_id": job.study_id,
+        "status": job.status.value,
+        "progress": job.progress,
+        "message": job.message,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "error": job.error,
+        "result": job.result
+    }
+
+
+@router.post("/generate-tasks/cancel/{job_id}")
+def cancel_task_generation(
+    job_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Cancel a running task generation job"""
+    from app.services.background_task_service import background_task_service
+    
+    job = background_task_service.get_job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Check if user owns this job
+    if job.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    success = background_task_service.cancel_job(job_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Job cannot be cancelled")
+    
+    return {"message": "Job cancelled successfully"}
+
+
+@router.get("/generate-tasks/jobs")
+def get_user_task_generation_jobs(
+    current_user: User = Depends(get_current_active_user),
+):
+    """Get all task generation jobs for the current user"""
+    from app.services.background_task_service import background_task_service
+    
+    jobs = background_task_service.get_user_jobs(str(current_user.id))
+    
+    return [
+        {
+            "job_id": job.job_id,
+            "study_id": job.study_id,
+            "status": job.status.value,
+            "progress": job.progress,
+            "message": job.message,
+            "created_at": job.created_at.isoformat(),
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "error": job.error
+        }
+        for job in jobs
+    ]
+
+
+@router.get("/generate-tasks/result/{job_id}")
+def get_task_generation_result(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Get the full generated tasks once the background job is complete"""
+    from app.services.background_task_service import background_task_service
+    
+    job = background_task_service.get_job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Check if user owns this job
+    if job.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Check if job is completed
+    from app.services.background_task_service import JobStatus
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Job is not completed yet. Current status: {job.status.value}"
+        )
+    
+    # Get the study with the generated tasks
+    study = study_service.get_study(db=db, study_id=job.study_id, owner_id=current_user.id)
+    
+    return {
+        "job_id": job.job_id,
+        "study_id": job.study_id,
+        "status": job.status.value,
+        "tasks": study.tasks,
+        "metadata": {
+            "total_respondents": len(study.tasks) if study.tasks else 0,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+            "message": "Task generation completed successfully"
+        }
+    }
