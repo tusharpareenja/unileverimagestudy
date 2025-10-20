@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     TASK_GENERATION_TIMEOUT: int = 3600  # 60 minutes timeout for task generation (Azure max is ~4-5 min for sync requests)
     MAX_RESPONDENTS_FOR_SYNC: int = 0  # Use async processing for studies with more than 4 respondents
     TASK_GENERATION_CHUNK_SIZE: int = 50  # Process respondents in smaller chunks for memory efficiency
-    MAX_MEMORY_USAGE_MB: int = 14336  # 14GB memory limit for task generation (matches Azure P2 plan)
+    MAX_MEMORY_USAGE_MB: int = 1024  # 1GB memory limit for task generation (matches Azure P2 plan)
     
     # SMTP Email Settings
     SMTP_SERVER: str = "smtp.gmail.com"

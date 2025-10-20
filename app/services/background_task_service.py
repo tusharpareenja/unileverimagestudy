@@ -107,9 +107,9 @@ class BackgroundTaskService:
             job.status = JobStatus.PROCESSING
             job.message = "Generating tasks..."
             
-            # Check memory usage before starting
-            if not self._check_memory_usage():
-                raise RuntimeError("Insufficient memory for task generation")
+            # Memory check removed - Azure will handle memory limits automatically
+            # if not self._check_memory_usage():
+            #     raise RuntimeError("Insufficient memory for task generation")
             
             # Import here to avoid circular imports
             from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
@@ -381,14 +381,7 @@ class BackgroundTaskService:
             logger.error(f"Failed to launch study {job.study_id}: {e}")
             # Don't fail the job if launch fails, just log the error
     
-    def _check_memory_usage(self) -> bool:
-        """Check if memory usage is within limits"""
-        try:
-            process = psutil.Process(os.getpid())
-            memory_mb = process.memory_info().rss / 1024 / 1024
-            return memory_mb < settings.MAX_MEMORY_USAGE_MB
-        except Exception:
-            return True  # If we can't check memory, proceed
+    # Memory check method removed - Azure handles memory limits automatically
     
     def get_job_status(self, job_id: str) -> Optional[TaskGenerationJob]:
         """Get the status of a job"""
