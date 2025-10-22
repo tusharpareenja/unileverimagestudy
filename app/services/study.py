@@ -104,6 +104,19 @@ def _load_owned_study(db: Session, study_id: UUID, owner_id: UUID, for_update: b
         raise HTTPException(status_code=404, detail="Study not found or access denied.")
     return study
 
+def _load_owned_study_minimal(db: Session, study_id: UUID, owner_id: UUID, for_update: bool = False) -> Study:
+    """Optimized study loading for operations that don't need related data (like launch)."""
+    stmt = (
+        select(Study)
+        .where(Study.id == study_id, Study.creator_id == owner_id)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    study = db.scalars(stmt).first()
+    if not study:
+        raise HTTPException(status_code=404, detail="Study not found or access denied.")
+    return study
+
 # ---------- CRUD ----------
 
 def create_study(
@@ -635,6 +648,126 @@ def update_study(
     db.refresh(study)
     return study
 
+def update_study_fast(
+    db: Session,
+    study_id: UUID,
+    owner_id: UUID,
+    payload: StudyUpdate
+) -> Study:
+    """Optimized version of update_study that uses minimal loading for simple updates."""
+    logger.info(f"update_study_fast called for study {study_id} by user {owner_id}")
+    logger.info(f"Payload: {payload.model_dump(exclude_none=True)}")
+    
+    # Check if we need full loading (for classification_questions updates)
+    needs_full_loading = payload.classification_questions is not None
+    
+    if needs_full_loading:
+        study = _load_owned_study(db, study_id, owner_id, for_update=True)
+    else:
+        study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
+    
+    # Allow editing even when active (per new requirement)
+
+    # Handle status change if provided (align with change_status rules)
+    if payload.status is not None:
+        logger.info(f"Updating status to: {payload.status}")
+        if payload.status not in ['draft', 'active', 'paused', 'completed']:
+            logger.error(f"Invalid status: {payload.status}")
+            raise HTTPException(status_code=400, detail="Invalid status.")
+        # transitions timestamps
+        if payload.status == 'active' and (study.launched_at is None):
+            study.launched_at = datetime.utcnow()
+        if payload.status == 'completed':
+            study.completed_at = datetime.utcnow()
+        study.status = payload.status
+        # Allow status changes without task validation
+
+    # Apply scalar updates
+    if payload.title is not None:
+        study.title = payload.title
+    if payload.background is not None:
+        study.background = payload.background
+    if payload.language is not None:
+        study.language = payload.language
+    if payload.main_question is not None:
+        study.main_question = payload.main_question
+    if payload.orientation_text is not None:
+        study.orientation_text = payload.orientation_text
+    if payload.background_image_url is not None:
+        study.background_image_url = payload.background_image_url
+    if payload.rating_scale is not None:
+        _validate_rating_scale(payload.rating_scale.model_dump())
+        study.rating_scale = payload.rating_scale.model_dump()
+    if payload.audience_segmentation is not None:
+        study.audience_segmentation = payload.audience_segmentation.model_dump(exclude_none=True)
+
+    # For fast updates, we only handle simple scalar fields
+    # Complex operations (elements, layers, classification_questions) fall back to full loading
+    if payload.elements is not None or payload.study_layers is not None:
+        # Fall back to full update_study for complex operations
+        return update_study(db, study_id, owner_id, payload)
+
+    # Handle classification questions updates (requires full loading)
+    if payload.classification_questions is not None:
+        # Fall back to full update_study for classification questions
+        return update_study(db, study_id, owner_id, payload)
+
+    db.commit()
+    db.refresh(study)
+    return study
+
+def update_and_launch_study_fast(
+    db: Session,
+    study_id: UUID,
+    owner_id: UUID,
+    payload: StudyUpdate
+) -> Study:
+    """Ultra-optimized function that combines update and launch in a single transaction."""
+    logger.info(f"update_and_launch_study_fast called for study {study_id} by user {owner_id}")
+    logger.info(f"Payload: {payload.model_dump(exclude_none=True)}")
+    
+    # Load study with minimal data for maximum performance
+    study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
+    
+    # Apply scalar updates
+    if payload.title is not None:
+        study.title = payload.title
+    if payload.background is not None:
+        study.background = payload.background
+    if payload.language is not None:
+        study.language = payload.language
+    if payload.main_question is not None:
+        study.main_question = payload.main_question
+    if payload.orientation_text is not None:
+        study.orientation_text = payload.orientation_text
+    if payload.background_image_url is not None:
+        study.background_image_url = payload.background_image_url
+    if payload.rating_scale is not None:
+        _validate_rating_scale(payload.rating_scale.model_dump())
+        study.rating_scale = payload.rating_scale.model_dump()
+    if payload.audience_segmentation is not None:
+        study.audience_segmentation = payload.audience_segmentation.model_dump(exclude_none=True)
+
+    # Handle complex updates that require full loading
+    if payload.elements is not None or payload.study_layers is not None or payload.classification_questions is not None:
+        # Fall back to full update_study for complex operations
+        updated_study = update_study(db, study_id, owner_id, payload)
+        # Then launch the study
+        return change_status_fast(db, study_id, owner_id, 'active')
+
+    # Set status to active (launch the study)
+    if study.launched_at is None:
+        study.launched_at = datetime.utcnow()
+        # Update share_url when study is launched (becomes active)
+        study.share_url = _build_share_url(None, str(study.id))
+    
+    study.status = 'active'
+    
+    # Single commit for both update and launch
+    db.commit()
+    db.refresh(study)
+    return study
+
 def delete_study(db: Session, study_id: UUID, owner_id: UUID) -> None:
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
     if study.status == 'active':
@@ -649,6 +782,31 @@ def change_status(
     new_status: StudyStatus
 ) -> Study:
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
+
+    if new_status not in ['draft', 'active', 'paused', 'completed']:
+        raise HTTPException(status_code=400, detail="Invalid status.")
+
+    # transitions timestamps and share_url update
+    if new_status == 'active' and (study.launched_at is None):
+        study.launched_at = datetime.utcnow()
+        # Update share_url when study is launched (becomes active)
+        study.share_url = _build_share_url(None, str(study.id))
+    if new_status == 'completed':
+        study.completed_at = datetime.utcnow()
+
+    study.status = new_status
+    db.commit()
+    db.refresh(study)
+    return study
+
+def change_status_fast(
+    db: Session,
+    study_id: UUID,
+    owner_id: UUID,
+    new_status: StudyStatus
+) -> Study:
+    """Optimized version of change_status that avoids loading related data."""
+    study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
 
     if new_status not in ['draft', 'active', 'paused', 'completed']:
         raise HTTPException(status_code=400, detail="Invalid status.")

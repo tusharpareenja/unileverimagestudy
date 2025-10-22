@@ -161,7 +161,7 @@ def create_study_endpoint(
 def list_studies_endpoint(
     status_filter: Optional[StudyStatus] = Query(None),
     page: int = Query(1, ge=1),
-    per_page: int = Query(10, ge=1, le=100),
+    per_page: int = Query(10, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
@@ -746,35 +746,16 @@ def update_and_launch_study_endpoint(
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Fast path: update basic study details (if provided) and set study to active in one call.
+    Ultra-fast path: update basic study details (if provided) and set study to active in one call.
+    Uses optimized functions to minimize database round trips and avoid unnecessary data loading.
     Does not regenerate tasks; intended for non-task-affecting edits (e.g., title, text).
     """
-    # Apply updates if any
-    if any([
-        payload.title is not None,
-        payload.background is not None,
-        payload.language is not None,
-        payload.main_question is not None,
-        payload.orientation_text is not None,
-        payload.background_image_url is not None,
-        payload.rating_scale is not None,
-        payload.classification_questions is not None,
-    ]):
-        study_service.update_study(
-            db=db,
-            study_id=study_id,
-            owner_id=current_user.id,
-            payload=payload,
-        )
-
-    # Allow launching without task validation
-
-    # Set status to active (also updates share_url and timestamps)
-    study = study_service.change_status(
+    # Use ultra-optimized function that combines update and launch in a single transaction
+    study = study_service.update_and_launch_study_fast(
         db=db,
         study_id=study_id,
         owner_id=current_user.id,
-        new_status='active',
+        payload=payload,
     )
     return study
 
