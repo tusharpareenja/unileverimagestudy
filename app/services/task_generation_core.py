@@ -37,28 +37,22 @@ def _build_one_worker(args):
     return (resp_id, rows, X, report)
 
 # Core constants (match codebase)
-PER_ELEM_EXPOSURES = 3     # minimum exposures per element
-MIN_ACTIVE_PER_ROW = 2     # min actives per vignette
-SAFETY_ROWS        = 3     # OLS safety above P
-GLOBAL_RESTARTS    = 200   # rebuild attempts per respondent
-SWAP_TRIES         = 8000  # swap tries per row
-HARD_CAP_SWAP_TRIES = 30000  # extra attempts for hard cap
+PER_ELEM_EXPOSURES = 3     
+MIN_ACTIVE_PER_ROW = 2     
+SAFETY_ROWS        = 3     
+GLOBAL_RESTARTS    = 200   
+SWAP_TRIES         = 8000  
+HARD_CAP_SWAP_TRIES = 30000
 BASE_SEED          = 12345
 LOG_EVERY_ROWS     = 25
-
-# Study modes
-DEFAULT_STUDY_MODE = "layout"   # "layout" or "grid"
-GRID_MAX_ACTIVE    = 4          # grid constraint
-
-# Absence policy
+DEFAULT_STUDY_MODE = "layout"   
+GRID_MAX_ACTIVE    = 4         
 ABSENCE_RATIO      = 2.0
-
-# Row-mix shaping
 ROW_MIX_MODE       = "wide"  # "dense" (old behavior) or "wide" (more 3s & 5s)
 ROW_MIX_WIDEN      = 0.40
 
 # “inflate T” ratio
-T_RATIO            = 1.10
+T_RATIO            = 1.50
 
 # Per-respondent safety: enforce no duplicate columns
 PER_RESP_UNIQUE_COLS_ENFORCE = True
@@ -846,15 +840,17 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
             elements_shown = {k: v for k, v in elements_shown.items() if not k.endswith('_ref')}
             elements_shown_content = {k: v for k, v in elements_shown_content.items() if not k.endswith('_ref')}
 
+            # Use 1-based respondent ID for task_id and storage key
+            respondent_id_1based = respondent_id + 1
             task_obj = {
-                "task_id": f"{respondent_id}_{task_index}",
+                "task_id": f"{respondent_id_1based}_{task_index}",
                 "elements_shown": elements_shown,
                 "elements_shown_content": elements_shown_content,
                 "task_index": task_index
             }
             respondent_tasks.append(task_obj)
 
-        tasks_structure[str(respondent_id)] = respondent_tasks
+        tasks_structure[str(respondent_id_1based)] = respondent_tasks
 
     end_time = time.time()
     total_duration = end_time - start_time
@@ -1029,15 +1025,17 @@ def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
             elements_shown = {k: v for k, v in elements_shown.items() if not k.endswith('_ref')}
             elements_shown_content = {k: v for k, v in elements_shown_content.items() if not k.endswith('_ref')}
 
+            # Use 1-based respondent ID for task_id and storage key
+            respondent_id_1based = respondent_id + 1
             task_obj = {
-                "task_id": f"{respondent_id}_{task_index}",
+                "task_id": f"{respondent_id_1based}_{task_index}",
                 "elements_shown": elements_shown,
                 "elements_shown_content": elements_shown_content,
                 "task_index": task_index
             }
             respondent_tasks.append(task_obj)
 
-        tasks_structure[str(respondent_id)] = respondent_tasks
+        tasks_structure[str(respondent_id_1based)] = respondent_tasks
 
     end_time = time.time()
     total_duration = end_time - start_time

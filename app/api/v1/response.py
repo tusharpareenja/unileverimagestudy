@@ -527,7 +527,7 @@ async def check_abandoned_sessions(
     db: Session = Depends(get_db)
 ):
     """
-    Manually trigger check for sessions that should be marked as abandoned (2+ hours inactive).
+    Manually trigger check for sessions that should be marked as abandoned (15+ minutes inactive).
     This endpoint can be called periodically or by a background task.
     """
     service = StudyResponseService(db)
@@ -537,6 +537,24 @@ async def check_abandoned_sessions(
         "message": f"Checked for abandoned sessions",
         "sessions_marked_abandoned": count,
         "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+@router.post("/check-study-completion")
+async def check_study_completion(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Manually trigger check for studies that should be auto-completed.
+    This checks if all expected respondents have completed or abandoned their sessions.
+    """
+    service = StudyResponseService(db)
+    service._check_and_complete_studies()
+    
+    return {
+        "message": "Study completion check completed",
+        "status": "success"
     }
 
 # ---------- Task Session Endpoints ----------

@@ -6,7 +6,7 @@ import uuid
 import logging
 
 from app.models.user_model import User
-from app.schemas.user_schema import UserRegister, UserUpdate, PasswordChange, UserResponse
+from app.schemas.user_schema import UserRegister, UserUpdate, PasswordChange, UserResponse, OAuthData
 from app.core.security import get_password_hash, verify_password, create_token_pair, refresh_access_token, generate_password_reset_token
 from app.services.email_service import email_service
 
@@ -16,23 +16,16 @@ class UserService:
     def __init__(self, db: Session):
         self.db = db
 
-    def authenticate_user(self, username_or_email: str, password: str) -> Optional[User]:
-        """Authenticate user with username/email and password"""
-        logger.debug("Authenticating user: %s", username_or_email)
-        # Check if input is email or username
-        if '@' in username_or_email:
-            user = self.db.query(User).filter(
-                User.email == username_or_email.lower(),
-                User.is_active == True
-            ).first()
-        else:
-            user = self.db.query(User).filter(
-                User.username == username_or_email.lower(),
-                User.is_active == True
-            ).first()
+    def authenticate_user(self, email: str, password: str) -> Optional[User]:
+        """Authenticate user with email and password"""
+        logger.debug("Authenticating user: %s", email)
+        user = self.db.query(User).filter(
+            User.email == email.lower(),
+            User.is_active == True
+        ).first()
         
         if not user:
-            logger.info("Auth failed: user not found or inactive for %s", username_or_email)
+            logger.info("Auth failed: user not found or inactive for %s", email)
             return None
         
         if not verify_password(password, user.password_hash):
@@ -45,41 +38,35 @@ class UserService:
         
         return user
 
-    def authenticate_user_with_tokens(self, username_or_email: str, password: str) -> Optional[dict]:
+    def authenticate_user_with_tokens(self, email: str, password: str) -> Optional[dict]:
         """Authenticate user and return user data with JWT tokens"""
         try:
-            user = self.authenticate_user(username_or_email, password)
+            user = self.authenticate_user(email, password)
             if not user:
                 return None
-            tokens = create_token_pair(user.id, user.username)
+            tokens = create_token_pair(user.id, user.email)
             user_response = UserResponse.from_orm(user)
             return {"user": user_response, "tokens": tokens}
         except Exception:
-            logger.exception("Token generation failed during authentication for %s", username_or_email)
+            logger.exception("Token generation failed during authentication for %s", email)
             return None
 
     def create_user(self, user_data: UserRegister) -> User:
         """Create a new user"""
-        logger.debug("Creating user: username=%s email=%s", user_data.username, user_data.email)
-        # Check if username or email already exists
+        logger.debug("Creating user: email=%s", user_data.email)
+        # Check if email already exists
         existing_user = self.db.query(User).filter(
-            or_(User.username == user_data.username.lower(), 
-                User.email == user_data.email.lower())
+            User.email == user_data.email.lower()
         ).first()
         
         if existing_user:
-            if existing_user.username == user_data.username.lower():
-                logger.info("Create user failed: username exists: %s", user_data.username)
-                raise ValueError("Username already exists")
-            else:
-                logger.info("Create user failed: email exists: %s", user_data.email)
-                raise ValueError("Email already exists")
+            logger.info("Create user failed: email exists: %s", user_data.email)
+            raise ValueError("Email already exists")
         
         # Create new user
         hashed_password = get_password_hash(user_data.password)
         
         db_user = User(
-            username=user_data.username.lower(),
             email=user_data.email.lower(),
             name=user_data.name,
             password_hash=hashed_password,
@@ -93,8 +80,9 @@ class UserService:
             self.db.add(db_user)
             self.db.commit()
             self.db.refresh(db_user)
+            logger.info("User created successfully: user_id=%s email=%s", db_user.id, db_user.email)
         except Exception:
-            logger.exception("Create user DB error for username=%s email=%s", user_data.username, user_data.email)
+            logger.exception("Create user DB error for email=%s", user_data.email)
             self.db.rollback()
             raise
         
@@ -105,7 +93,7 @@ class UserService:
         user = self.create_user(user_data)
         
         # Create JWT tokens
-        tokens = create_token_pair(user.id, user.username)
+        tokens = create_token_pair(user.id, user.email)
         
         # Convert user to response schema
         user_response = UserResponse.from_orm(user)
@@ -119,12 +107,6 @@ class UserService:
         """Get user by ID"""
         return self.db.query(User).filter(User.id == user_id, User.is_active == True).first()
 
-    def get_user_by_username(self, username: str) -> Optional[User]:
-        """Get user by username"""
-        return self.db.query(User).filter(
-            User.username == username.lower(), 
-            User.is_active == True
-        ).first()
 
     def get_user_by_email(self, email: str) -> Optional[User]:
         """Get user by email"""
@@ -195,10 +177,6 @@ class UserService:
         
         return True
 
-    def check_username_available(self, username: str) -> bool:
-        """Check if username is available"""
-        user = self.db.query(User).filter(User.username == username.lower()).first()
-        return user is None
 
     def check_email_available(self, email: str) -> bool:
         """Check if email is available"""
@@ -206,13 +184,12 @@ class UserService:
         return user is None
 
     def search_users(self, query: str, skip: int = 0, limit: int = 50) -> List[User]:
-        """Search users by name, username, or email"""
+        """Search users by name or email"""
         search_filter = f"%{query.lower()}%"
         return self.db.query(User).filter(
             User.is_active == True,
             or_(
                 User.name.ilike(search_filter),
-                User.username.ilike(search_filter),
                 User.email.ilike(search_filter)
             )
         ).offset(skip).limit(limit).all()
@@ -225,26 +202,23 @@ class UserService:
         
         return new_tokens
     
-    def request_password_reset(self, username_or_email: str) -> bool:
+    def request_password_reset(self, email: str) -> bool:
         """
         Request password reset for user
         
         Args:
-            username_or_email: Username or email of the user
+            email: Email of the user
             
         Returns:
             bool: True if reset request processed (always returns True for security)
         """
         try:
-            # Find user by username or email
-            if '@' in username_or_email:
-                user = self.get_user_by_email(username_or_email)
-            else:
-                user = self.get_user_by_username(username_or_email)
+            # Find user by email
+            user = self.get_user_by_email(email)
             
             if not user:
                 # Always return True for security (don't reveal if user exists)
-                logger.info(f"Password reset requested for non-existent user: {username_or_email}")
+                logger.info(f"Password reset requested for non-existent user: {email}")
                 return True
             
             # Generate reset token and expiration (1 hour from now)
@@ -272,7 +246,7 @@ class UserService:
             return True
             
         except Exception as e:
-            logger.error(f"Error processing password reset request for {username_or_email}: {str(e)}")
+            logger.error(f"Error processing password reset request for {email}: {str(e)}")
             # Always return True for security
             return True
     
@@ -306,7 +280,7 @@ class UserService:
             user.updated_at = datetime.utcnow()
             self.db.commit()
             
-            logger.info(f"Password reset successfully for user: {user.username}")
+            logger.info(f"Password reset successfully for user: {user.email}")
             return True
             
         except Exception as e:
@@ -334,6 +308,85 @@ class UserService:
             logger.error(f"Error getting user by reset token: {str(e)}")
             return None
 
+    def create_user_from_oauth(self, oauth_data: OAuthData) -> User:
+        """
+        Create a new user from OAuth data
+        
+        Args:
+            oauth_data: OAuth user data from provider
+            
+        Returns:
+            Created user
+        """
+        logger.debug("Creating OAuth user: email=%s provider=%s", oauth_data.email, oauth_data.provider)
+        
+        # Check if user already exists (shouldn't happen in normal flow, but safety check)
+        existing_user = self.get_user_by_email(oauth_data.email)
+        if existing_user:
+            logger.info("OAuth user already exists: %s", oauth_data.email)
+            return existing_user
+        
+        # Create new user with OAuth data
+        # Generate a random password since OAuth users don't have passwords
+        random_password = f"oauth_{oauth_data.provider}_{oauth_data.provider_id}_{uuid.uuid4().hex[:16]}"
+        hashed_password = get_password_hash(random_password)
+        
+        db_user = User(
+            email=oauth_data.email.lower(),
+            name=oauth_data.name,
+            password_hash=hashed_password,
+            is_active=True,
+            is_verified=True  # OAuth users are pre-verified
+        )
+        
+        try:
+            self.db.add(db_user)
+            self.db.commit()
+            self.db.refresh(db_user)
+            logger.info("OAuth user created successfully: user_id=%s email=%s", db_user.id, db_user.email)
+            return db_user
+        except Exception as e:
+            self.db.rollback()
+            logger.exception("Create OAuth user DB error for email=%s", oauth_data.email)
+            raise e
+
+    def oauth_login(self, oauth_data: OAuthData) -> dict:
+        """
+        Handle OAuth login - either login existing user or create new user
+        
+        Args:
+            oauth_data: OAuth user data from provider
+            
+        Returns:
+            Dict with user, tokens, and is_new_user flag
+        """
+        logger.debug("OAuth login attempt: email=%s provider=%s", oauth_data.email, oauth_data.provider)
+        
+        # Check if user exists by email
+        existing_user = self.get_user_by_email(oauth_data.email)
+        
+        if existing_user:
+            # User exists - login them
+            logger.info("OAuth login for existing user: %s", oauth_data.email)
+            tokens = create_token_pair(existing_user.id, existing_user.email)
+            user_response = UserResponse.from_orm(existing_user)
+            return {
+                "user": user_response,
+                "tokens": tokens,
+                "is_new_user": False
+            }
+        else:
+            # User doesn't exist - create new user
+            logger.info("OAuth login creating new user: %s", oauth_data.email)
+            new_user = self.create_user_from_oauth(oauth_data)
+            tokens = create_token_pair(new_user.id, new_user.email)
+            user_response = UserResponse.from_orm(new_user)
+            return {
+                "user": user_response,
+                "tokens": tokens,
+                "is_new_user": True
+            }
+
 
 # Convenience functions for direct use
 def authenticate_user(db: Session, username_or_email: str, password: str) -> Optional[User]:
@@ -354,10 +407,10 @@ def get_user_by_id(db: Session, user_id: uuid.UUID) -> Optional[User]:
     return service.get_user_by_id(user_id)
 
 
-def authenticate_user_with_tokens(db: Session, username_or_email: str, password: str) -> Optional[dict]:
+def authenticate_user_with_tokens(db: Session, email: str, password: str) -> Optional[dict]:
     """Authenticate user with tokens - convenience function"""
     service = UserService(db)
-    return service.authenticate_user_with_tokens(username_or_email, password)
+    return service.authenticate_user_with_tokens(email, password)
 
 
 def create_user_with_tokens(db: Session, user_data: UserRegister) -> dict:
@@ -372,10 +425,10 @@ def refresh_user_tokens(db: Session, refresh_token: str) -> Optional[dict]:
     return service.refresh_user_tokens(refresh_token)
 
 
-def request_password_reset(db: Session, username_or_email: str) -> bool:
+def request_password_reset(db: Session, email: str) -> bool:
     """Request password reset - convenience function"""
     service = UserService(db)
-    return service.request_password_reset(username_or_email)
+    return service.request_password_reset(email)
 
 
 def reset_password(db: Session, token: str, new_password: str) -> bool:
@@ -388,3 +441,9 @@ def get_user_by_reset_token(db: Session, token: str) -> Optional[User]:
     """Get user by reset token - convenience function"""
     service = UserService(db)
     return service.get_user_by_reset_token(token)
+
+
+def oauth_login(db: Session, oauth_data: OAuthData) -> dict:
+    """OAuth login - convenience function"""
+    service = UserService(db)
+    return service.oauth_login(oauth_data)

@@ -13,7 +13,6 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
 
     # User identification fields
-    username = Column(String(50), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(100), nullable=False)
 
@@ -51,16 +50,13 @@ class User(Base):
     # Indexes for better query performance
     __table_args__ = (
         Index('idx_user_email_active', 'email', 'is_active'),
-        Index('idx_user_username_active', 'username', 'is_active'),
         Index('idx_user_created_at', 'created_at'),
         Index('idx_user_last_login', 'last_login'),
-        UniqueConstraint('username', name='uq_user_username'),
         UniqueConstraint('email', name='uq_user_email'),
-        CheckConstraint('length(username) >= 3', name='ck_user_username_length'),
         CheckConstraint('length(email) >= 5', name='ck_user_email_length'),
         CheckConstraint('length(name) >= 2', name='ck_user_name_length'),
     )
 
     def __repr__(self):
-        return f"<User(id={self.id}, username='{self.username}', email='{self.email}')>"
+        return f"<User(id={self.id}, email='{self.email}')>"
 

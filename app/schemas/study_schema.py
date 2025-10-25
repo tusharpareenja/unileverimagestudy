@@ -158,6 +158,7 @@ class StudyPublicMinimal(BaseModel):
     title: str
     study_type: str
     respondents_target: int
+    tasks_per_respondent: int
     status: str
     orientation_text: str
     language: str

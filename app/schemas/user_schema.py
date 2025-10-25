@@ -5,37 +5,18 @@ import uuid
 
 
 class UserLogin(BaseModel):
-    """Schema for user login - accepts username or email"""
-    username_or_email: str = Field(..., min_length=3, description="Username or email address")
+    """Schema for user login - accepts email only"""
+    email: EmailStr = Field(..., description="User email address")
     password: str = Field(..., min_length=6, description="User password")
-
-    @validator('username_or_email')
-    def validate_username_or_email(cls, v):
-        if '@' in v:
-            # If contains @, validate as email
-            if len(v) < 5:
-                raise ValueError('Email must be at least 5 characters long')
-        else:
-            # If no @, validate as username
-            if len(v) < 3:
-                raise ValueError('Username must be at least 3 characters long')
-        return v.lower().strip()
 
 
 class UserRegister(BaseModel):
     """Schema for user registration"""
-    username: str = Field(..., min_length=3, max_length=50, description="Unique username")
     email: EmailStr = Field(..., description="User email address")
     name: str = Field(..., min_length=2, max_length=100, description="Full name")
     password: str = Field(..., min_length=6, description="User password")
     phone: Optional[str] = Field(None, max_length=20, description="Phone number")
     date_of_birth: Optional[datetime] = Field(None, description="Date of birth")
-
-    @validator('username')
-    def validate_username(cls, v):
-        if not v.replace('_', '').replace('-', '').isalnum():
-            raise ValueError('Username can only contain letters, numbers, hyphens, and underscores')
-        return v.lower().strip()
 
     @validator('name')
     def validate_name(cls, v):
@@ -45,7 +26,6 @@ class UserRegister(BaseModel):
 class UserResponse(BaseModel):
     """Schema for user response (without sensitive data)"""
     id: uuid.UUID
-    username: str
     email: str
     name: str
     phone: Optional[str]
@@ -111,19 +91,7 @@ class UserLoginResponse(BaseModel):
 
 class ForgotPasswordRequest(BaseModel):
     """Schema for forgot password request"""
-    username_or_email: str = Field(..., min_length=3, description="Username or email address")
-
-    @validator('username_or_email')
-    def validate_username_or_email(cls, v):
-        if '@' in v:
-            # If contains @, validate as email
-            if len(v) < 5:
-                raise ValueError('Email must be at least 5 characters long')
-        else:
-            # If no @, validate as username
-            if len(v) < 3:
-                raise ValueError('Username must be at least 3 characters long')
-        return v.lower().strip()
+    email: EmailStr = Field(..., description="User email address")
 
 
 class ResetPasswordRequest(BaseModel):
@@ -141,6 +109,26 @@ class ResetPasswordRequest(BaseModel):
 class PasswordResetResponse(BaseModel):
     """Schema for password reset response"""
     message: str
+
+
+class OAuthData(BaseModel):
+    """Schema for OAuth login data from frontend"""
+    email: EmailStr = Field(..., description="User email from OAuth provider")
+    name: str = Field(..., min_length=2, max_length=100, description="Full name from OAuth provider")
+    provider: str = Field(..., description="OAuth provider (google, apple, etc.)")
+    provider_id: str = Field(..., description="User ID from OAuth provider")
+    profile_picture: Optional[str] = Field(None, description="Profile picture URL from OAuth provider")
+    
+    @validator('name')
+    def validate_name(cls, v):
+        return v.strip().title()
+
+
+class OAuthLoginResponse(BaseModel):
+    """Schema for OAuth login response"""
+    user: UserResponse
+    tokens: Token
+    is_new_user: bool
 
 
 # Rebuild models to resolve forward references

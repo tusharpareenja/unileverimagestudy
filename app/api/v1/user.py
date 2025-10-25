@@ -8,12 +8,13 @@ from app.db.session import get_db
 from app.schemas.user_schema import (
     UserLogin, UserRegister, UserResponse, UserUpdate, 
     PasswordChange, Token, TokenRefresh, TokenRefreshResponse,
-    UserLoginResponse, ForgotPasswordRequest, ResetPasswordRequest, PasswordResetResponse
+    UserLoginResponse, ForgotPasswordRequest, ResetPasswordRequest, PasswordResetResponse,
+    OAuthData, OAuthLoginResponse
 )
 from app.services.user import (
     authenticate_user_with_tokens, create_user_with_tokens,
     refresh_user_tokens, UserService, request_password_reset,
-    reset_password, get_user_by_reset_token
+    reset_password, get_user_by_reset_token, oauth_login
 )
 from app.core.dependencies import get_current_user, get_current_active_user
 from app.models.user_model import User
@@ -28,7 +29,7 @@ async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
     Register a new user and return user data with JWT tokens
     """
     try:
-        logger.debug("Register request: username=%s email=%s", user_data.username, user_data.email)
+        logger.debug("Register request: email=%s", user_data.email)
         result = create_user_with_tokens(db, user_data)
         return UserLoginResponse(**result)
     except ValueError as e:
@@ -49,21 +50,44 @@ async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
 @router.post("/login", response_model=UserLoginResponse)
 async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
     """
-    Login user with username/email and password, return JWT tokens
+    Login user with email and password, return JWT tokens
     """
     result = authenticate_user_with_tokens(
         db, 
-        login_data.username_or_email, 
+        login_data.email, 
         login_data.password
     )
     
     if not result:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username/email or password"
+            detail="Incorrect email or password"
         )
     
     return UserLoginResponse(**result)
+
+
+@router.post("/oauth-login", response_model=OAuthLoginResponse)
+async def oauth_login_endpoint(oauth_data: OAuthData, db: Session = Depends(get_db)):
+    """
+    OAuth login endpoint - handles both new and existing users
+    """
+    try:
+        logger.debug("OAuth login request: email=%s provider=%s", oauth_data.email, oauth_data.provider)
+        result = oauth_login(db, oauth_data)
+        return OAuthLoginResponse(**result)
+    except ValueError as e:
+        logger.info("OAuth login validation error: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.exception("OAuth login failed with unexpected error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="OAuth login failed"
+        )
 
 
 @router.post("/refresh", response_model=TokenRefreshResponse)
@@ -177,7 +201,7 @@ async def search_users(
     db: Session = Depends(get_db)
 ):
     """
-    Search users by name, username, or email
+    Search users by name or email
     """
     service = UserService(db)
     users = service.search_users(q, skip=skip, limit=limit)
@@ -225,21 +249,6 @@ async def deactivate_user(
     return {"message": "Account deactivated successfully"}
 
 
-@router.get("/check-username/{username}")
-async def check_username_available(
-    username: str,
-    db: Session = Depends(get_db)
-):
-    """
-    Check if username is available
-    """
-    service = UserService(db)
-    available = service.check_username_available(username)
-    
-    return {
-        "username": username,
-        "available": available
-    }
 
 
 @router.get("/check-email/{email}")
@@ -269,11 +278,11 @@ async def forgot_password(
     """
     try:
         # Process password reset request
-        success = request_password_reset(db, request.username_or_email)
+        success = request_password_reset(db, request.email)
         
         if success:
             return PasswordResetResponse(
-                message="If an account with that username/email exists, a password reset link has been sent."
+                message="If an account with that email exists, a password reset link has been sent."
             )
         else:
             raise HTTPException(

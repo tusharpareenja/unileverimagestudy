@@ -93,7 +93,7 @@ class StudyResponseService:
             browser_info=response_data.browser_info,
             last_activity=datetime.utcnow(),
             status='in_progress',  # Set status as in_progress when session starts
-            is_abandoned=False,    # Set to False initially, will be True after 2 hours if no activity
+            is_abandoned=False,    # Set to False initially, will be True after 15 minutes if no activity
             is_completed=False     # Set to False initially
         )
         
@@ -641,6 +641,8 @@ class StudyResponseService:
         is_complete = response.current_task_index >= (response.total_tasks_assigned or 0)
         if is_complete:
             self._mark_response_completed(response)
+            # Check if study should be auto-completed after this response completion
+            self._check_and_complete_studies()
         
         # Single commit at end
         self.db.commit()
@@ -848,6 +850,8 @@ class StudyResponseService:
             # Stop early if completed
             if response.current_task_index >= (response.total_tasks_assigned or 0):
                 self._mark_response_completed(response)
+                # Check if study should be auto-completed after this response completion
+                self._check_and_complete_studies()
                 break
 
         # Bulk insert
@@ -1571,17 +1575,20 @@ class StudyResponseService:
         # Update study counters
         self._update_study_counters(response.study_id)
         
+        # Check if study should be auto-completed
+        self._check_and_complete_studies()
+        
         # Invalidate analytics cache since data changed
         self.invalidate_analytics_cache(response.study_id)
         
         return True
     
     def check_and_mark_abandoned_sessions(self) -> int:
-        """Check for sessions that have been inactive for 2+ hours and mark them as abandoned."""
+        """Check for sessions that have been inactive for 15+ minutes and mark them as abandoned."""
         from datetime import timedelta
         
-        # Find sessions that are in_progress but haven't been active for 2+ hours
-        cutoff_time = datetime.utcnow() - timedelta(hours=2)
+        # Find sessions that are in_progress but haven't been active for 15+ minutes
+        cutoff_time = datetime.utcnow() - timedelta(minutes=15)
         
         abandoned_sessions = self.db.execute(
             select(StudyResponse)
@@ -1600,7 +1607,7 @@ class StudyResponseService:
             session.is_completed = False
             session.status = 'abandoned'
             session.abandonment_timestamp = datetime.utcnow()
-            session.abandonment_reason = 'Inactive for 2+ hours'
+            session.abandonment_reason = 'Inactive for 15+ minutes'
             count += 1
         
         if count > 0:
@@ -1610,7 +1617,91 @@ class StudyResponseService:
             for study_id in study_ids:
                 self._update_study_counters(study_id)
         
+        # Check for study completion after marking abandoned sessions
+        self._check_and_complete_studies()
+        
         return count
+    
+    def _check_and_complete_studies(self):
+        """Check if studies should be automatically marked as completed."""
+        import logging
+        from app.models.study_model import Study
+        from app.services.study import change_status_fast
+        
+        logger = logging.getLogger(__name__)
+        
+        # Find active studies that might be ready for completion
+        active_studies = self.db.execute(
+            select(Study)
+            .where(Study.status == 'active')
+        ).scalars().all()
+        
+        for study in active_studies:
+            # Get current response counts for this study
+            total_responses = self.db.execute(
+                select(func.count(StudyResponse.id))
+                .where(StudyResponse.study_id == study.id)
+            ).scalar() or 0
+            
+            completed_responses = self.db.execute(
+                select(func.count(StudyResponse.id))
+                .where(
+                    and_(
+                        StudyResponse.study_id == study.id,
+                        StudyResponse.is_completed == True
+                    )
+                )
+            ).scalar() or 0
+            
+            abandoned_responses = self.db.execute(
+                select(func.count(StudyResponse.id))
+                .where(
+                    and_(
+                        StudyResponse.study_id == study.id,
+                        StudyResponse.is_abandoned == True
+                    )
+                )
+            ).scalar() or 0
+            
+            # Check if all expected respondents have either completed or abandoned
+            expected_respondents = study.audience_segmentation.get('number_of_respondents', 0) if study.audience_segmentation else 0
+            
+            # Debug logging
+            logger.info(f"Study {study.id} completion check:")
+            logger.info(f"  - Expected respondents: {expected_respondents}")
+            logger.info(f"  - Total responses: {total_responses}")
+            logger.info(f"  - Completed: {completed_responses}")
+            logger.info(f"  - Abandoned: {abandoned_responses}")
+            logger.info(f"  - Audience segmentation: {study.audience_segmentation}")
+            
+            # Check if study should be completed
+            should_complete = False
+            completion_reason = ""
+            
+            if expected_respondents > 0:
+                # Study has explicit expected respondents
+                if (completed_responses + abandoned_responses) >= expected_respondents:
+                    should_complete = True
+                    completion_reason = f"all {expected_respondents} expected respondents completed/abandoned"
+                else:
+                    logger.info(f"Study {study.id} needs {expected_respondents - (completed_responses + abandoned_responses)} more respondents to complete")
+            else:
+                # No expected respondents set, check if all current respondents have completed/abandoned
+                if total_responses > 0 and (completed_responses + abandoned_responses) >= total_responses:
+                    should_complete = True
+                    completion_reason = f"all {total_responses} current respondents completed/abandoned"
+                else:
+                    logger.info(f"Study {study.id} has {total_responses} total responses, {completed_responses} completed, {abandoned_responses} abandoned")
+            
+            if should_complete:
+                logger.info(f"Study {study.id} auto-completion triggered: {completion_reason}")
+                
+                # Mark study as completed
+                try:
+                    change_status_fast(self.db, study.id, study.creator_id, 'completed')
+                    logger.info(f"Study {study.id} automatically marked as completed")
+                except Exception as e:
+                    logger.error(f"Failed to auto-complete study {study.id}: {e}")
     
     def update_user_details(self, session_id: str, user_details: Dict[str, Any]) -> bool:
         """Update user details for a study session."""

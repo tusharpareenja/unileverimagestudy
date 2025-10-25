@@ -66,11 +66,11 @@ def verify_token(token: str, token_type: str = "access") -> Optional[dict]:
         return None
 
 
-def create_token_pair(user_id: uuid.UUID, username: str) -> dict:
+def create_token_pair(user_id: uuid.UUID, email: str) -> dict:
     """Create both access and refresh tokens for a user"""
     token_data = {
         "sub": str(user_id),
-        "username": username
+        "email": email
     }
     
     access_token = create_access_token(token_data)
@@ -92,7 +92,7 @@ def refresh_access_token(refresh_token: str) -> Optional[dict]:
     # Create new access token with same user data
     token_data = {
         "sub": payload.get("sub"),
-        "username": payload.get("username")
+        "email": payload.get("email")
     }
     
     new_access_token = create_access_token(token_data)
