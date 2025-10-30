@@ -1533,10 +1533,10 @@ class StudyResponseService:
         header.extend([question_id_to_col[qid] for qid in question_id_to_col])
         header.extend(["Gender", "Age", "Task"])
         if grid_columns_opt:
-            # Sanitize headers minimally for CSV (replace commas with underscores)
+            # Sanitize headers minimally for CSV and use hyphens between category and element
             def sanitize_header(s: str) -> str:
                 return s.replace(',', '_').replace('\n', ' ').replace('\r', ' ').strip()
-            header.extend([sanitize_header(f"{c}_{e}") for (c, e, _) in grid_columns_opt])
+            header.extend([sanitize_header(f"{c}-{e}").replace('_', '-').replace(' ', '-') for (c, e, _) in grid_columns_opt])
         elif layer_keys:
             # Replace underscores with hyphens for layer headers (like category but with hyphens)
             header.extend([layer_key_to_header.get(k, k.replace('_', '-').replace(' ', '-')) for k in layer_keys])
