@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.models.user_model import User
 from app.models.study_model import Study
 from app.schemas.study_schema import (
-    StudyCreate, StudyUpdate, StudyOut, StudyListItem,
+    StudyCreate, StudyUpdate, StudyOut, StudyListItem, StudyLaunchOut,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus,
     GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal, StudyBasicDetails
 )
@@ -738,7 +738,7 @@ def generate_tasks_from_body_endpoint(
         raise HTTPException(status_code=400, detail="Unsupported study_type")
 
 
-@router.put("/{study_id}/launch", response_model=StudyOut)
+@router.put("/{study_id}/launch", response_model=StudyLaunchOut)
 def update_and_launch_study_endpoint(
     study_id: UUID,
     payload: StudyUpdate,
@@ -750,13 +750,23 @@ def update_and_launch_study_endpoint(
     Uses optimized functions to minimize database round trips and avoid unnecessary data loading.
     Does not regenerate tasks; intended for non-task-affecting edits (e.g., title, text).
     """
-    # Use ultra-optimized function that combines update and launch in a single transaction
-    study = study_service.update_and_launch_study_fast(
-        db=db,
-        study_id=study_id,
-        owner_id=current_user.id,
-        payload=payload,
-    )
+    # Check if payload is empty (launch-only)
+    payload_dict = payload.model_dump(exclude_none=True)
+    if not payload_dict:
+        # Ultra-fast launch-only path
+        study = study_service.launch_study_ultra_fast(
+            db=db,
+            study_id=study_id,
+            owner_id=current_user.id,
+        )
+    else:
+        # Use optimized function that combines update and launch in a single transaction
+        study = study_service.update_and_launch_study_fast(
+            db=db,
+            study_id=study_id,
+            owner_id=current_user.id,
+            payload=payload,
+        )
     return study
 
 

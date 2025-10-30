@@ -117,6 +117,26 @@ def _load_owned_study_minimal(db: Session, study_id: UUID, owner_id: UUID, for_u
         raise HTTPException(status_code=404, detail="Study not found or access denied.")
     return study
 
+def _load_owned_study_launch_only(db: Session, study_id: UUID, owner_id: UUID) -> Study:
+    """Ultra-minimal loading for launch-only operations - only loads essential fields."""
+    stmt = (
+        select(Study.id, Study.title, Study.status, Study.launched_at, Study.creator_id)
+        .where(Study.id == study_id, Study.creator_id == owner_id)
+        .with_for_update()
+    )
+    result = db.execute(stmt).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="Study not found or access denied.")
+    
+    # Create minimal study object with only needed fields
+    study = Study()
+    study.id = result.id
+    study.title = result.title
+    study.status = result.status
+    study.launched_at = result.launched_at
+    study.creator_id = result.creator_id
+    return study
+
 # ---------- CRUD ----------
 
 def create_study(
@@ -766,9 +786,6 @@ def update_and_launch_study_fast(
     payload: StudyUpdate
 ) -> Study:
     """Ultra-optimized function that combines update and launch in a single transaction."""
-    logger.info(f"update_and_launch_study_fast called for study {study_id} by user {owner_id}")
-    logger.info(f"Payload: {payload.model_dump(exclude_none=True)}")
-    
     # Load study with minimal data for maximum performance
     study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
     
@@ -809,6 +826,45 @@ def update_and_launch_study_fast(
     # Single commit for both update and launch
     db.commit()
     db.refresh(study)
+    return study
+
+def launch_study_ultra_fast(
+    db: Session,
+    study_id: UUID,
+    owner_id: UUID
+) -> Study:
+    """Ultra-fast launch-only function - no updates, just launch."""
+    # Use direct SQL UPDATE for maximum speed
+    from sqlalchemy import update
+    from datetime import datetime
+    
+    now = datetime.utcnow()
+    stmt = (
+        update(Study)
+        .where(Study.id == study_id, Study.creator_id == owner_id)
+        .values(
+            status='active',
+            launched_at=now,
+            share_url=_build_share_url(None, str(study_id)),
+            updated_at=now
+        )
+        .returning(Study.id, Study.title, Study.status, Study.launched_at, Study.share_url, Study.updated_at)
+    )
+    
+    result = db.execute(stmt).first()
+    if not result:
+        raise HTTPException(status_code=404, detail="Study not found or access denied.")
+    
+    # Create minimal study object for response
+    study = Study()
+    study.id = result.id
+    study.title = result.title
+    study.status = result.status
+    study.launched_at = result.launched_at
+    study.share_url = result.share_url
+    study.updated_at = result.updated_at
+    
+    db.commit()
     return study
 
 def delete_study(db: Session, study_id: UUID, owner_id: UUID) -> None:

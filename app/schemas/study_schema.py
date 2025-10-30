@@ -217,6 +217,17 @@ class StudyOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class StudyLaunchOut(BaseModel):
+    """Lightweight response model for study launch operations - excludes heavy fields like tasks"""
+    id: UUID
+    title: str
+    status: StudyStatus
+    share_url: Optional[str] = None
+    launched_at: Optional[datetime] = None
+    updated_at: datetime
+    
+    model_config = ConfigDict(from_attributes=True)
+
 # ---------- Small helper responses ----------
 
 class ChangeStatusPayload(BaseModel):

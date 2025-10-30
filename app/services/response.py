@@ -1323,14 +1323,58 @@ class StudyResponseService:
 
         # Discover layer keys across all tasks (only for layer studies). For grid we add per-element headers elsewhere.
         layer_keys_set: set[str] = set()
+        # Map legacy layer-name prefixes (from keys) to observed z-index so we can
+        # preserve ordering even if layer names were renamed after tasks were generated.
+        legacy_prefix_to_z_index: Dict[str, int] = {}
+        # Map (legacy_prefix, one_based_index) -> discovered image name from task content
+        discovered_image_names: Dict[Tuple[str, int], str] = {}
         synthetic_layer_len = 0
         if str(study.study_type) == 'layer':
             for t in all_tasks:
-                data = t.layers_shown_in_task or t.elements_shown_content
-                if isinstance(data, dict):
-                    for k in data.keys():
+                # Consider BOTH visibility map and content map so we do not miss z-index/name info
+                vis_map = t.layers_shown_in_task if isinstance(t.layers_shown_in_task, dict) else {}
+                content_map = t.elements_shown_content if isinstance(t.elements_shown_content, dict) else {}
+
+                # Union of keys from both maps
+                iter_items: List[Tuple[str, Any]] = []
+                try:
+                    iter_items.extend(list(vis_map.items()))
+                except Exception:
+                    pass
+                try:
+                    # Prefer content map later for z-index/name overrides
+                    iter_items.extend(list(content_map.items()))
+                except Exception:
+                    pass
+
+                if iter_items:
+                    for k, v in iter_items:
                         if isinstance(k, str):
                             layer_keys_set.add(k)
+                            # Capture z-index if present to map legacy prefix -> z-index
+                            try:
+                                # Keys are like "LayerName_Index"
+                                if '_' in k:
+                                    prefix = k.rsplit('_', 1)[0]
+                                else:
+                                    prefix = k
+                                if isinstance(v, dict):
+                                    z_val = v.get('z_index')
+                                    if isinstance(z_val, int):
+                                        # First seen wins; they should be consistent for a given prefix
+                                        legacy_prefix_to_z_index.setdefault(prefix, z_val)
+                                    # Capture discovered image name for this exact key index when available
+                                    try:
+                                        idx_str = k.rsplit('_', 1)[1] if '_' in k else ''
+                                        if idx_str.isdigit():
+                                            img_idx = int(idx_str)
+                                            nm = v.get('name') or v.get('alt_text')
+                                            if isinstance(nm, str) and nm.strip():
+                                                discovered_image_names[(prefix, img_idx)] = nm.strip()
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
                 elif isinstance(data, list):
                     try:
                         synthetic_layer_len = max(synthetic_layer_len, len(data))
@@ -1347,70 +1391,124 @@ class StudyResponseService:
                 return (int(m1.group(1)), 0)
             return (9999, 9999)
 
-        # Sort layer keys by database layer order instead of alphabetical
+        # Sort layer keys by the layer's z-index (robust to later renames); fallback to DB order
         layer_keys: List[str] = []
         if layer_keys_set:
             # Get layer structure from database to create proper ordering
             from app.models.study_model import StudyLayer, LayerImage
-            
-            # Get layers ordered by their order field
+
             layers = self.db.execute(
                 select(StudyLayer)
                 .where(StudyLayer.study_id == study_id)
                 .order_by(StudyLayer.order)
             ).scalars().all()
-            
-            # Create ordered list of layer names based on database order
-            ordered_layer_names = [layer.name for layer in layers]
-            
-            # Sort layer keys by database order
+
+            # Index DB layers by z-index and by name for fallbacks
+            z_index_to_layer: Dict[int, StudyLayer] = {}
+            name_to_layer: Dict[str, StudyLayer] = {}
+            for L in layers:
+                z_index_to_layer[getattr(L, 'z_index', 0)] = L
+                name_to_layer[L.name] = L
+
+            # Extract unique legacy prefixes from observed keys
+            def _prefix(k: str) -> str:
+                return k.rsplit('_', 1)[0] if '_' in k else k
+
+            unique_prefixes = sorted({ _prefix(k) for k in layer_keys_set })
+
+            # Compute an ordering key for each prefix: prefer z-index, else the DB order based on name match
+            name_to_order: Dict[str, int] = {L.name: i for i, L in enumerate(layers, start=1)}
+
+            def _prefix_sort_key(p: str) -> tuple[int, int, str]:
+                # 1) primary: z-index when known
+                z = legacy_prefix_to_z_index.get(p)
+                if isinstance(z, int):
+                    return (0, z, p)
+                # 2) secondary: DB order when prefix matches current layer name
+                ord_val = name_to_order.get(p)
+                if isinstance(ord_val, int):
+                    return (1, ord_val, p)
+                # 3) fallback: large value + alpha to keep deterministic
+                return (9, 9999, p)
+
+            ordered_prefixes = sorted(unique_prefixes, key=_prefix_sort_key)
+
+            # Build ordered keys per prefix, sorted by their one-based image index suffix
             layer_keys = []
-            for layer_name in ordered_layer_names:
-                # Find all keys that start with this layer name
-                matching_keys = [key for key in layer_keys_set if key.startswith(layer_name + "_")]
-                # Sort by image number
-                matching_keys.sort(key=lambda x: int(x.split("_")[-1]) if x.split("_")[-1].isdigit() else 0)
+            for p in ordered_prefixes:
+                matching_keys = [key for key in layer_keys_set if key.startswith(p + "_")]
+                matching_keys.sort(key=lambda x: int(x.rsplit("_", 1)[-1]) if x.rsplit("_", 1)[-1].isdigit() else 0)
                 layer_keys.extend(matching_keys)
-            
-            # Add any remaining keys that don't match layer names
-            remaining_keys = [key for key in layer_keys_set if key not in layer_keys]
-            layer_keys.extend(remaining_keys)
         # If no explicit dict keys found but list-based structure exists, synthesize generic keys Layer_1..N
         if not layer_keys and synthetic_layer_len > 0:
             layer_keys = [f"Layer_{i}" for i in range(1, synthetic_layer_len + 1)]
 
-        # Friendly headers for layer keys - use actual layer names
+        # Friendly headers for layer keys - use actual layer names with image names (like category)
         layer_key_to_header: Dict[str, str] = {}
-        if layer_keys and layer_keys_set:
-            # Get layer structure from database to create proper ordering
+        if layer_keys:
+            # Get layer structure from database
             from app.models.study_model import StudyLayer, LayerImage
-            
-            # Get layers ordered by their order field
+
             layers = self.db.execute(
                 select(StudyLayer)
                 .where(StudyLayer.study_id == study_id)
                 .order_by(StudyLayer.order)
             ).scalars().all()
-            
-            # Create mapping from layer names to their database order
-            layer_name_to_order: Dict[str, int] = {}
-            for layer_order, layer in enumerate(layers, 1):
-                layer_name_to_order[layer.name] = layer_order
-            
-            # Map discovered keys to proper layer names
+
+            # Index layers by z-index and keep their ordered images for name lookup
+            z_index_to_layer: Dict[int, StudyLayer] = {}
+            layer_id_to_images: Dict[UUID, List[LayerImage]] = {}
+            for L in layers:
+                z_index_to_layer[getattr(L, 'z_index', 0)] = L
+                imgs = self.db.execute(
+                    select(LayerImage)
+                    .where(LayerImage.layer_id == L.id)
+                    .order_by(LayerImage.order)
+                ).scalars().all()
+                layer_id_to_images[L.id] = imgs
+
+            # Map discovered keys to proper layer names with image names
+            import re
             for key in layer_keys:
-                # Extract layer name from key (e.g., "background_1" -> "background")
-                import re
                 match = re.search(r"^(.+?)_(\d+)$", key)
-                if match:
-                    layer_name = match.group(1)
-                    image_num = match.group(2)
-                    
-                    # Use the actual layer name with image number
-                    layer_key_to_header[key] = f"{layer_name}_{image_num}"
+                if not match:
+                    layer_key_to_header[key] = key.replace('_', '-')
+                    continue
+
+                legacy_prefix = match.group(1)
+                image_num = int(match.group(2))
+
+                # Resolve current layer by z-index first (robust to renames)
+                target_layer = None
+                z_val = legacy_prefix_to_z_index.get(legacy_prefix)
+                if isinstance(z_val, int):
+                    target_layer = z_index_to_layer.get(z_val)
+                # Fallback: try matching by current name
+                if target_layer is None:
+                    target_layer = next((L for L in layers if L.name == legacy_prefix), None)
+
+                # Prefer discovered image names from task content when available
+                discovered_name = discovered_image_names.get((legacy_prefix, image_num))
+                if discovered_name:
+                    header_name = f"{(target_layer.name if target_layer else legacy_prefix)}-{discovered_name}".replace('_', '-')
+                    layer_key_to_header[key] = header_name
+                    continue
+
+                if target_layer is None:
+                    # Last resort: keep legacy prefix with index
+                    layer_key_to_header[key] = f"{legacy_prefix}-{image_num}".replace('_', '-')
+                    continue
+
+                # Lookup image name by 1-based index
+                imgs = layer_id_to_images.get(target_layer.id) or []
+                image_name = imgs[image_num - 1].name if 1 <= image_num <= len(imgs) else None
+
+                if image_name:
+                    header_name = f"{target_layer.name}-{image_name}".replace('_', '-')
                 else:
-                    # Fallback to original key
-                    layer_key_to_header[key] = key
+                    header_name = f"{target_layer.name}-{image_num}".replace('_', '-')
+
+                layer_key_to_header[key] = header_name
 
         # Grid headers (CategoryName_ImageName by category order and element_id)
         grid_columns_opt: List[tuple[str, str, int]] = []  # (cat_name, element_name, one_based_index)
@@ -1440,7 +1538,8 @@ class StudyResponseService:
                 return s.replace(',', '_').replace('\n', ' ').replace('\r', ' ').strip()
             header.extend([sanitize_header(f"{c}_{e}") for (c, e, _) in grid_columns_opt])
         elif layer_keys:
-            header.extend([layer_key_to_header.get(k, k.replace(' ', '_')) for k in layer_keys])
+            # Replace underscores with hyphens for layer headers (like category but with hyphens)
+            header.extend([layer_key_to_header.get(k, k.replace('_', '-').replace(' ', '-')) for k in layer_keys])
         header.extend(["Rating", "ResponseTime"])
         yield header
 
