@@ -807,6 +807,58 @@ async def get_respondent_study_info(
     # Get tasks assigned to this specific respondent (tasks[respondent_id])
     respondent_tasks = service.get_respondent_tasks(study_id, respondent_id)
 
+    # Build layer data (with transform) and enrich respondent_tasks with transform inline
+    layers_payload = []
+    try:
+        from app.models.study_model import StudyLayer
+        from sqlalchemy.orm import selectinload
+        layers = db.execute(
+            select(StudyLayer)
+            .options(selectinload(StudyLayer.images))
+            .where(StudyLayer.study_id == study_id)
+            .order_by(StudyLayer.order)
+        ).scalars().all()
+        default_transform = {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}
+        for L in layers:
+            layers_payload.append({
+                "layer_id": L.layer_id,
+                "name": L.name,
+                "description": L.description,
+                "z_index": L.z_index,
+                "order": L.order,
+                "transform": L.transform or default_transform,
+                "images": [
+                    {
+                        "image_id": I.image_id,
+                        "name": I.name,
+                        "url": I.url,
+                        "alt_text": I.alt_text,
+                        "order": I.order,
+                    }
+                    for I in (L.images or [])
+                ],
+            })
+
+        # Enrich assigned_tasks elements_shown_content with transform copied from its layer
+        name_to_transform = {it["name"]: it["transform"] for it in layers_payload}
+
+        def _enrich_container(container: Any) -> None:
+            if isinstance(container, dict):
+                esc = container.get("elements_shown_content") or {}
+                if isinstance(esc, dict):
+                    for _, val in esc.items():
+                        if isinstance(val, dict):
+                            lname = val.get("layer_name")
+                            if lname and lname in name_to_transform:
+                                val["transform"] = name_to_transform[lname]
+            elif isinstance(container, list):
+                for item in container:
+                    _enrich_container(item)
+
+        _enrich_container(respondent_tasks)
+    except Exception:
+        pass
+
     # Build lightweight metadata: tasks_per_consumer, respondents target, background image url
     from app.models.study_model import Study as StudyModel
     meta_row = db.execute(
@@ -815,13 +867,16 @@ async def get_respondent_study_info(
     ).first()
     background_image_url = None
     respondents_target = 0
+    aspect_ratio = None
     if meta_row:
         background_image_url = meta_row.background_image_url
         try:
             seg = meta_row.audience_segmentation or {}
             respondents_target = int(seg.get('number_of_respondents') or 0)
+            aspect_ratio = seg.get('aspect_ratio')
         except Exception:
             respondents_target = 0
+            aspect_ratio = None
     tasks_per_consumer = len(respondent_tasks or [])
 
     return {
@@ -840,6 +895,7 @@ async def get_respondent_study_info(
             "tasks_per_consumer": tasks_per_consumer,
             "number_of_respondents": respondents_target,
             "background_image_url": background_image_url,
+            "aspect_ratio": aspect_ratio,
         },
         "classification_questions": [
             {

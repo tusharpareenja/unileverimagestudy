@@ -151,6 +151,20 @@ def create_study(
 
     share_token = _generate_share_token()
     
+    # Persist aspect_ratio inside audience_segmentation JSON to avoid migrations
+    audience_segmentation_json = payload.audience_segmentation.model_dump(exclude_none=True)
+    # Prefer top-level aspect_ratio; else accept inside segmentation
+    ar_top = getattr(payload, 'aspect_ratio', None)
+    ar_in_seg = audience_segmentation_json.get('aspect_ratio') if isinstance(audience_segmentation_json, dict) else None
+    try:
+        if ar_top:
+            audience_segmentation_json['aspect_ratio'] = ar_top
+        elif ar_in_seg:
+            # already present; keep as-is
+            pass
+    except Exception:
+        pass
+
     study = Study(
         id=uuid4(),
         title=payload.title,
@@ -161,7 +175,7 @@ def create_study(
         study_type=payload.study_type,  # enum compatible
         background_image_url=payload.background_image_url,
         rating_scale=payload.rating_scale.model_dump(),
-        audience_segmentation=payload.audience_segmentation.model_dump(exclude_none=True),
+        audience_segmentation=audience_segmentation_json,
         tasks=None,
         creator_id=creator_id,
         status='draft',
@@ -245,7 +259,8 @@ def create_study(
                     name=layer.name,
                     description=layer.description,
                     z_index=layer.z_index,
-                    order=layer.order
+                    order=layer.order,
+                    transform=layer.transform.model_dump() if getattr(layer, 'transform', None) else None
                 ))
             if new_layers:
                 db.bulk_save_objects(new_layers)
@@ -591,7 +606,18 @@ def update_study(
         _validate_rating_scale(payload.rating_scale.model_dump())
         study.rating_scale = payload.rating_scale.model_dump()
     if payload.audience_segmentation is not None:
-        study.audience_segmentation = payload.audience_segmentation.model_dump(exclude_none=True)
+        # Merge with existing to preserve aspect_ratio when omitted
+        existing_seg = study.audience_segmentation or {}
+        incoming_seg = payload.audience_segmentation.model_dump(exclude_none=True)
+        merged_seg = {**existing_seg, **incoming_seg}
+        # If top-level aspect_ratio is provided, override; otherwise preserve existing
+        ar_top = getattr(payload, 'aspect_ratio', None)
+        if ar_top:
+            merged_seg['aspect_ratio'] = ar_top
+        elif 'aspect_ratio' not in incoming_seg and 'aspect_ratio' in existing_seg:
+            # Preserve existing aspect_ratio if not in incoming payload
+            merged_seg['aspect_ratio'] = existing_seg['aspect_ratio']
+        study.audience_segmentation = merged_seg
 
     # Replace children collections if provided
     if payload.elements is not None:
@@ -657,7 +683,8 @@ def update_study(
                 name=layer.name,
                 description=layer.description,
                 z_index=layer.z_index,
-                order=layer.order
+                order=layer.order,
+                transform=layer.transform.model_dump() if getattr(layer, 'transform', None) else None
             )
             db.add(layer_row)
             db.flush()
@@ -762,7 +789,15 @@ def update_study_fast(
         _validate_rating_scale(payload.rating_scale.model_dump())
         study.rating_scale = payload.rating_scale.model_dump()
     if payload.audience_segmentation is not None:
-        study.audience_segmentation = payload.audience_segmentation.model_dump(exclude_none=True)
+        # Merge with existing to avoid dropping keys like aspect_ratio when omitted
+        existing_seg = study.audience_segmentation or {}
+        incoming_seg = payload.audience_segmentation.model_dump(exclude_none=True)
+        merged_seg = {**existing_seg, **incoming_seg}
+        # If top-level aspect_ratio is provided, override; otherwise preserve existing
+        ar_top = getattr(payload, 'aspect_ratio', None)
+        if ar_top:
+            merged_seg['aspect_ratio'] = ar_top
+        study.audience_segmentation = merged_seg
 
     # For fast updates, we only handle simple scalar fields
     # Complex operations (elements, layers, classification_questions) fall back to full loading
@@ -806,7 +841,18 @@ def update_and_launch_study_fast(
         _validate_rating_scale(payload.rating_scale.model_dump())
         study.rating_scale = payload.rating_scale.model_dump()
     if payload.audience_segmentation is not None:
-        study.audience_segmentation = payload.audience_segmentation.model_dump(exclude_none=True)
+        # Merge to preserve existing keys (e.g., aspect_ratio) when omitted in update
+        existing_seg = study.audience_segmentation or {}
+        incoming_seg = payload.audience_segmentation.model_dump(exclude_none=True)
+        merged_seg = {**existing_seg, **incoming_seg}
+        # If top-level aspect_ratio is provided, override; otherwise preserve existing
+        ar_top = getattr(payload, 'aspect_ratio', None)
+        if ar_top:
+            merged_seg['aspect_ratio'] = ar_top
+        elif 'aspect_ratio' not in incoming_seg and 'aspect_ratio' in existing_seg:
+            # Explicitly preserve existing aspect_ratio if not in incoming payload
+            merged_seg['aspect_ratio'] = existing_seg['aspect_ratio']
+        study.audience_segmentation = merged_seg
 
     # Handle complex updates that require full loading
     if payload.elements is not None or payload.study_layers is not None or payload.classification_questions is not None:

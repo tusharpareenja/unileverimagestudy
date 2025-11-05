@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any, Literal
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Any, Dict, Optional
 
 StudyType = Literal['grid', 'layer']
@@ -24,6 +24,8 @@ class AudienceSegmentation(BaseModel):
     country: Optional[str] = None
     gender_distribution: Optional[Dict[str, float]] = None
     age_distribution: Optional[Dict[str, float]] = None
+    # Allow aspect ratio to be sent inside segmentation as well
+    aspect_ratio: Optional[str] = None
 
 class StudyElementIn(BaseModel):
     element_id: UUID  # UUID instead of string
@@ -50,6 +52,22 @@ class StudyCategoryOut(StudyCategoryIn):
     id: UUID
     model_config = ConfigDict(from_attributes=True)
 
+class Transform(BaseModel):
+    x: float = Field(ge=0.0, le=100.0)
+    y: float = Field(ge=0.0, le=100.0)
+    width: float = Field(gt=0.0, le=100.0)
+    height: float = Field(gt=0.0, le=100.0)
+
+    @field_validator('x', 'y', 'width', 'height')
+    @classmethod
+    def _clamp_percentage(cls, v: float) -> float:
+        # Clamp to [0, 100] while preserving > 0 for width/height via Field constraints
+        if v < 0.0:
+            return 0.0
+        if v > 100.0:
+            return 100.0
+        return float(v)
+
 class LayerImageIn(BaseModel):
     image_id: str = Field(..., max_length=100)
     name: str = Field(..., max_length=100)
@@ -67,6 +85,8 @@ class StudyLayerIn(BaseModel):
     description: Optional[str] = None
     z_index: int
     order: int
+    # Layer-level transform: percentages 0-100 relative to container
+    transform: Optional[Transform] = None
     images: List[LayerImageIn] = Field(default_factory=list)
 
 class StudyLayerOut(BaseModel):
@@ -76,6 +96,7 @@ class StudyLayerOut(BaseModel):
     description: Optional[str] = None
     z_index: int
     order: int
+    transform: Optional[Transform] = None
     images: List[LayerImageOut] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
 
@@ -109,6 +130,8 @@ class StudyBase(BaseModel):
     study_type: StudyType
     # Optional global background image URL to render behind all tasks
     background_image_url: Optional[str] = None
+    # Optional aspect ratio for layer studies, e.g., "3:4", "4:3"
+    aspect_ratio: Optional[str] = Field(default=None, description="Aspect ratio string like 3:4 or 4:3")
     rating_scale: RatingScale
     audience_segmentation: AudienceSegmentation
 
@@ -128,6 +151,8 @@ class StudyUpdate(BaseModel):
     background_image_url: Optional[str] = None
     rating_scale: Optional[RatingScale] = None
     audience_segmentation: Optional[AudienceSegmentation] = None
+    # Optional aspect ratio for layer studies, e.g., "3:4", "4:3"
+    aspect_ratio: Optional[str] = Field(default=None, description="Aspect ratio string like 3:4 or 4:3")
     # Replacing full collections (server should decide whether allowed while active)
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
@@ -190,6 +215,7 @@ class StudyOut(BaseModel):
     orientation_text: str
     study_type: StudyType
     background_image_url: Optional[str] = None
+    aspect_ratio: Optional[str] = None
     rating_scale: RatingScale
     audience_segmentation: AudienceSegmentation
 
@@ -255,6 +281,7 @@ class GenerateTasksRequest(BaseModel):
     main_question: Optional[str] = None
     orientation_text: Optional[str] = None
     background_image_url: Optional[str] = None
+    aspect_ratio: Optional[str] = None
     rating_scale: Optional[RatingScale] = None
     classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
     categories: Optional[List[StudyCategoryIn]] = None

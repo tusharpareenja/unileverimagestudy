@@ -131,6 +131,8 @@ class StudyLayer(Base):
     description = Column(Text, nullable=True)
     z_index = Column(Integer, nullable=False)
     order = Column(Integer, nullable=False)
+    # Layer-level transform percentages {x,y,width,height}
+    transform = Column(JSONB, nullable=True)
 
     study = relationship("Study", back_populates="layers", lazy="selectin")
     images = relationship("LayerImage", back_populates="layer", cascade="all, delete-orphan", lazy="selectin")

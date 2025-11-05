@@ -130,6 +130,7 @@ def _ensure_study_exists(payload: GenerateTasksRequest, db: Session, current_use
                 orientation_text=payload.orientation_text,
                 study_type=payload.study_type,
                 background_image_url=payload.background_image_url,
+                aspect_ratio=payload.aspect_ratio,
                 rating_scale=payload.rating_scale,
                 audience_segmentation=payload.audience_segmentation,
                 categories=payload.categories,
@@ -154,7 +155,14 @@ def create_study_endpoint(
         payload=payload,
         base_url_for_share=settings.BASE_URL,
     )
-    return study
+    # Inject aspect_ratio from audience_segmentation for output
+    try:
+        ar = (study.audience_segmentation or {}).get('aspect_ratio')
+        out = StudyOut.model_validate(study).model_dump()
+        out['aspect_ratio'] = ar
+        return out
+    except Exception:
+        return study
 
 
 @router.get("", response_model=List[StudyListItem])
@@ -205,7 +213,14 @@ def get_study_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    return study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+    study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+    try:
+        ar = (study.audience_segmentation or {}).get('aspect_ratio')
+        out = StudyOut.model_validate(study).model_dump()
+        out['aspect_ratio'] = ar
+        return out
+    except Exception:
+        return study
 
 
 @router.get("/{study_id}/basic", response_model=StudyBasicDetails)
@@ -325,7 +340,13 @@ def get_study_public_details_endpoint(
             status_code=404, 
             detail="Study not found or not publicly accessible"
         )
-    return study
+    try:
+        ar = (study.audience_segmentation or {}).get('aspect_ratio')
+        out = StudyOut.model_validate(study).model_dump()
+        out['aspect_ratio'] = ar
+        return out
+    except Exception:
+        return study
 
 
 @router.get("/share/details")
@@ -585,6 +606,7 @@ def generate_tasks_from_body_endpoint(
                 orientation_text=payload.orientation_text,
                 study_type=payload.study_type,
                 background_image_url=payload.background_image_url,
+                aspect_ratio=payload.aspect_ratio,
                 rating_scale=payload.rating_scale,
                 audience_segmentation=payload.audience_segmentation,
                 categories=payload.categories,
@@ -733,7 +755,16 @@ def generate_tasks_from_body_endpoint(
         # Persist tasks to draft study
         study_row.tasks = result.get('tasks', {})
         db.commit()
-        return GenerateTasksResult(tasks=result.get('tasks', {}), metadata={**result.get('metadata', {}), "study_id": str(study_row.id)})
+        # Include aspect_ratio in metadata if present (from study_row.audience_segmentation)
+        ar = None
+        try:
+            ar = (study_row.audience_segmentation or {}).get('aspect_ratio')
+        except Exception:
+            ar = None
+        meta = {**result.get('metadata', {}), "study_id": str(study_row.id)}
+        if ar:
+            meta['aspect_ratio'] = ar
+        return GenerateTasksResult(tasks=result.get('tasks', {}), metadata=meta)
     else:
         raise HTTPException(status_code=400, detail="Unsupported study_type")
 
@@ -873,17 +904,71 @@ def get_task_generation_result(
             detail=f"Job is not completed yet. Current status: {job.status.value}"
         )
     
-    # Get the study with the generated tasks
+    # Get the study with the generated tasks (includes layers and images)
     study = study_service.get_study(db=db, study_id=job.study_id, owner_id=current_user.id)
-    
+
+    # Prepare lightweight layer metadata including transform
+    layers = []
+    try:
+        for L in (study.layers or []):
+            default_transform = {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}
+            layers.append({
+                "layer_id": L.layer_id,
+                "name": L.name,
+                "description": L.description,
+                "z_index": L.z_index,
+                "order": L.order,
+                "transform": L.transform or default_transform,
+                "images": [
+                    {
+                        "image_id": I.image_id,
+                        "name": I.name,
+                        "url": I.url,
+                        "alt_text": I.alt_text,
+                        "order": I.order,
+                    }
+                    for I in (L.images or [])
+                ],
+            })
+    except Exception:
+        # If any unexpected serialization issue occurs, fall back without layers
+        layers = []
+
+    # Enrich tasks with transform inside each non-null elements_shown_content entry
+    enriched_tasks = study.tasks or {}
+    try:
+        # Build layer_name -> transform map (default when missing)
+        transform_map = {}
+        for L in (study.layers or []):
+            default_transform = {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}
+            transform_map[L.name] = (L.transform or default_transform)
+
+        new_tasks = {}
+        for respondent_id, task_list in (enriched_tasks.items() if isinstance(enriched_tasks, dict) else {}).items():
+            new_task_list = []
+            for task in task_list:
+                esc = task.get("elements_shown_content") or {}
+                for key, val in esc.items():
+                    if isinstance(val, dict):
+                        layer_name = val.get("layer_name")
+                        if layer_name and layer_name in transform_map:
+                            val["transform"] = transform_map[layer_name]
+                new_task_list.append(task)
+            new_tasks[respondent_id] = new_task_list
+        enriched_tasks = new_tasks
+    except Exception:
+        # On any enrichment error, return original tasks
+        enriched_tasks = study.tasks
+
     return {
         "job_id": job.job_id,
         "study_id": job.study_id,
         "status": job.status.value,
-        "tasks": study.tasks,
+        "tasks": enriched_tasks,
         "metadata": {
             "total_respondents": len(study.tasks) if study.tasks else 0,
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,
             "message": "Task generation completed successfully"
-        }
+        },
+        "layers": layers
     }
