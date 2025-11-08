@@ -375,6 +375,10 @@ class StudyResponseService:
         self.db.add(new_response)
         self.db.commit()
         
+        # Check if study should be auto-completed immediately after new response is created
+        # This ensures immediate completion when total_responses equals expected_respondents
+        self._check_and_complete_studies()
+        
         # Return immediately without refresh or counter updates
         return StartStudyResponse(
             session_id=session_id,
@@ -1722,20 +1726,25 @@ class StudyResponseService:
         return count
     
     def _check_and_complete_studies(self):
-        """Check if studies should be automatically marked as completed."""
+        """Check if studies should be automatically marked as completed.
+        When total_responses equals expected_respondents, immediately mark study as complete
+        regardless of current status (active, paused, etc.).
+        Also marks any in_progress responses as abandoned when study is completed.
+        """
         import logging
         from app.models.study_model import Study
         from app.services.study import change_status_fast
         
         logger = logging.getLogger(__name__)
         
-        # Find active studies that might be ready for completion
-        active_studies = self.db.execute(
+        # Check studies that are not already completed - user wants immediate completion regardless of status
+        # (active, paused, draft) but not already completed
+        all_studies = self.db.execute(
             select(Study)
-            .where(Study.status == 'active')
+            .where(Study.status.in_(['active', 'paused', 'draft']))
         ).scalars().all()
         
-        for study in active_studies:
+        for study in all_studies:
             # Get current response counts for this study
             total_responses = self.db.execute(
                 select(func.count(StudyResponse.id))
@@ -1771,19 +1780,19 @@ class StudyResponseService:
             logger.info(f"  - Total responses: {total_responses}")
             logger.info(f"  - Completed: {completed_responses}")
             logger.info(f"  - Abandoned: {abandoned_responses}")
-            logger.info(f"  - Audience segmentation: {study.audience_segmentation}")
+            logger.info(f"  - Current status: {study.status}")
             
             # Check if study should be completed
             should_complete = False
             completion_reason = ""
             
             if expected_respondents > 0:
-                # Study has explicit expected respondents
-                if (completed_responses + abandoned_responses) >= expected_respondents:
+                # Study has explicit expected respondents - check if total_responses equals expected
+                if total_responses >= expected_respondents:
                     should_complete = True
-                    completion_reason = f"all {expected_respondents} expected respondents completed/abandoned"
+                    completion_reason = f"total responses ({total_responses}) reached expected respondents ({expected_respondents})"
                 else:
-                    logger.info(f"Study {study.id} needs {expected_respondents - (completed_responses + abandoned_responses)} more respondents to complete")
+                    logger.info(f"Study {study.id} needs {expected_respondents - total_responses} more respondents to complete")
             else:
                 # No expected respondents set, check if all current respondents have completed/abandoned
                 if total_responses > 0 and (completed_responses + abandoned_responses) >= total_responses:
@@ -1795,10 +1804,33 @@ class StudyResponseService:
             if should_complete:
                 logger.info(f"Study {study.id} auto-completion triggered: {completion_reason}")
                 
-                # Mark study as completed
+                # First, mark any in_progress responses as abandoned when study is being completed
+                in_progress_responses = self.db.execute(
+                    select(StudyResponse)
+                    .where(
+                        and_(
+                            StudyResponse.study_id == study.id,
+                            StudyResponse.status == 'in_progress',
+                            StudyResponse.is_completed == False
+                        )
+                    )
+                ).scalars().all()
+                
+                if in_progress_responses:
+                    logger.info(f"Marking {len(in_progress_responses)} in_progress responses as abandoned for study {study.id}")
+                    for response in in_progress_responses:
+                        response.is_abandoned = True
+                        response.is_completed = False
+                        response.status = 'abandoned'
+                        response.abandonment_timestamp = datetime.utcnow()
+                        response.abandonment_reason = 'Study completed - response was in progress'
+                        response.last_activity = datetime.utcnow()
+                    self.db.commit()
+                
+                # Mark study as completed (regardless of current status)
                 try:
                     change_status_fast(self.db, study.id, study.creator_id, 'completed')
-                    logger.info(f"Study {study.id} automatically marked as completed")
+                    logger.info(f"Study {study.id} automatically marked as completed (was {study.status})")
                 except Exception as e:
                     logger.error(f"Failed to auto-complete study {study.id}: {e}")
     
