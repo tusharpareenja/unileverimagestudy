@@ -20,7 +20,7 @@ class RatingScale(BaseModel):
     middle_label: Optional[str] = None
 
 class AudienceSegmentation(BaseModel):
-    number_of_respondents: int = Field(..., ge=1)
+    number_of_respondents: Optional[int] = Field(None, ge=1)
     country: Optional[str] = None
     gender_distribution: Optional[Dict[str, float]] = None
     age_distribution: Optional[Dict[str, float]] = None
@@ -119,6 +119,14 @@ class StudyClassificationQuestionOut(StudyClassificationQuestionIn):
     id: UUID
     model_config = ConfigDict(from_attributes=True)
 
+    @field_validator('is_required', mode='before')
+    @classmethod
+    def convert_is_required(cls, v: Any) -> bool:
+        """Convert database 'Y'/'N' string to boolean"""
+        if isinstance(v, str):
+            return v.upper() == 'Y'
+        return bool(v)
+
 # ---------- Study payloads ----------
 
 class StudyBase(BaseModel):
@@ -134,6 +142,14 @@ class StudyBase(BaseModel):
     aspect_ratio: Optional[str] = Field(default=None, description="Aspect ratio string like 3:4 or 4:3")
     rating_scale: RatingScale
     audience_segmentation: AudienceSegmentation
+    last_step: Optional[int] = Field(default=1, ge=1)
+
+class StudyCreateMinimal(BaseModel):
+    """Minimal schema for fast study creation - only essential fields"""
+    title: str = Field(..., max_length=255)
+    background: str
+    language: str = Field(default='en', max_length=10)
+    last_step: Optional[int] = Field(default=1, ge=1)
 
 class StudyCreate(StudyBase):
     # For grid studies, provide elements; for layer studies, provide study_layers
@@ -148,12 +164,15 @@ class StudyUpdate(BaseModel):
     language: Optional[str] = Field(None, max_length=10)
     main_question: Optional[str] = None
     orientation_text: Optional[str] = None
+    study_type: Optional[StudyType] = None
     background_image_url: Optional[str] = None
     rating_scale: Optional[RatingScale] = None
     audience_segmentation: Optional[AudienceSegmentation] = None
     # Optional aspect ratio for layer studies, e.g., "3:4", "4:3"
     aspect_ratio: Optional[str] = Field(default=None, description="Aspect ratio string like 3:4 or 4:3")
+    last_step: Optional[int] = Field(default=None, ge=1)
     # Replacing full collections (server should decide whether allowed while active)
+    categories: Optional[List[StudyCategoryIn]] = None
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
     classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
@@ -167,6 +186,8 @@ class StudyListItem(BaseModel):
     study_type: StudyType
     status: StudyStatus
     created_at: datetime
+    last_step: int | None = None
+    jobid: Optional[str] = None
     total_responses: int
     completed_responses: int
     abandoned_responses: int
@@ -201,9 +222,10 @@ class StudyBasicDetails(BaseModel):
     main_question: str
     orientation_text: str
     rating_scale: RatingScale
+    jobid: Optional[str] = None
     study_config: Optional[Dict[str, Any]] = None  # For additional configuration
     classification_questions: Optional[List[StudyClassificationQuestionOut]] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
 
 class StudyOut(BaseModel):
@@ -222,7 +244,7 @@ class StudyOut(BaseModel):
     # Children
     categories: Optional[List[StudyCategoryOut]] = None
     elements: Optional[List[StudyElementOut]] = None
-    study_layers: Optional[List[StudyLayerOut]] = None
+    study_layers: Optional[List[StudyLayerOut]] = Field(None, validation_alias="layers")
     classification_questions: Optional[List[StudyClassificationQuestionOut]] = None
 
     # Tasks and meta
@@ -231,6 +253,7 @@ class StudyOut(BaseModel):
     status: StudyStatus
     share_token: str
     share_url: Optional[str] = None
+    jobid: Optional[str] = None
 
     created_at: datetime
     updated_at: datetime
@@ -241,7 +264,7 @@ class StudyOut(BaseModel):
     completed_responses: int
     abandoned_responses: int
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 class StudyLaunchOut(BaseModel):
     """Lightweight response model for study launch operations - excludes heavy fields like tasks"""
@@ -251,7 +274,12 @@ class StudyLaunchOut(BaseModel):
     share_url: Optional[str] = None
     launched_at: Optional[datetime] = None
     updated_at: datetime
-    
+
+    model_config = ConfigDict(from_attributes=True)
+
+class StudyCreateMinimalResponse(BaseModel):
+    """Ultra-lightweight response for minimal study creation - only returns study ID"""
+    id: UUID
     model_config = ConfigDict(from_attributes=True)
 
 # ---------- Small helper responses ----------
@@ -272,6 +300,7 @@ class ValidateTasksResponse(BaseModel):
 
 class GenerateTasksRequest(BaseModel):
     study_id: Optional[UUID] = None
+    last_step: Optional[int] = None
     study_type: StudyType
     audience_segmentation: AudienceSegmentation
     # Optional full study fields to create/update a draft study on the fly
@@ -292,6 +321,7 @@ class GenerateTasksRequest(BaseModel):
     seed: Optional[int] = None
 
 class GenerateTasksResult(BaseModel):
+    last_step: Optional[int] = None
     tasks: Dict[str, List[Dict[str, Any]]]
     metadata: Dict[str, Any]
 

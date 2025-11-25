@@ -15,7 +15,8 @@ from app.models.study_model import Study
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem, StudyLaunchOut,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus,
-    GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal, StudyBasicDetails
+    GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal, StudyBasicDetails,
+    StudyCreateMinimal, StudyCreateMinimalResponse
 )
 from app.services import study as study_service
 from app.services.response import StudyResponseService
@@ -165,6 +166,36 @@ def create_study_endpoint(
         return study
 
 
+@router.post("/minimal", response_model=StudyCreateMinimalResponse, status_code=status.HTTP_201_CREATED)
+def create_study_minimal_endpoint(
+    payload: StudyCreateMinimal,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Ultra-fast study creation endpoint - creates a draft study with only essential fields.
+
+    This endpoint is optimized for maximum speed (< 1 second):
+    - Only requires title, background (description), and language
+    - Single raw SQL INSERT (bypasses ORM overhead)
+    - Returns only the study ID
+    - No relationship loading or object serialization
+    - Default values for all other required fields
+
+    The study is created in 'draft' status with default values that can be updated later.
+    Use PUT /studies/{study_id} to add remaining details like main_question, elements, etc.
+    """
+    study_id = study_service.create_study_minimal(
+        db=db,
+        creator_id=current_user.id,
+        title=payload.title,
+        background=payload.background,
+        language=payload.language,
+        last_step=payload.last_step or 1,
+    )
+    return StudyCreateMinimalResponse(id=study_id)
+
+
 @router.get("", response_model=List[StudyListItem])
 def list_studies_endpoint(
     status_filter: Optional[StudyStatus] = Query(None),
@@ -214,13 +245,89 @@ def get_study_endpoint(
     current_user: User = Depends(get_current_active_user),
 ):
     study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+    ar = (study.audience_segmentation or {}).get('aspect_ratio')
+
+    # Build response dict via pydantic but ensure classification_questions are included
+    out = StudyOut.model_validate(study).model_dump()
+    # Ensure aspect_ratio is present
+    out['aspect_ratio'] = ar
+
+    # If classification_questions missing or empty in the serialized output, populate from ORM
     try:
-        ar = (study.audience_segmentation or {}).get('aspect_ratio')
-        out = StudyOut.model_validate(study).model_dump()
-        out['aspect_ratio'] = ar
-        return out
+        serialized_cq = out.get('classification_questions')
     except Exception:
-        return study
+        serialized_cq = None
+
+    if not serialized_cq:
+        cq_list = []
+        try:
+            for q in getattr(study, 'classification_questions', []) or []:
+                cq_list.append({
+                    'id': q.id,
+                    'question_id': q.question_id,
+                    'question_text': q.question_text,
+                    'question_type': q.question_type,
+                    'is_required': True if (str(q.is_required).upper() == 'Y' or bool(q.is_required)) else False,
+                    'order': q.order,
+                    'answer_options': q.answer_options,
+                    'config': q.config,
+                })
+        except Exception:
+            cq_list = []
+        out['classification_questions'] = cq_list
+
+    return out
+
+
+@router.get("/{study_id}/preview", response_model=StudyOut)
+def get_study_preview_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Get study with tasks limited to only 1 respondent (preview mode)"""
+    study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+    ar = (study.audience_segmentation or {}).get('aspect_ratio')
+
+    # Build response dict via pydantic but ensure classification_questions are included
+    out = StudyOut.model_validate(study).model_dump()
+    # Ensure aspect_ratio is present
+    out['aspect_ratio'] = ar
+
+    # Limit tasks to only 1 respondent
+    if out.get('tasks') and isinstance(out['tasks'], dict):
+        # Get the first respondent's tasks only
+        first_respondent = next(iter(out['tasks'].keys()), None)
+        if first_respondent:
+            out['tasks'] = {first_respondent: out['tasks'][first_respondent]}
+        else:
+            out['tasks'] = {}
+
+    # If classification_questions missing or empty in the serialized output, populate from ORM
+    try:
+        serialized_cq = out.get('classification_questions')
+    except Exception:
+        serialized_cq = None
+
+    if not serialized_cq:
+        cq_list = []
+        try:
+            for q in getattr(study, 'classification_questions', []) or []:
+                cq_list.append({
+                    'id': q.id,
+                    'question_id': q.question_id,
+                    'question_text': q.question_text,
+                    'question_type': q.question_type,
+                    'is_required': True if (str(q.is_required).upper() == 'Y' or bool(q.is_required)) else False,
+                    'order': q.order,
+                    'answer_options': q.answer_options,
+                    'config': q.config,
+                })
+        except Exception:
+            cq_list = []
+        out['classification_questions'] = cq_list
+
+    return out
 
 
 @router.get("/{study_id}/basic", response_model=StudyBasicDetails)
@@ -517,7 +624,11 @@ def generate_tasks_from_body_endpoint(
             user_id=str(current_user.id),
             payload=payload.model_dump()
         )
-        
+
+        # Store jobid in the study database
+        study_row.jobid = job_id
+        db.commit()
+
         # Debug logging
         import logging
         logger = logging.getLogger(__name__)
@@ -571,6 +682,7 @@ def generate_tasks_from_body_endpoint(
         # Return only job metadata; frontend will poll for status/results
         logger.info(f"Returning background job response for job {job_id}")
         return GenerateTasksResult(
+            last_step=payload.last_step,  # Return the last_step from payload
             tasks={},
             metadata={
                 "job_id": job_id,
@@ -695,8 +807,22 @@ def generate_tasks_from_body_endpoint(
         )
         # Persist tasks to draft study
         study_row.tasks = result.get('tasks', {})
+        # Update last_step if provided and greater than current
+        if payload.last_step is not None:
+            current_step = getattr(study_row, 'last_step', 1) or 1
+            if payload.last_step > current_step:
+                setattr(study_row, 'last_step', payload.last_step)
         db.commit()
-        return GenerateTasksResult(tasks=result.get('tasks', {}), metadata={**result.get('metadata', {}), "study_id": str(study_row.id)})
+        # Refresh to get the updated last_step value
+        db.refresh(study_row)
+        return GenerateTasksResult(
+            last_step=getattr(study_row, 'last_step', None),
+            tasks=result.get('tasks', {}),
+            metadata={
+                **result.get('metadata', {}),
+                "study_id": str(study_row.id)
+            }
+        )
     elif payload.study_type == 'layer':
         if not payload.study_layers or len(payload.study_layers) == 0:
             raise HTTPException(status_code=400, detail="Layer study requires study_layers")
@@ -754,17 +880,31 @@ def generate_tasks_from_body_endpoint(
         )
         # Persist tasks to draft study
         study_row.tasks = result.get('tasks', {})
+        # Update last_step if provided and greater than current
+        if payload.last_step is not None:
+            current_step = getattr(study_row, 'last_step', 1) or 1
+            if payload.last_step > current_step:
+                setattr(study_row, 'last_step', payload.last_step)
         db.commit()
+        # Refresh to get the updated last_step value
+        db.refresh(study_row)
         # Include aspect_ratio in metadata if present (from study_row.audience_segmentation)
         ar = None
         try:
             ar = (study_row.audience_segmentation or {}).get('aspect_ratio')
         except Exception:
             ar = None
-        meta = {**result.get('metadata', {}), "study_id": str(study_row.id)}
+        meta = {
+            **result.get('metadata', {}),
+            "study_id": str(study_row.id)
+        }
         if ar:
             meta['aspect_ratio'] = ar
-        return GenerateTasksResult(tasks=result.get('tasks', {}), metadata=meta)
+        return GenerateTasksResult(
+            last_step=getattr(study_row, 'last_step', None),
+            tasks=result.get('tasks', {}),
+            metadata=meta
+        )
     else:
         raise HTTPException(status_code=400, detail="Unsupported study_type")
 
@@ -906,6 +1046,10 @@ def get_task_generation_result(
     
     # Get the study with the generated tasks (includes layers and images)
     study = study_service.get_study(db=db, study_id=job.study_id, owner_id=current_user.id)
+
+    # Clear the jobid from the database now that we're retrieving the results
+    study.jobid = None
+    db.commit()
 
     # Prepare lightweight layer metadata including transform
     layers = []

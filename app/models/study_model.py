@@ -49,6 +49,12 @@ class Study(Base):
     completed_responses = Column(Integer, nullable=False, server_default=expression.text('0'))
     abandoned_responses = Column(Integer, nullable=False, server_default=expression.text('0'))
 
+    # Study creation progress tracking
+    last_step = Column(Integer, nullable=False, server_default=expression.text('1'), default=1)
+
+    # Background job tracking
+    jobid = Column(String(255), nullable=True, index=True)
+
     # Relations
     creator = relationship("User", back_populates="studies", lazy="selectin", passive_deletes=True)
     # Grid categories for grouping elements

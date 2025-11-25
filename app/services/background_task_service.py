@@ -1,6 +1,7 @@
 # app/services/background_task_service.py
 import asyncio
 import uuid
+from uuid import UUID
 import time
 import psutil
 import os
@@ -302,11 +303,13 @@ class BackgroundTaskService:
                 # Get the study to access background_image_url
                 from app.models.study_model import Study
                 study = db.query(Study).filter(Study.id == job.study_id).first()
-                if study and hasattr(study, 'background_image_url') and study.background_image_url:
-                    meta = result.get('metadata', {})
-                    if isinstance(meta, dict):
-                        meta['background_image_url'] = study.background_image_url
-                        result['metadata'] = meta
+                if study and hasattr(study, 'background_image_url'):
+                    bg_url = getattr(study, 'background_image_url', None)
+                    if bg_url is not None:
+                        meta = result.get('metadata', {})
+                        if isinstance(meta, dict):
+                            meta['background_image_url'] = bg_url
+                            result['metadata'] = meta
             except Exception as e:
                 logger.warning(f"Could not attach background image URL: {e}")
         
@@ -327,9 +330,23 @@ class BackgroundTaskService:
         
         # Save tasks
         study.tasks = result.get('tasks', {})
-        db.commit()
         
-        logger.info(f"Saved tasks for study {job.study_id}")
+        # Save last_step if provided in payload
+        last_step_val = job.payload.get('last_step')
+        if last_step_val is not None and isinstance(last_step_val, int):
+            current_step = getattr(study, 'last_step', 1) or 1
+            if last_step_val > current_step:
+                setattr(study, 'last_step', last_step_val)
+        
+        db.commit()
+        db.refresh(study)
+        
+        # Store the updated last_step in job result for response
+        if job.result is None:
+            job.result = {}
+        job.result['last_step'] = getattr(study, 'last_step', None)
+        
+        logger.info(f"Saved tasks for study {job.study_id}, last_step={study.last_step}")
     
     async def _launch_study(self, job: TaskGenerationJob, db: Session):
         """Launch study by setting status to active and applying any study updates"""
@@ -362,8 +379,8 @@ class BackgroundTaskService:
                 update_payload = StudyUpdate(**study_updates)
                 update_study(
                     db=db,
-                    study_id=job.study_id,
-                    owner_id=job.user_id,
+                    study_id=UUID(job.study_id),
+                    owner_id=UUID(job.user_id),
                     payload=update_payload
                 )
                 logger.info(f"Study {job.study_id} updated successfully")

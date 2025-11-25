@@ -91,6 +91,7 @@ def _load_owned_study(db: Session, study_id: UUID, owner_id: UUID, for_update: b
     stmt = (
         select(Study)
         .options(
+            selectinload(Study.categories),
             selectinload(Study.elements),
             selectinload(Study.layers).selectinload(StudyLayer.images),
             selectinload(Study.classification_questions),
@@ -184,6 +185,7 @@ def create_study(
         total_responses=0,
         completed_responses=0,
         abandoned_responses=0,
+        last_step=payload.last_step or 1,
     )
     db.add(study)
     # UUID is already assigned above; avoid early flush to reduce DB round-trips
@@ -315,6 +317,59 @@ def create_study(
     db.commit()
     db.refresh(study)
     return study
+
+def create_study_minimal(
+    db: Session,
+    creator_id: UUID,
+    title: str,
+    background: str,
+    language: str = 'en',
+    last_step: int = 1
+) -> UUID:
+    """
+    Ultra-fast study creation with only essential fields.
+    Creates a draft study with minimal database operations.
+    Returns only the study ID for maximum performance.
+
+    Optimizations:
+    - Single database INSERT with no SELECT
+    - No ORM object creation overhead
+    - No relationship loading
+    - Returns UUID directly (no model conversion)
+    """
+    from sqlalchemy import insert
+
+    share_token = _generate_share_token()
+    study_id = uuid4()
+
+    # Use raw SQL insert for maximum speed - bypasses ORM overhead
+    stmt = insert(Study).values(
+        id=study_id,
+        title=title,
+        background=background,
+        language=language,
+        main_question="",  # Will be filled in later
+        orientation_text="",  # Will be filled in later
+        study_type='grid',  # Default to grid, can be updated later
+        rating_scale={
+            "min_value": 1,
+            "max_value": 5,
+            "min_label": "",
+            "max_label": ""
+        },
+        audience_segmentation={},
+        creator_id=creator_id,
+        status='draft',
+        share_token=share_token,
+        share_url=_build_share_url(settings.BASE_URL, str(study_id)),
+        last_step=last_step,
+    )
+
+    db.execute(stmt)
+    db.commit()
+
+    # Return UUID directly - no ORM object needed
+    return study_id
 
 def get_study(db: Session, study_id: UUID, owner_id: UUID) -> Study:
     return _load_owned_study(db, study_id, owner_id, for_update=False)
@@ -571,7 +626,7 @@ def update_study(
 ) -> Study:
     logger.info(f"update_study called for study {study_id} by user {owner_id}")
     logger.info(f"Payload: {payload.model_dump(exclude_none=True)}")
-    
+
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
     # Allow editing even when active (per new requirement)
 
@@ -600,8 +655,15 @@ def update_study(
         study.main_question = payload.main_question
     if payload.orientation_text is not None:
         study.orientation_text = payload.orientation_text
+    if payload.study_type is not None:
+        study.study_type = payload.study_type
     if payload.background_image_url is not None:
         study.background_image_url = payload.background_image_url
+    if payload.last_step is not None:
+        # Only update last_step if the new value is greater (forward progress only)
+        current_step = getattr(study, 'last_step', 1) or 1
+        if payload.last_step > current_step:
+            study.last_step = payload.last_step
     if payload.rating_scale is not None:
         _validate_rating_scale(payload.rating_scale.model_dump())
         study.rating_scale = payload.rating_scale.model_dump()
@@ -624,7 +686,39 @@ def update_study(
         # Only valid for grid
         if study.study_type != 'grid':
             raise HTTPException(status_code=400, detail="elements can only be set for grid studies.")
-        # Clear and re-add
+
+        # Handle categories first - they must be provided when updating elements
+        category_map = {}  # category_id -> category_uuid
+        if hasattr(payload, 'categories') and payload.categories:
+            # Delete old categories (cascade will handle elements)
+            db.query(StudyCategory).filter(StudyCategory.study_id == study.id).delete()
+            db.flush()
+
+            # Create new categories
+            seen_category_ids = set()
+            for cat in payload.categories:
+                if cat.category_id in seen_category_ids:
+                    raise HTTPException(status_code=409, detail=f"Duplicate category_id: {cat.category_id}")
+                seen_category_ids.add(cat.category_id)
+                category_uuid = uuid4()
+                category_map[cat.category_id] = category_uuid
+                db.add(StudyCategory(
+                    id=category_uuid,
+                    study_id=study.id,
+                    category_id=cat.category_id,
+                    name=cat.name,
+                    order=cat.order
+                ))
+            db.flush()
+        else:
+            # If categories not provided in payload, load existing categories
+            existing_categories = db.scalars(
+                select(StudyCategory).where(StudyCategory.study_id == study.id)
+            ).all()
+            for cat in existing_categories:
+                category_map[cat.category_id] = cat.id
+
+        # Clear and re-add elements
         # Delete old assets best-effort
         old_elements_seq = db.scalars(
             select(StudyElement).where(StudyElement.study_id == study.id)
@@ -635,15 +729,22 @@ def update_study(
                 delete_public_id(str(oe.cloudinary_public_id))
         db.query(StudyElement).filter(StudyElement.study_id == study.id).delete()
         db.flush()
+
         seen_ids = set()
         for elem in payload.elements:
             if elem.element_id in seen_ids:
                 raise HTTPException(status_code=409, detail=f"Duplicate element_id: {elem.element_id}")
             seen_ids.add(elem.element_id)
+
+            # Validate category_id exists
+            if elem.category_id not in category_map:
+                raise HTTPException(status_code=400, detail=f"Category {elem.category_id} not found. Please provide categories when updating elements.")
+
             content_url, public_id = _maybe_upload_data_url_to_cloudinary(elem.content)
             db.add(StudyElement(
                 id=uuid4(),
                 study_id=study.id,
+                category_id=category_map[elem.category_id],
                 element_id=elem.element_id,
                 name=elem.name,
                 description=elem.description,
@@ -783,8 +884,15 @@ def update_study_fast(
         study.main_question = payload.main_question
     if payload.orientation_text is not None:
         study.orientation_text = payload.orientation_text
+    if payload.study_type is not None:
+        study.study_type = payload.study_type
     if payload.background_image_url is not None:
         study.background_image_url = payload.background_image_url
+    if payload.last_step is not None:
+        # Only update last_step if the new value is greater (forward progress only)
+        current_step = getattr(study, 'last_step', 1) or 1
+        if payload.last_step > current_step:
+            study.last_step = payload.last_step
     if payload.rating_scale is not None:
         _validate_rating_scale(payload.rating_scale.model_dump())
         study.rating_scale = payload.rating_scale.model_dump()
