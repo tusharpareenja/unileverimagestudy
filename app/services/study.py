@@ -260,6 +260,7 @@ def create_study(
                     layer_id=layer.layer_id,
                     name=layer.name,
                     description=layer.description,
+                    layer_type=layer.layer_type,
                     z_index=layer.z_index,
                     order=layer.order,
                     transform=layer.transform.model_dump() if getattr(layer, 'transform', None) else None
@@ -286,7 +287,8 @@ def create_study(
                         url=url or img.url,
                         alt_text=img.alt_text,
                         order=img.order,
-                        cloudinary_public_id=public_id
+                        cloudinary_public_id=public_id,
+                        config=img.config
                     ))
             if new_images:
                 db.bulk_save_objects(new_images)
@@ -783,6 +785,7 @@ def update_study(
                 layer_id=layer.layer_id,
                 name=layer.name,
                 description=layer.description,
+                layer_type=layer.layer_type,
                 z_index=layer.z_index,
                 order=layer.order,
                 transform=layer.transform.model_dump() if getattr(layer, 'transform', None) else None
@@ -802,7 +805,8 @@ def update_study(
                     name=img.name,
                     url=img.url,
                     alt_text=img.alt_text,
-                    order=img.order
+                    order=img.order,
+                    config=img.config
                 ))
 
     # Handle classification questions updates

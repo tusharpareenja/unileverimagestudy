@@ -11,6 +11,7 @@ import uuid
 study_type_enum = Enum('grid', 'layer', name='study_type_enum')
 study_status_enum = Enum('draft', 'active', 'paused', 'completed', name='study_status_enum')
 element_type_enum = Enum('image', 'text', name='element_type_enum')
+layer_type_enum = Enum('image', 'text', name='layer_type_enum')
 
 class Study(Base):
     __tablename__ = "studies"
@@ -135,6 +136,7 @@ class StudyLayer(Base):
     layer_id = Column(String(100), nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
+    layer_type = Column(layer_type_enum, nullable=False, server_default='image')
     z_index = Column(Integer, nullable=False)
     order = Column(Integer, nullable=False)
     # Layer-level transform percentages {x,y,width,height}
@@ -160,6 +162,8 @@ class LayerImage(Base):
     cloudinary_public_id = Column(Text, nullable=True)
     alt_text = Column(String(200), nullable=True)
     order = Column(Integer, nullable=False)
+    # Config for text layers (font, color, etc.) or other layer types
+    config = Column(JSONB, nullable=True)
 
     layer = relationship("StudyLayer", back_populates="images", lazy="selectin")
 

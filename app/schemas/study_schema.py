@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 StudyType = Literal['grid', 'layer']
 StudyStatus = Literal['draft', 'active', 'paused', 'completed']
 ElementType = Literal['image', 'text']
+LayerType = Literal['image', 'text']
 
 # ---------- Nested value objects ----------
 
@@ -74,15 +75,18 @@ class LayerImageIn(BaseModel):
     url: str
     alt_text: Optional[str] = None
     order: int
+    config: Optional[Dict[str, Any]] = None
 
 class LayerImageOut(LayerImageIn):
     id: UUID
+    config: Optional[Dict[str, Any]] = None
     model_config = ConfigDict(from_attributes=True)
 
 class StudyLayerIn(BaseModel):
     layer_id: str = Field(..., max_length=100)
     name: str = Field(..., max_length=100)
     description: Optional[str] = None
+    layer_type: LayerType = Field(default='image')
     z_index: int
     order: int
     # Layer-level transform: percentages 0-100 relative to container
@@ -94,6 +98,7 @@ class StudyLayerOut(BaseModel):
     layer_id: str = Field(..., max_length=100)
     name: str = Field(..., max_length=100)
     description: Optional[str] = None
+    layer_type: LayerType = Field(default='image')
     z_index: int
     order: int
     transform: Optional[Transform] = None
