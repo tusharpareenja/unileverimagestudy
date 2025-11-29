@@ -748,25 +748,8 @@ async def export_study_flattened_csv(
     service = StudyResponseService(db)
 
     def csv_generator():
-        import csv
-        import io
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
-        batch_size = 5000
-        counter = 0
-        for row in service.generate_csv_rows_for_study_optimized(study_id):
-            writer.writerow(row)
-            counter += 1
-            if counter % batch_size == 0:
-                data = buffer.getvalue()
-                if data:
-                    yield data
-                buffer.seek(0)
-                buffer.truncate(0)
-        # flush remainder
-        data = buffer.getvalue()
-        if data:
-            yield data
+        for chunk in service.generate_csv_rows_for_study_pandas(study_id):
+            yield chunk
 
     filename = f"study_{study_id}_flattened_export.csv"
     headers = {
