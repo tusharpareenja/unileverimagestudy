@@ -196,13 +196,19 @@ class StudyAnalysisService:
         # 5c. Mindsets (Clustering)
         # Run clustering on T coefficients
         X_T = coef_table_T[element_cols].to_numpy(dtype=float)
-        # Handle empty data case
-        if X_T.shape[0] >= 2:
+        n_samples = X_T.shape[0]
+        
+        # Handle clustering based on available samples
+        # Need at least k samples to create k clusters
+        if n_samples >= 2:
             labels_2_T = self._custom_kmeans_pearson(X_T, k=2, seed=101)
+        else:
+            labels_2_T = np.zeros(n_samples, dtype=int)
+            
+        if n_samples >= 3:
             labels_3_T = self._custom_kmeans_pearson(X_T, k=3, seed=202)
         else:
-            labels_2_T = np.zeros(X_T.shape[0], dtype=int)
-            labels_3_T = np.zeros(X_T.shape[0], dtype=int)
+            labels_3_T = np.zeros(n_samples, dtype=int)
 
         self._create_mindset_sheet(wb, "(T) Mindsets", coef_table_T, element_cols, sorted_categories, col_to_catname, col_to_eltname,
                                    base_size, coef_threshold_T, self.green_fill, labels_2_T, labels_3_T, round_vals=True)

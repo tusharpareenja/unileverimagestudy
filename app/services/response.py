@@ -2143,6 +2143,8 @@ class StudyResponseService:
         }
 
     def get_study_dataframe(self, study_id: UUID) -> pd.DataFrame:
+        from sqlalchemy.orm import noload, load_only
+
         """
         High-performance CSV flattener using Pandas.
         Replicates the exact logic of generate_csv_rows_for_study_optimized but uses vectorized operations.
@@ -2188,7 +2190,7 @@ class StudyResponseService:
 
         # 2. Process Questions & Answers
         # Get questions config - use load_only to avoid loading unnecessary columns
-        from sqlalchemy.orm import noload
+        from sqlalchemy.orm import noload, load_only
         questions = self.db.execute(
             select(StudyClassificationQuestion)
             .where(StudyClassificationQuestion.study_id == study_id)
@@ -2300,14 +2302,13 @@ class StudyResponseService:
         # Determine dynamic columns
         is_grid = str(study.study_type) == 'grid'
         dynamic_cols = []
-        
+                
         if is_grid:
-            # Grid logic
-            # Get grid columns from DB - OPTIMIZED: fetch all in one query
             from app.models.study_model import StudyCategory, StudyElement
-            from sqlalchemy.orm import noload
-            
-            # Fetch all categories
+            from sqlalchemy.orm import noload, load_only
+            from collections import defaultdict
+
+            # Fetch categories
             cats = self.db.execute(
                 select(StudyCategory)
                 .where(StudyCategory.study_id == study_id)
@@ -2318,8 +2319,8 @@ class StudyResponseService:
                     noload(StudyCategory.elements)
                 )
             ).scalars().all()
-            
-            # Fetch ALL elements in one query
+
+            # Fetch all elements
             all_elements = self.db.execute(
                 select(StudyElement)
                 .where(StudyElement.study_id == study_id)
@@ -2330,116 +2331,66 @@ class StudyResponseService:
                     noload(StudyElement.category)
                 )
             ).scalars().all()
-            
-            # Group elements by category_id
-            from collections import defaultdict
+
+            # Group elements by category
             elems_by_cat = defaultdict(list)
             for el in all_elements:
                 elems_by_cat[el.category_id].append(el)
-            
-            # Build grid_defs
+
+            # Grid definition list
             grid_defs = []
             for cat in cats:
                 elems = elems_by_cat.get(cat.id, [])
                 for idx, el in enumerate(elems, start=1):
                     grid_defs.append((cat.name, el.name, idx))
-            
-            # Optimization: Expand elements_shown_in_task once
-            
-            # Normalize keys in the dicts before expanding?
-            # Or expand and then coalesce columns.
-            
-            # Helper to normalize dict keys
-            def normalize_grid_data(row):
-                esi = row.get('elements_shown_in_task') or row.get('elements_shown') or {}
-                esc = row.get('elements_shown_content') or {}
-                
-                out = {}
-                # Process esi
-                if isinstance(esi, dict):
-                    for k, v in esi.items():
-                        # Normalize key: Cat_1 -> Cat_1
-                        # We need to match against expected keys.
-                        # Since we don't know which alias is used, let's just dump them all?
-                        # No, that creates too many columns.
-                        # Let's just use the dict as is and lookup later? No, that's what apply does.
-                        
-                        # Better: Normalize to "CatName_Index" standard key
-                        # But we don't know the CatName from just "Cat_1" if there are spaces etc.
-                        # Actually, let's just return the dict and use pd.DataFrame(list)
-                        pass
-                return esi
 
-            # 1. Expand elements_shown_in_task
-            # This creates a DF with columns for every key found in the dicts
-            # e.g. "Cat 1_1", "cat 1_1", etc.
-            esi_list = full_df['elements_shown_in_task'].fillna({}).tolist()
-            esi_df = pd.DataFrame(esi_list)
-            
-            # 2. Expand elements_shown_content
-            esc_list = full_df['elements_shown_content'].fillna({}).tolist()
-            esc_df = pd.DataFrame(esc_list)
-            
-            # For each expected column, find the matching columns in esi_df/esc_df and coalesce
+            # Expand task + content visibility
+            esi_df = pd.DataFrame(full_df['elements_shown_in_task'].fillna({}).tolist())
+            esc_df = pd.DataFrame(full_df['elements_shown_content'].fillna({}).tolist())
+
+            def normalize_value(x):
+                if isinstance(x, bool):
+                    return int(x)
+                if isinstance(x, (int, float)) and not pd.isna(x):
+                    return 1 if x > 0 else 0
+                if isinstance(x, str):
+                    return 1 if x.lower() in ("1", "true", "yes", "visible") else 0
+                return 0
+
             for cat_name, el_name, idx in grid_defs:
                 col_header = f"{cat_name}-{el_name}".replace('_', '-').replace(' ', '-')
-                
-                # Possible keys in esi_df
+
                 candidates = [
                     f"{cat_name}_{idx}",
                     f"{cat_name.replace(' ', '_')}_{idx}",
-                    f"{cat_name.lower()}_{idx}"
+                    f"{cat_name.lower()}_{idx}",
                 ]
-                
-                # Find which candidates exist as columns
+
                 valid_cols = [c for c in candidates if c in esi_df.columns]
-                
-                if valid_cols:
-                    # Coalesce: max across valid columns?
-                    # If any is 1, result is 1.
-                    # Convert to numeric first
-                    # esi_df[valid_cols] might contain strings or ints or booleans
-                    # We want: if any is "truthy", then 1.
-                    
-                    # Fast way: check max along axis 1
-                    # But need to handle types.
-                    # Let's assume they are mostly 0/1 or boolean.
-                    
-                    # Create a series for this grid element
-                    # Start with 0
-                    series = pd.Series(0, index=full_df.index)
-                    
-                    for c in valid_cols:
-                        # Convert column to numeric 0/1
-                        # pd.to_numeric might fail on weird strings, coerce to NaN then fill 0
-                        s = pd.to_numeric(esi_df[c], errors='coerce').fillna(0)
-                        # Or if it's boolean
-                        if esi_df[c].dtype == bool:
-                            s = esi_df[c].astype(int)
-                        
-                        series = series | (s > 0).astype(int)
-                        
-                    full_df[col_header] = series
-                else:
-                    full_df[col_header] = 0
-                
-                # Fallback to content map (esc_df)
-                # Key: "CatName_ElemName"
+
+                # Base column = all hidden
+                full_df[col_header] = 0
+
+                # From "shown in task"
+                for c in valid_cols:
+                    full_df[col_header] |= esi_df[c].apply(normalize_value)
+
+                # Fallback from content visibility map (ESC)
                 header_key = f"{cat_name}_{el_name}"
-                header_key_alt = header_key.replace(' ', '_')
-                
+                header_key_alt = header_key.replace(" ", "_")
+
                 if header_key in esc_df.columns:
-                    # Check if value is truthy (dict with url/name)
-                    # This is harder because it's a dict.
-                    # But usually if it's present in content map, it's shown?
-                    # Or we check if it's not None/NaN.
-                    mask = esc_df[header_key].notna()
-                    full_df.loc[mask, col_header] = 1
+                    full_df[col_header] |= esc_df[header_key].notna().astype(int)
                 elif header_key_alt in esc_df.columns:
-                    mask = esc_df[header_key_alt].notna()
-                    full_df.loc[mask, col_header] = 1
-                
+                    full_df[col_header] |= esc_df[header_key_alt].notna().astype(int)
+
+                # 🔥 Ensure final numeric type — fix boolean override forever
+                full_df[col_header] = full_df[col_header].astype(int)
+
                 dynamic_cols.append(col_header)
+
+
+
         else:
             # Layer logic
             from app.models.study_model import StudyLayer, LayerImage
