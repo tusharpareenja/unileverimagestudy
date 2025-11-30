@@ -2440,10 +2440,8 @@ class StudyResponseService:
                     full_df.loc[mask, col_header] = 1
                 
                 dynamic_cols.append(col_header)
-
         else:
             # Layer logic
-            # Fetch layers and images to define columns
             from app.models.study_model import StudyLayer, LayerImage
             from sqlalchemy.orm import selectinload
             
@@ -2453,66 +2451,82 @@ class StudyResponseService:
                 .order_by(StudyLayer.order)
                 .options(selectinload(StudyLayer.images))
             ).scalars().all()
+            layer_key_to_header = {}
+            layer_keys = []
             
-            # Build expected columns: LayerName_ImageName
-            # And also keep track of mapping for fast lookup
-            layer_defs = []
             for layer in layers:
-                for img in layer.images:
-                    layer_defs.append((layer.name, img.name))
+                for idx, img in enumerate(layer.images, start=1):
+                    layer_key = f"{layer.name}_{idx}"
+                    layer_keys.append(layer_key)
+                
+                    col_header = f"{layer.name}-{img.name}".replace('_', '-').replace(' ', '-')
+                    layer_key_to_header[layer_key] = col_header
+                    dynamic_cols.append(col_header)
             
-            # Expand elements_shown_content
-            # We need to check which image was shown for each layer
-            esc_list = full_df['elements_shown_content'].fillna({}).tolist()
-            esc_df = pd.DataFrame(esc_list)
+            # Debug: print what we're looking for
+            print("Expected layer keys:", layer_keys)
+            if not full_df.empty:
+                sample_data = full_df.iloc[0]['elements_shown_in_task']
+                print("Sample elements_shown_in_task:", sample_data)
             
-            for layer_name, img_name in layer_defs:
-                col_header = f"{layer_name}-{img_name}".replace('_', '-').replace(' ', '-')
+            # Process layer visibility for each layer key
+            for layer_key in layer_keys:
+                col_header = layer_key_to_header[layer_key]
                 
-                # In esc_df, keys are usually Layer Names (e.g. "Layer 1")
-                # The value is a dict: {"name": "ImageName", ...}
-                # Or sometimes just the image name string?
-                # Based on previous code: "if isinstance(v, dict) and (v.get('url') or v.get('name'))"
-                
-                # We need to check if column "LayerName" exists in esc_df
-                # And if its value matches "ImageName"
-                
-                # Handle potential key variations (spaces, underscores)
-                # But usually keys in elements_shown_content match Layer Name exactly.
-                
-                series = pd.Series(0, index=full_df.index)
-                
-                # Try exact layer name match
-                if layer_name in esc_df.columns:
-                    # Check if value has name == img_name
-                    def check_image(val):
-                        if isinstance(val, dict):
-                            return 1 if val.get('name') == img_name else 0
+                def get_layer_visibility(row, key=layer_key):
+                    """Extract visibility for this specific layer key from a task row."""
+                    # Priority: elements_shown_in_task first (where data actually is)
+                    layer_data = (
+                        row.get('elements_shown_in_task') or 
+                        row.get('layers_shown_in_task') or 
+                        row.get('elements_shown_content') or 
+                        {}
+                    )
+                    
+                    if not isinstance(layer_data, dict):
                         return 0
                     
-                    series = esc_df[layer_name].apply(check_image)
+                    # Check if this exact key exists (e.g., "cap_1", "cool_2")
+                    if key in layer_data:
+                        v = layer_data[key]
+                        
+                        if isinstance(v, dict):
+                            # Check the visible flag
+                            vis = v.get("visible")
+                            if vis is None:
+                                # If no explicit visible flag, assume visible if dict has content
+                                vis = True if len(v.keys()) > 0 else False
+                            return 1 if bool(vis) else 0
+                        else:
+                            # Non-dict value, treat as boolean/integer
+                            try:
+                                return 1 if int(v) != 0 else 0
+                            except:
+                                return 1 if bool(v) else 0
+                    
+                    return 0
                 
-                full_df[col_header] = series
-                dynamic_cols.append(col_header)
+                # Apply function to each row using apply on axis=1
+                full_df[col_header] = full_df.apply(get_layer_visibility, axis=1)
 
         # 5. Assemble Final DataFrame
         # Columns: Panelist, [Questions], Gender, Age, Task, [Dynamic], Rating, ResponseTime
-        
+
         # Join answers
         # answers_pivot index is study_response_id
         full_df = full_df.merge(answers_pivot, left_on='study_response_id', right_index=True, how='left')
-        
-        final_cols = ['session_id','Age', 'Gender'] + list(question_id_to_col.values()) + ['Task'] + dynamic_cols + ['rating_given', 'task_duration_seconds']
-        
+
+        # DEFINE final_cols FIRST
+        final_cols = ['session_id', 'Age', 'Gender'] + list(question_id_to_col.values()) + ['Task'] + dynamic_cols + ['rating_given', 'task_duration_seconds']
+
         # Rename for export
         export_rename = {
             'session_id': 'Panelist',
             'rating_given': 'Rating',
             'task_duration_seconds': 'ResponseTime'
         }
-        
-        # Select and rename
-        # Ensure all columns exist - fill with 0 for dynamic columns (layers/grid), None for others
+
+        # NOW ensure all columns exist - fill with 0 for dynamic columns (layers/grid), None for others
         for c in final_cols:
             if c not in full_df.columns:
                 # Use 0 for dynamic columns (layer/grid visibility), None for others
@@ -2520,7 +2534,8 @@ class StudyResponseService:
                     full_df[c] = 0
                 else:
                     full_df[c] = None
-                
+                    
+        # Select and rename
         export_df = full_df[final_cols].rename(columns=export_rename)
         return export_df
         # # 6. Yield CSV
