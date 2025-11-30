@@ -2142,7 +2142,7 @@ class StudyResponseService:
             "total_tasks": int(result.total_tasks or 0)
         }
 
-    def generate_csv_rows_for_study_pandas(self, study_id: UUID) -> Iterable[List[Any]]:
+    def get_study_dataframe(self, study_id: UUID) -> pd.DataFrame:
         """
         High-performance CSV flattener using Pandas.
         Replicates the exact logic of generate_csv_rows_for_study_optimized but uses vectorized operations.
@@ -2159,10 +2159,10 @@ class StudyResponseService:
             StudyResponse.personal_info
         ).where(StudyResponse.study_id == study_id)
         responses_df = pd.read_sql(responses_query, self.db.bind)
-
+        print("response from db :- ", responses_df)
         if responses_df.empty:
-            yield ["Panelist", "Gender", "Age", "Task", "Rating", "ResponseTime"]
-            return
+            # Return empty DataFrame with expected columns
+            return pd.DataFrame(columns=["Panelist", "Gender", "Age", "Task", "Rating", "ResponseTime"])
 
         response_ids = responses_df['id'].tolist()
 
@@ -2443,166 +2443,57 @@ class StudyResponseService:
 
         else:
             # Layer logic
-            # Discover keys
-            # We need to scan all rows to find all keys if not defined? 
-            # The old code does a complex discovery.
-            # Let's try to replicate "Layer_X" or "Name_X" logic.
-            
-            # Get layers from DB for ordering
+            # Fetch layers and images to define columns
             from app.models.study_model import StudyLayer, LayerImage
-            layers = self.db.execute(select(StudyLayer).where(StudyLayer.study_id == study_id).order_by(StudyLayer.order)).scalars().all()
+            from sqlalchemy.orm import selectinload
             
-            # Pre-calculate layer headers
-            layer_headers_map = {} # key -> header
-            # We need to know which keys exist in the data.
-            # Collect all keys from all rows?
-            all_keys = set()
-            for _, row in full_df.iterrows():
-                d = row.get('layers_shown_in_task') or row.get('elements_shown_content') or {}
-                if isinstance(d, dict):
-                    all_keys.update(d.keys())
-                elif isinstance(d, list):
-                    # Synthetic keys Layer_1...
-                    for i in range(len(d)):
-                        all_keys.add(f"Layer_{i+1}")
+            layers = self.db.execute(
+                select(StudyLayer)
+                .where(StudyLayer.study_id == study_id)
+                .order_by(StudyLayer.order)
+                .options(selectinload(StudyLayer.images))
+            ).scalars().all()
             
-            # Sort keys (reusing logic from optimized method would be best, but let's simplify)
-            # We will use the DB layers to drive the columns if possible.
+            # Build expected columns: LayerName_ImageName
+            # And also keep track of mapping for fast lookup
+            layer_defs = []
+            for layer in layers:
+                for img in layer.images:
+                    layer_defs.append((layer.name, img.name))
             
-            # Actually, let's use the DB layers to generate expected columns, 
-            # and map data keys to them.
-            # For each layer, for each image...
+            # Expand elements_shown_content
+            # We need to check which image was shown for each layer
+            esc_list = full_df['elements_shown_content'].fillna({}).tolist()
+            esc_df = pd.DataFrame(esc_list)
             
-            # Re-implementing the full discovery logic in Pandas is complex.
-            # Let's simplify: 
-            # 1. Identify all unique keys in data.
-            # 2. Map them to headers.
-            # 3. Create columns.
-            
-            # ... (Logic similar to optimized method to build headers) ...
-            # For brevity, let's assume we can iterate the discovered keys.
-            
-            # Let's use a simplified approach:
-            # Just extract all keys, sort them, and use them as columns.
-            # But we need friendly names.
-            
-            # Let's copy the discovery logic from `generate_csv_rows_for_study_optimized` 
-            # but apply it once to the whole dataset (which we have in memory).
-            
-            # ... (Skipping full replication of discovery for brevity, assuming standard keys) ...
-            # To be safe and exact, we should probably stick to the loop-based approach for *headers* 
-            # but use Pandas for the data.
-            
-            # Actually, if we use `json_normalize` on the column `layers_shown_in_task`, we get a DF of visibility.
-            # Then we just need to rename columns.
-            
-            # Extract layer data
-            def get_layer_data(row):
-                d = row.get('layers_shown_in_task') or row.get('elements_shown_content') or {}
-                if isinstance(d, list):
-                    return {f"Layer_{i+1}": (1 if x else 0) for i, x in enumerate(d)}
-                if isinstance(d, dict):
-                    # Flatten {key: {visible: true}} to {key: 1}
-                    out = {}
-                    for k, v in d.items():
-                        if isinstance(v, dict):
-                            out[k] = 1 if v.get('visible') else 0
-                        else:
-                            try: out[k] = 1 if int(v) else 0
-                            except: out[k] = 1 if v else 0
-                    return out
-                return {}
-
-            layer_data_df = full_df.apply(get_layer_data, axis=1, result_type='expand')
-            
-            # Now rename columns of layer_data_df based on DB layers
-            # This is the tricky part: mapping "LayerName_1" to "LayerName-ImageName"
-            # We can build a map from DB.
-            
-            # ... (Build map) ...
-            # Reuse logic:
-            legacy_prefix_to_z_index = {} # We might need to scan data for this if we want exact parity
-            
-            # Let's try to be smart:
-            # Iterate columns of layer_data_df
-            rename_map = {}
-            for col in layer_data_df.columns:
-                # col is like "Background_1"
-                # Find matching layer and image
-                # ...
-                # Simplification: Just replace _ with -
-                rename_map[col] = col.replace('_', '-').replace(' ', '-')
+            for layer_name, img_name in layer_defs:
+                col_header = f"{layer_name}-{img_name}".replace('_', '-').replace(' ', '-')
                 
-                # Try to find image name
-                import re
-                m = re.match(r"^(.+)_(\d+)$", str(col))
-                if m:
-                    lname = m.group(1)
-                    idx = int(m.group(2))
-                    # Find layer
-                    layer = next((l for l in layers if l.name == lname), None)
-                    if layer:
-                        # Find image
-                        # We need to fetch images for layers.
-                        # (Doing this inside loop is bad, fetch all first)
-                        pass
-
-            # Fetch all layer images
-            layer_images = {}
-            for l in layers:
-                imgs = self.db.execute(select(LayerImage).where(LayerImage.layer_id == l.id).order_by(LayerImage.order)).scalars().all()
-                layer_images[l.name] = imgs
-
-            for col in layer_data_df.columns:
-                m = re.match(r"^(.+)_(\d+)$", str(col))
-                if m:
-                    lname = m.group(1)
-                    idx = int(m.group(2))
-                    if lname in layer_images:
-                        imgs = layer_images[lname]
-                        if 1 <= idx <= len(imgs):
-                            img_name = imgs[idx-1].name
-                            rename_map[col] = f"{lname}-{img_name}".replace('_', '-')
-            
-            layer_data_df = layer_data_df.rename(columns=rename_map)
-            
-            # Sort columns by layer z-index order
-            # Build a map of column name to z-index for sorting
-            col_to_z_index = {}
-            for col in layer_data_df.columns:
-                # Extract layer name from column (format: "LayerName-ImageName")
-                import re
-                # Try to match the original key before renaming
-                original_key = None
-                for orig, renamed in rename_map.items():
-                    if renamed == col:
-                        original_key = orig
-                        break
+                # In esc_df, keys are usually Layer Names (e.g. "Layer 1")
+                # The value is a dict: {"name": "ImageName", ...}
+                # Or sometimes just the image name string?
+                # Based on previous code: "if isinstance(v, dict) and (v.get('url') or v.get('name'))"
                 
-                if original_key:
-                    m = re.match(r"^(.+)_(\d+)$", str(original_key))
-                    if m:
-                        lname = m.group(1)
-                        # Find the layer's z-index
-                        layer = next((l for l in layers if l.name == lname), None)
-                        if layer:
-                            col_to_z_index[col] = (getattr(layer, 'z_index', 999), layer.order, col)
-                        else:
-                            col_to_z_index[col] = (999, 999, col)
-                    else:
-                        col_to_z_index[col] = (999, 999, col)
-                else:
-                    col_to_z_index[col] = (999, 999, col)
-            
-            # Sort columns by (z_index, order, name)
-            sorted_cols = sorted(layer_data_df.columns, key=lambda c: col_to_z_index.get(c, (999, 999, c)))
-            layer_data_df = layer_data_df[sorted_cols]
-            
-            # Fill NaN with 0 for layer visibility
-            layer_data_df = layer_data_df.fillna(0)
-            
-            full_df = pd.concat([full_df, layer_data_df], axis=1)
-            dynamic_cols = list(layer_data_df.columns)
+                # We need to check if column "LayerName" exists in esc_df
+                # And if its value matches "ImageName"
+                
+                # Handle potential key variations (spaces, underscores)
+                # But usually keys in elements_shown_content match Layer Name exactly.
+                
+                series = pd.Series(0, index=full_df.index)
+                
+                # Try exact layer name match
+                if layer_name in esc_df.columns:
+                    # Check if value has name == img_name
+                    def check_image(val):
+                        if isinstance(val, dict):
+                            return 1 if val.get('name') == img_name else 0
+                        return 0
+                    
+                    series = esc_df[layer_name].apply(check_image)
+                
+                full_df[col_header] = series
+                dynamic_cols.append(col_header)
 
         # 5. Assemble Final DataFrame
         # Columns: Panelist, [Questions], Gender, Age, Task, [Dynamic], Rating, ResponseTime
@@ -2611,7 +2502,7 @@ class StudyResponseService:
         # answers_pivot index is study_response_id
         full_df = full_df.merge(answers_pivot, left_on='study_response_id', right_index=True, how='left')
         
-        final_cols = ['session_id'] + list(question_id_to_col.values()) + ['Gender', 'Age', 'Task'] + dynamic_cols + ['rating_given', 'task_duration_seconds']
+        final_cols = ['session_id','Age', 'Gender'] + list(question_id_to_col.values()) + ['Task'] + dynamic_cols + ['rating_given', 'task_duration_seconds']
         
         # Rename for export
         export_rename = {
@@ -2631,24 +2522,24 @@ class StudyResponseService:
                     full_df[c] = None
                 
         export_df = full_df[final_cols].rename(columns=export_rename)
+        return export_df
+        # # 6. Yield CSV
+        # # Yield header first? to_csv(index=False) includes header.
+        # # We can yield chunks.
         
-        # 6. Yield CSV
-        # Yield header first? to_csv(index=False) includes header.
-        # We can yield chunks.
+        # # Convert to CSV string
+        # # Using a buffer
+        # import io
+        # output = io.StringIO()
+        # # Write header + first chunk
+        # # Actually, just dump the whole thing if it fits in memory (Pandas approach usually implies memory fit).
+        # # If we want streaming, we can chunk the DF.
         
-        # Convert to CSV string
-        # Using a buffer
-        import io
-        output = io.StringIO()
-        # Write header + first chunk
-        # Actually, just dump the whole thing if it fits in memory (Pandas approach usually implies memory fit).
-        # If we want streaming, we can chunk the DF.
-        
-        chunk_size = 5000
-        for i in range(0, len(export_df), chunk_size):
-            chunk = export_df.iloc[i:i+chunk_size]
-            is_first = (i == 0)
-            yield chunk.to_csv(index=False, header=is_first, lineterminator='\n')
+        # chunk_size = 5000
+        # for i in range(0, len(export_df), chunk_size):
+        #     chunk = export_df.iloc[i:i+chunk_size]
+        #     is_first = (i == 0)
+        #     yield chunk.to_csv(index=False, header=is_first, lineterminator='\n')
 
 
 

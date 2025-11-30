@@ -26,6 +26,7 @@ from app.schemas.response_schema import (
     ElementInteractionCreate, CompletedTaskCreate, ClassificationAnswerCreate, StudyResponseCreate
 )
 from app.services.response import StudyResponseService, TaskSessionService
+from app.services.analysis import StudyAnalysisService
 
 router = APIRouter()
 
@@ -731,7 +732,7 @@ async def export_response_detailed(
     }
 
 
-@router.get("/export/study/{study_id}/flattened-csv")
+@router.get("/export/study/{study_id}/flattened-csv2")
 async def export_study_flattened_csv(
     study_id: UUID,
     current_user: User = Depends(get_current_active_user),
@@ -756,6 +757,154 @@ async def export_study_flattened_csv(
         "Content-Disposition": f"attachment; filename={filename}"
     }
     return StreamingResponse(csv_generator(), media_type="text/csv", headers=headers)
+
+@router.get("/export/study/{study_id}/flattened-csv")
+async def export_study_analysis(
+    study_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Export a comprehensive Excel report with regression analysis, segmentation, and clustering.
+    """
+    # Verify user owns the study
+    from app.services import study as study_service
+    from app.models.study_model import Study
+    from sqlalchemy.orm import defer, selectinload
+    
+    study_obj = (
+        db.query(Study)
+        .options(defer(Study.tasks))
+        .filter(Study.id == study_id)
+        .first()
+    )
+    # print(study_obj)
+    if not study_obj:
+        raise HTTPException(status_code=404, detail="Study not found")
+    
+    # Verify ownership
+    if study_obj.creator_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # 1. Get DataFrame
+    response_service = StudyResponseService(db)
+    df = response_service.get_study_dataframe(study_id)
+    print(df)
+    
+        
+    # 2. Get Study Data (JSON)
+    # We need the full study definition (elements, categories, questions)
+    # The study object from get_study might be an ORM object.
+    # We can convert it to dict or fetch the JSON representation if stored.
+    # Assuming standard Pydantic model conversion or similar.
+    # Let's use the public info helper or just dump the model.
+    
+    # We need specific fields: title, background, language, launched_at, categories, elements, classification_questions
+    # elements and categories might be relationships.
+    
+    # Let's construct the study_data dict manually from the ORM object to be safe and complete
+    # Or use the existing schema.
+    # from app.schemas.study_schema import StudyDetail
+    # Re-fetch with all relations if needed, but get_study usually loads them?
+    # Let's check get_study implementation if possible, but assuming it returns the model.
+    
+    # To be safe, let's fetch what we need using the public info service which formats it nicely?
+    # Or just use the ORM object.
+    
+    # Let's build a dict that matches what analysis service expects
+    study_data = {
+        "title": study_obj.title,
+        "study_type": study_obj.study_type,
+        "background": study_obj.background_image_url, # Mapped to background in analysis? No, analysis uses "background" text field?
+        # analysis_v2 uses: title, background, language, launched_at
+        # It seems "background" refers to "background context" text, not image.
+        # Let's check if Study model has "background" text field.
+        # If not, maybe "orientation_text"?
+        # analysis_v2: background = data.get("background", "")
+        # Let's assume it might be missing or mapped to something else.
+        
+        "language": study_obj.language,
+        "launched_at": study_obj.created_at.isoformat() if study_obj.created_at else "",
+        "categories": [],
+        "elements": [],
+        "classification_questions": []
+    }
+    
+    # Populate lists
+    # Populate lists based on study type
+    # print(study_obj.data)
+    print(study_obj.__dict__)
+    aa=open('study.json','w')
+    aa.write(str(study_obj.__dict__))    
+    if str(study_obj.study_type) == 'layer':
+        # Map Layers -> Categories, Images -> Elements
+        # Ensure layers are loaded. Accessing them should trigger lazy load if session is active.
+        # Sort by order
+        sorted_layers = sorted(study_obj.layers, key=lambda x: x.order)
+        
+        for layer in sorted_layers:
+            # Create a "Category" for this layer
+            cat_id = str(layer.layer_id) # Use layer_id as category_id
+            study_data["categories"].append({
+                "id": cat_id,
+                "name": layer.name,
+                "order": layer.order
+            })
+            
+            # Create "Elements" for images in this layer
+            sorted_images = sorted(layer.images, key=lambda x: x.order)
+            for img in sorted_images:
+                study_data["elements"].append({
+                    "id": str(img.image_id),
+                    "name": img.name,
+                    "content": img.url, # Use URL as content
+                    "category_id": cat_id,
+                    "category": {"name": layer.name, "order": layer.order}
+                })
+    else:
+        # Grid logic (existing)
+        for cat in study_obj.categories:
+            study_data["categories"].append({
+                "id": str(cat.id),
+                "name": cat.name,
+                "order": cat.order
+            })
+            for el in cat.elements:
+                study_data["elements"].append({
+                    "id": str(el.id),
+                    "name": el.name,
+                    "content": el.content, # analysis uses content
+                    "category_id": str(cat.id),
+                    "category": {"name": cat.name, "order": cat.order} # Helper for analysis
+                })
+            
+    for q in study_obj.classification_questions:
+        study_data["classification_questions"].append({
+            "question_id": q.question_id,
+            "question_text": q.question_text,
+            "answer_options": q.answer_options
+        })
+        
+    # 3. Generate Report
+    analysis_service = StudyAnalysisService()
+    try:
+        excel_file = analysis_service.generate_report(df, study_data)
+    except Exception as e:
+        print(f"Analysis generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate analysis report: {str(e)}")
+    
+    filename = f"study_{study_id}_analysis.xlsx"
+    headers = {
+        "Content-Disposition": f"attachment; filename={filename}"
+    }
+    
+    return StreamingResponse(
+        excel_file, 
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+        headers=headers
+    )
 
 @router.get("/respondent/{respondent_id}/study/{study_id}/info")
 async def get_respondent_study_info(

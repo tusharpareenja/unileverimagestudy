@@ -43,21 +43,25 @@ async def health_check():
 
 @app.on_event("startup")
 async def on_startup():
+    print("Starting application startup...")
     # Initialize Cloudinary once
     init_cloudinary()
+    print("Cloudinary initialized")
     
     # Start background tasks
     from app.services.background_tasks import background_task_service
     background_task_service.task = asyncio.create_task(
         background_task_service.start_abandonment_checker(interval_minutes=15)
     )
-    
+    print("done background tadsk")
     # Start task generation cleanup service
     from app.services.background_task_service import background_task_service as task_service
-    await task_service.start_cleanup_task()
+    task_service._cleanup_task = asyncio.create_task(task_service._cleanup_old_jobs())
+    print("done background cleanup")
+    print("Startup function completed successfully!")
 
 @app.on_event("shutdown")
 async def on_shutdown():
     # Stop background tasks
     from app.services.background_tasks import background_task_service
-    background_task_service.stop_abandonment_checker()
+    background_task_service.stop_abandonment_checker()  
