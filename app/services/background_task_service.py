@@ -116,12 +116,12 @@ class BackgroundTaskService:
             from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
             
             # Process based on study type
-            if job.payload.get('study_type') == 'grid':
+            if job.payload.get('study_type') in ('grid', 'text'):
                 result = await self._generate_grid_tasks_async(job, db)
             elif job.payload.get('study_type') == 'layer':
                 result = await self._generate_layer_tasks_async(job, db)
             else:
-                raise ValueError(f"Unsupported study type: {job.payload.get('study_type')}")
+                raise ValueError(f"Unsupported study type: {job.payload.get('study_type')}. Must be 'grid', 'layer', or 'text'.")
             
             # Save results
             await self._save_results(job, result, db)

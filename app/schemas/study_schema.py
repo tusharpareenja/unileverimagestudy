@@ -6,7 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 from typing import Any, Dict, Optional
 
-StudyType = Literal['grid', 'layer']
+StudyType = Literal['grid', 'layer', 'text']
 StudyStatus = Literal['draft', 'active', 'paused', 'completed']
 ElementType = Literal['image', 'text']
 LayerType = Literal['image', 'text']
@@ -30,7 +30,7 @@ class AudienceSegmentation(BaseModel):
 
 class StudyElementIn(BaseModel):
     element_id: UUID  # UUID instead of string
-    name: str = Field(..., max_length=100)
+    name: str = Field(..., max_length=1000)
     description: Optional[str] = None
     element_type: ElementType
     content: str

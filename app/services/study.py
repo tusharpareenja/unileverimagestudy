@@ -40,8 +40,12 @@ def _ensure_study_type_constraints(payload: StudyCreate) -> None:
     elif payload.study_type == 'layer':
         if not payload.study_layers or len(payload.study_layers) < 1:
             raise HTTPException(status_code=400, detail="Layer study requires at least one layer with images.")
+    elif payload.study_type == 'text':
+        if not payload.elements or len(payload.elements) < 1:
+            raise HTTPException(status_code=400, detail="Text study requires non-empty elements (statements).")
+        # Text type uses same structure as grid: categories and elements (text statements)
     else:
-        raise HTTPException(status_code=400, detail="Unsupported study_type. Must be 'grid' or 'layer'.")
+        raise HTTPException(status_code=400, detail="Unsupported study_type. Must be 'grid', 'layer', or 'text'.")
 
 def _validate_rating_scale(rating_scale: Dict[str, Any]) -> None:
     logger.info(f"Validating rating scale: {rating_scale}")
@@ -195,7 +199,7 @@ def create_study(
 
     # Children (optimize by avoiding intermediate flushes and using bulk saves)
     with db.no_autoflush:
-        if payload.study_type == 'grid' and payload.elements:
+        if payload.study_type in ('grid', 'text') and payload.elements:
             # Create categories first if provided
             category_map = {}  # category_id -> category_uuid
             if payload.categories:
@@ -685,9 +689,9 @@ def update_study(
 
     # Replace children collections if provided
     if payload.elements is not None:
-        # Only valid for grid
-        if study.study_type != 'grid':
-            raise HTTPException(status_code=400, detail="elements can only be set for grid studies.")
+        # Only valid for grid and text
+        if study.study_type not in ('grid', 'text'):
+            raise HTTPException(status_code=400, detail="elements can only be set for grid and text studies.")
 
         # Handle categories first - they must be provided when updating elements
         category_map = {}  # category_id -> category_uuid
@@ -1112,7 +1116,7 @@ def regenerate_tasks(
     audience = study.audience_segmentation or {}
     number_of_respondents = audience.get('number_of_respondents')
     computed_total: int = 0
-    if study.study_type == 'grid':
+    if study.study_type in ('grid', 'text'):
         # Cache constants to avoid repeated lookups
         exposure_tolerance_cv = 1.0
         seed = None
@@ -1215,7 +1219,7 @@ def regenerate_tasks(
         # total stored only in response; audience_segmentation remains unchanged
 
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}")
+        raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}. Must be 'grid', 'layer', or 'text'.")
 
     # Optimized commit and response generation
     try:
@@ -1250,7 +1254,7 @@ def validate_tasks(
     # Simplified validation without IPED parameters
     totals: Dict[str, Any] = {}
 
-    if study.study_type == 'grid':
+    if study.study_type in ('grid', 'text'):
         # Basic structural checks
         for respondent, task_list in study.tasks.items():
             for task in task_list:

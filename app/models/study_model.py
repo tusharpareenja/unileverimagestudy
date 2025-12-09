@@ -8,7 +8,7 @@ from sqlalchemy.orm import relationship
 from app.db.base import Base
 import uuid
 
-study_type_enum = Enum('grid', 'layer', name='study_type_enum')
+study_type_enum = Enum('grid', 'layer', 'text', name='study_type_enum')
 study_status_enum = Enum('draft', 'active', 'paused', 'completed', name='study_status_enum')
 element_type_enum = Enum('image', 'text', name='element_type_enum')
 layer_type_enum = Enum('image', 'text', name='layer_type_enum')

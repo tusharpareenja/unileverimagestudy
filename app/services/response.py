@@ -419,7 +419,7 @@ class StudyResponseService:
         # Build a name-keyed visibility map for grid studies
         name_visibility: Dict[str, Any] = {}
         study_row: Optional[Study] = self.db.get(Study, response.study_id)
-        if study_row and str(study_row.study_type) == 'grid':
+        if study_row and str(study_row.study_type) in ('grid', 'text'):
             # Load element id->name map in E-number order
             elements = self.db.execute(
                 select(StudyElement).where(StudyElement.study_id == study_row.id)
@@ -565,7 +565,7 @@ class StudyResponseService:
                 if completed_task.elements_shown_content is None:
                     completed_task.elements_shown_content = layer_payload
         # For grid studies, if elements_shown_content is missing, hydrate from generated tasks
-        if study_row and str(study_row.study_type) == 'grid':
+        if study_row and str(study_row.study_type) in ('grid', 'text'):
             try:
                 if completed_task.elements_shown_content is None and isinstance(study_row.tasks, dict):
                     # Resolve respondent and task index from task_id when possible
@@ -689,7 +689,7 @@ class StudyResponseService:
 
         # Preload element name->url once for grid enrichment
         name_to_url: Dict[str, str] = {}
-        if study_row and str(study_row.study_type) == 'grid':
+        if study_row and str(study_row.study_type) in ('grid', 'text'):
             elems = self.db.execute(
                 select(StudyElement.name, StudyElement.content).where(StudyElement.study_id == response.study_id)
             ).all()
@@ -769,7 +769,7 @@ class StudyResponseService:
             task_model.study_response_id = response.id
 
             # Grid enrichment for content map if missing
-            if study_row and str(study_row.study_type) == 'grid' and task_model.elements_shown_in_task and not task_model.elements_shown_content:
+            if study_row and str(study_row.study_type) in ('grid', 'text') and task_model.elements_shown_in_task and not task_model.elements_shown_content:
                 enriched = None
                 # Try: resolve from Study.tasks by task_id
                 try:
@@ -1517,7 +1517,7 @@ class StudyResponseService:
 
         # Grid headers (CategoryName_ImageName by category order and element_id)
         grid_columns_opt: List[tuple[str, str, int]] = []  # (cat_name, element_name, one_based_index)
-        if str(study.study_type) == 'grid':
+        if str(study.study_type) in ('grid', 'text'):
             from app.models.study_model import StudyCategory, StudyElement
             categories = self.db.execute(
                 select(StudyCategory)
@@ -2300,7 +2300,7 @@ class StudyResponseService:
         full_df['Task'] = full_df['task_index'].fillna(0).astype(int) + 1
         
         # Determine dynamic columns
-        is_grid = str(study.study_type) == 'grid'
+        is_grid = str(study.study_type) in ('grid', 'text')
         dynamic_cols = []
                 
         if is_grid:
@@ -2345,8 +2345,11 @@ class StudyResponseService:
                     grid_defs.append((cat.name, el.name, idx))
 
             # Expand task + content visibility
-            esi_df = pd.DataFrame(full_df['elements_shown_in_task'].fillna({}).tolist())
-            esc_df = pd.DataFrame(full_df['elements_shown_content'].fillna({}).tolist())
+            # Replace None values with {} before creating DataFrame
+            esi_list = [x if x is not None else {} for x in full_df['elements_shown_in_task'].tolist()]
+            esc_list = [x if x is not None else {} for x in full_df['elements_shown_content'].tolist()]
+            esi_df = pd.DataFrame(esi_list)
+            esc_df = pd.DataFrame(esc_list)
 
             def normalize_value(x):
                 if isinstance(x, bool):

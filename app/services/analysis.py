@@ -103,8 +103,15 @@ class StudyAnalysisService:
                     "category_order": cat_obj.get("order", 0),
                 })
 
-        # Keep only columns that exist
-        element_cols = [m["csv_col"] for m in element_meta]
+        # Keep only columns that exist and deduplicate (some elements may have same name)
+        element_cols_raw = [m["csv_col"] for m in element_meta]
+        # Deduplicate while preserving order
+        seen = set()
+        element_cols = []
+        for col in element_cols_raw:
+            if col not in seen:
+                element_cols.append(col)
+                seen.add(col)
         
         # Maps
         col_to_catname = {m["csv_col"]: m["category_name"] for m in element_meta}

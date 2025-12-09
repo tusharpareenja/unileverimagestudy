@@ -862,7 +862,7 @@ async def export_study_analysis(
                     "category": {"name": layer.name, "order": layer.order}
                 })
     else:
-        # Grid logic (existing)
+        # Grid and text logic (both use categories and elements)
         for cat in study_obj.categories:
             study_data["categories"].append({
                 "id": str(cat.id),

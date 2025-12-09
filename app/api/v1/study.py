@@ -31,8 +31,8 @@ def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents
     # Generate tasks for just 1-3 respondents as a preview
     preview_respondents = min(3, number_of_respondents)
     
-    if payload.study_type == 'grid':
-        # Create a minimal preview for grid studies
+    if payload.study_type == 'grid' or payload.study_type == 'text':
+        # Create a minimal preview for grid and text studies (both use same structure)
         if not payload.elements or not payload.categories:
             return {}
         
@@ -729,7 +729,7 @@ def generate_tasks_from_body_endpoint(
             base_url_for_share=settings.BASE_URL,
         )
 
-    if payload.study_type == 'grid':
+    if payload.study_type in ('grid', 'text'):
         if not payload.elements or len(payload.elements) == 0:
             raise HTTPException(status_code=400, detail="Grid study requires elements")
         if not payload.categories or len(payload.categories) == 0:
