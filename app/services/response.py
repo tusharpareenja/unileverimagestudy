@@ -8,7 +8,7 @@ import time
 import pandas as pd
 
 from sqlalchemy.orm import Session, selectinload, load_only
-from sqlalchemy import select, func, desc, and_, or_
+from sqlalchemy import select, func, desc, and_, or_, text
 from fastapi import HTTPException, status
 
 from app.models.response_model import (
@@ -378,7 +378,7 @@ class StudyResponseService:
         
         # Check if study should be auto-completed immediately after new response is created
         # This ensures immediate completion when total_responses equals expected_respondents
-        self._check_and_complete_studies()
+        self._check_and_complete_studies(study_id=request.study_id)
         
         # Return immediately without refresh or counter updates
         return StartStudyResponse(
@@ -647,7 +647,7 @@ class StudyResponseService:
         if is_complete:
             self._mark_response_completed(response)
             # Check if study should be auto-completed after this response completion
-            self._check_and_complete_studies()
+            self._check_and_complete_studies(study_id=response.study_id)
         
         # Single commit at end
         self.db.commit()
@@ -1680,7 +1680,7 @@ class StudyResponseService:
         self._update_study_counters(response.study_id)
         
         # Check if study should be auto-completed
-        self._check_and_complete_studies()
+        self._check_and_complete_studies(study_id=response.study_id)
         
         # Invalidate analytics cache since data changed
         self.invalidate_analytics_cache(response.study_id)
@@ -1726,11 +1726,13 @@ class StudyResponseService:
         
         return count
     
-    def _check_and_complete_studies(self):
+    def _check_and_complete_studies(self, study_id: Optional[UUID] = None):
         """Check if studies should be automatically marked as completed.
         When total_responses equals expected_respondents, immediately mark study as complete
         regardless of current status (active, paused, etc.).
         Also marks any in_progress responses as abandoned when study is completed.
+        
+        If study_id is provided, only checks that specific study (optimized path).
         """
         import logging
         from app.models.study_model import Study
@@ -1738,39 +1740,38 @@ class StudyResponseService:
         
         logger = logging.getLogger(__name__)
         
-        # Check studies that are not already completed - user wants immediate completion regardless of status
-        # (active, paused, draft) but not already completed
-        all_studies = self.db.execute(
-            select(Study)
-            .where(Study.status.in_(['active', 'paused', 'draft']))
-        ).scalars().all()
+        # Determine which studies to check
+        if study_id:
+            # Single study check - much faster
+            studies_to_check = self.db.execute(
+                select(Study)
+                .where(Study.id == study_id)
+                .where(Study.status.in_(['active', 'paused', 'draft']))
+            ).scalars().all()
+        else:
+            # Check all eligible studies
+            studies_to_check = self.db.execute(
+                select(Study)
+                .where(Study.status.in_(['active', 'paused', 'draft']))
+            ).scalars().all()
         
-        for study in all_studies:
-            # Get current response counts for this study
-            total_responses = self.db.execute(
-                select(func.count(StudyResponse.id))
-                .where(StudyResponse.study_id == study.id)
-            ).scalar() or 0
+        for study in studies_to_check:
+            # Get current response counts for this study in a single optimized query
+            counts = self.db.execute(
+                text("""
+                    SELECT 
+                        COUNT(*) as total,
+                        COUNT(*) FILTER (WHERE is_completed = true) as completed,
+                        COUNT(*) FILTER (WHERE is_abandoned = true) as abandoned
+                    FROM study_responses 
+                    WHERE study_id = :study_id
+                """),
+                {"study_id": study.id}
+            ).first()
             
-            completed_responses = self.db.execute(
-                select(func.count(StudyResponse.id))
-                .where(
-                    and_(
-                        StudyResponse.study_id == study.id,
-                        StudyResponse.is_completed == True
-                    )
-                )
-            ).scalar() or 0
-            
-            abandoned_responses = self.db.execute(
-                select(func.count(StudyResponse.id))
-                .where(
-                    and_(
-                        StudyResponse.study_id == study.id,
-                        StudyResponse.is_abandoned == True
-                    )
-                )
-            ).scalar() or 0
+            total_responses = counts.total or 0
+            completed_responses = counts.completed or 0
+            abandoned_responses = counts.abandoned or 0
             
             # Check if all expected respondents have either completed or abandoned
             expected_respondents = study.audience_segmentation.get('number_of_respondents', 0) if study.audience_segmentation else 0
@@ -1981,14 +1982,14 @@ class StudyResponseService:
     # ---------- Helper Methods ----------
     
     def _get_next_respondent_id(self, study_id: UUID) -> int:
-        """Get the next available respondent ID for a study, starting from 1."""
-        # Count existing responses for this study to get the next sequential ID
-        existing_count = self.db.execute(
-            select(func.count(StudyResponse.id))
-            .where(StudyResponse.study_id == study_id)
-        ).scalar()
+        """Get the next available respondent ID for a study, starting from 1.
+        Optimized to use MAX(respondent_id) instead of COUNT(*) for speed.
+        """
+        # Get the highest respondent ID current assigned for this study
+        stmt = select(func.max(StudyResponse.respondent_id)).where(StudyResponse.study_id == study_id)
+        max_id = self.db.execute(stmt).scalar()
         
-        return existing_count + 1
+        return (max_id or 0) + 1
     
     def _calculate_respondent_task_count(self, tasks: Any, respondent_id: int) -> int:
         """Calculate the number of tasks assigned to a specific respondent."""
