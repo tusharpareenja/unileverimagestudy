@@ -1320,6 +1320,7 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
     """
     Get basic study details for public access (no authentication required).
     Ultra-fast query with minimal data loading using raw SQL for maximum speed.
+    Includes element_count: number of images (grid/layer) or statements (text).
     """
     from sqlalchemy import text
     
@@ -1364,6 +1365,31 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
             "config": row.config
         })
     
+    # Count elements based on study type
+    element_count = 0
+    study_type = result.study_type
+    
+    if study_type == 'grid' or study_type == 'text':
+        # For grid and text studies, count elements (images for grid, statements for text)
+        element_count_query = text("""
+            SELECT COUNT(*) as count
+            FROM study_elements
+            WHERE study_id = :study_id
+        """)
+        count_result = db.execute(element_count_query, {"study_id": study_id}).first()
+        element_count = count_result.count if count_result else 0
+        
+    elif study_type == 'layer':
+        # For layer studies, count total images across all layers
+        layer_image_count_query = text("""
+            SELECT COUNT(li.id) as count
+            FROM layer_images li
+            INNER JOIN study_layers sl ON li.layer_id = sl.id
+            WHERE sl.study_id = :study_id
+        """)
+        count_result = db.execute(layer_image_count_query, {"study_id": study_id}).first()
+        element_count = count_result.count if count_result else 0
+    
     return {
         "id": result.id,
         "title": result.title,
@@ -1376,5 +1402,6 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         "rating_scale": result.rating_scale,
         "language": result.language,
         "study_config": study_config,
-        "classification_questions": classification_questions
+        "classification_questions": classification_questions,
+        "element_count": element_count
     }

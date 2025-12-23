@@ -230,6 +230,7 @@ class StudyBasicDetails(BaseModel):
     jobid: Optional[str] = None
     study_config: Optional[Dict[str, Any]] = None  # For additional configuration
     classification_questions: Optional[List[StudyClassificationQuestionOut]] = None
+    element_count: Optional[int] = None  # Number of images (grid/layer) or statements (text)
 
     model_config = ConfigDict(from_attributes=True)
 
