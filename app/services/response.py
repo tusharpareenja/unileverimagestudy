@@ -660,16 +660,35 @@ class StudyResponseService:
         )
     
     def submit_classification(self, session_id: str, request: SubmitClassificationRequest) -> bool:
-        """Submit classification answers."""
+        """Submit classification answers with upsert logic to prevent duplicates."""
         response = self.get_response_by_session(session_id)
         if not response:
             raise HTTPException(status_code=404, detail="Session not found")
         
-        # Add classification answers
+        # Add or update classification answers (upsert to prevent duplicates)
         for answer_data in request.answers:
-            answer = ClassificationAnswer(**answer_data.model_dump())
-            answer.study_response_id = response.id
-            self.db.add(answer)
+            # Check if an answer already exists for this question
+            existing_answer = self.db.execute(
+                select(ClassificationAnswer).where(
+                    and_(
+                        ClassificationAnswer.study_response_id == response.id,
+                        ClassificationAnswer.question_id == answer_data.question_id
+                    )
+                )
+            ).scalar_one_or_none()
+            
+            if existing_answer:
+                # Update existing answer instead of creating duplicate
+                existing_answer.answer = answer_data.answer
+                existing_answer.answer_timestamp = answer_data.answer_timestamp
+                existing_answer.time_spent_seconds = answer_data.time_spent_seconds
+                if answer_data.question_text:
+                    existing_answer.question_text = answer_data.question_text
+            else:
+                # Create new answer
+                answer = ClassificationAnswer(**answer_data.model_dump())
+                answer.study_response_id = response.id
+                self.db.add(answer)
         
         response.last_activity = datetime.utcnow()
         self.db.commit()
@@ -2250,7 +2269,14 @@ class StudyResponseService:
                 return raw
 
             answers_df['formatted_answer'] = answers_df.apply(format_answer, axis=1)
-            answers_pivot = answers_df.pivot(index='study_response_id', columns='question_id', values='formatted_answer')
+            # Use pivot_table instead of pivot to handle duplicate entries
+            # (same question answered multiple times by same respondent)
+            answers_pivot = answers_df.pivot_table(
+                index='study_response_id', 
+                columns='question_id', 
+                values='formatted_answer',
+                aggfunc='first'  # Take the first answer if duplicates exist
+            )
         else:
             answers_pivot = pd.DataFrame(index=response_ids)
 
