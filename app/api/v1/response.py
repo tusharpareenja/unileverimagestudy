@@ -15,6 +15,7 @@ from sqlalchemy import select
 from app.core.dependencies import get_current_active_user
 from app.db.session import get_db
 from app.models.user_model import User
+from app.models.study_model import Study, StudyMember
 from app.schemas.response_schema import (
     StudyResponseOut, StudyResponseDetail, StudyResponseListItem,
     StartStudyRequest, StartStudyResponse, SubmitTaskRequest, SubmitTaskResponse,
@@ -315,8 +316,26 @@ async def list_responses(
     
     if study_id:
         # Optimized: lightweight ownership check
-        from app.services import study as study_service
-        if not study_service.get_study_exists(db, study_id, current_user.id):
+        # Optimized: ownership/membership check
+        from sqlalchemy import select
+        from app.models.study_model import Study, StudyMember
+        
+        # Check if user is creator
+        is_owner = db.scalar(
+            select(Study.id).where(Study.id == study_id, Study.creator_id == current_user.id)
+        )
+        
+        is_member = False
+        if not is_owner:
+            # Check if user is member
+            is_member = db.scalar(
+                select(StudyMember.id).where(
+                    StudyMember.study_id == study_id,
+                    StudyMember.user_id == current_user.id
+                )
+            )
+        
+        if not is_owner and not is_member:
             raise HTTPException(
                 status_code=403,
                 detail="Access denied to this study"
@@ -416,13 +435,28 @@ async def get_study_analytics(
     start_time = time.time()
     
     # Fast ownership verification - only check creator_id, don't load full study
+    # Ownership/Membership verification
     from sqlalchemy import select
-    from app.models.study_model import Study
+    from app.models.study_model import Study, StudyMember
     
     ownership_check = select(Study.creator_id).where(Study.id == study_id)
     result = db.execute(ownership_check).first()
     
-    if not result or result.creator_id != current_user.id:
+    is_authorized = False
+    if result and result.creator_id == current_user.id:
+        is_authorized = True
+    elif result:
+        # Check membership
+        member = db.scalar(
+            select(StudyMember).where(
+                StudyMember.study_id == study_id,
+                StudyMember.user_id == current_user.id
+            )
+        )
+        if member:
+            is_authorized = True
+
+    if not is_authorized:
         raise HTTPException(
             status_code=404,
             detail="Study not found or access denied"
@@ -453,11 +487,27 @@ async def stream_study_analytics(
     Optimized for scalability with 100+ users.
     """
     # Ownership check (fast)
+    # Ownership/Membership verification
     from sqlalchemy import select
-    from app.models.study_model import Study
+    from app.models.study_model import Study, StudyMember
     ownership_check = select(Study.creator_id).where(Study.id == study_id)
     result = db.execute(ownership_check).first()
-    if not result or result.creator_id != current_user.id:
+    
+    is_authorized = False
+    if result and result.creator_id == current_user.id:
+        is_authorized = True
+    elif result:
+        # Check membership
+        member = db.scalar(
+            select(StudyMember).where(
+                StudyMember.study_id == study_id,
+                StudyMember.user_id == current_user.id
+            )
+        )
+        if member:
+            is_authorized = True
+
+    if not is_authorized:
         raise HTTPException(
             status_code=404,
             detail="Study not found or access denied"
@@ -782,8 +832,23 @@ async def export_study_analysis(
     if not study_obj:
         raise HTTPException(status_code=404, detail="Study not found")
     
-    # Verify ownership
-    if study_obj.creator_id != current_user.id:
+    # Verify ownership or membership
+    is_authorized = False
+    if study_obj.creator_id == current_user.id:
+        is_authorized = True
+    else:
+        # Check membership
+        from app.models.study_model import StudyMember
+        member = db.scalar(
+            select(StudyMember).where(
+                StudyMember.study_id == study_id,
+                StudyMember.user_id == current_user.id
+            )
+        )
+        if member:
+            is_authorized = True
+
+    if not is_authorized:
         raise HTTPException(status_code=403, detail="Access denied")
     
     # 1. Get DataFrame

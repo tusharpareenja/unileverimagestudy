@@ -80,6 +80,18 @@ class UserService:
             self.db.add(db_user)
             self.db.commit()
             self.db.refresh(db_user)
+            
+            # --- Link any pending study invitations ---
+            from app.models.study_model import StudyMember
+            from sqlalchemy import update
+            self.db.execute(
+                update(StudyMember)
+                .where(StudyMember.invited_email == db_user.email, StudyMember.user_id == None)
+                .values(user_id=db_user.id)
+            )
+            self.db.commit()
+            # ------------------------------------------
+
             logger.info("User created successfully: user_id=%s email=%s", db_user.id, db_user.email)
         except Exception:
             logger.exception("Create user DB error for email=%s", user_data.email)

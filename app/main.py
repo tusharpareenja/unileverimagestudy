@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.core.cloudinary_config import init_cloudinary
 
 app = FastAPI(
-    title="Unilever Image Study API",
+    title="mindsurve API",
     description="API for user authentication and management",
     version="1.0.0"
 )
@@ -33,7 +33,7 @@ app.include_router(uploads_router, prefix="/api/v1/uploads", tags=["uploads"])
 
 @app.get("/")
 async def root():
-    return {"message": "Unilever Image Study API", "version": "1.0.0"}
+    return {"message": "mindsurve API", "version": "1.0.0"}
 
 
 @app.get("/health")

@@ -12,6 +12,7 @@ study_type_enum = Enum('grid', 'layer', 'text', name='study_type_enum')
 study_status_enum = Enum('draft', 'active', 'paused', 'completed', name='study_status_enum')
 element_type_enum = Enum('image', 'text', name='element_type_enum')
 layer_type_enum = Enum('image', 'text', name='layer_type_enum')
+study_role_enum = Enum('admin', 'editor', 'viewer', name='study_role_enum')
 
 class Study(Base):
     __tablename__ = "studies"
@@ -64,6 +65,7 @@ class Study(Base):
     layers = relationship("StudyLayer", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     classification_questions = relationship("StudyClassificationQuestion", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     study_responses = relationship("StudyResponse", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
+    members = relationship("StudyMember", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
         UniqueConstraint('share_token', name='uq_studies_share_token'),
@@ -107,7 +109,7 @@ class StudyElement(Base):
     category_id = Column(UUID(as_uuid=True), ForeignKey('study_categories.id', ondelete='CASCADE'), nullable=False, index=True)
 
     element_id = Column(UUID(as_uuid=True), nullable=False)  # UUID for element
-    name = Column(String(100), nullable=False)
+    name = Column(String(1000), nullable=False)
     description = Column(Text, nullable=True)
     element_type = Column(element_type_enum, nullable=False)  # image|text
     content = Column(Text, nullable=False)                    # URL or text content
@@ -196,4 +198,33 @@ class StudyClassificationQuestion(Base):
     __table_args__ = (
         UniqueConstraint('study_id', 'question_id', name='uq_study_classification_questions_question_id'),
         Index('idx_study_classification_questions_study_id_order', 'study_id', 'order'),
+    )
+
+class StudyMember(Base):
+    """
+    Join table for study sharing with roles (Google Docs style).
+    """
+    __tablename__ = "study_members"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    study_id = Column(UUID(as_uuid=True), ForeignKey('studies.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=True, index=True)
+    
+    # role inherited from admin/editor/viewer
+    role = Column(study_role_enum, nullable=False, server_default='viewer')
+    
+    # invited_email handles the case where the user doesn't have an account yet
+    invited_email = Column(String(255), nullable=False, index=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    # Relations
+    study = relationship("Study", back_populates="members", lazy="selectin")
+    user = relationship("User", backref="shared_studies", lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint('study_id', 'invited_email', name='uq_study_members_study_email'),
+        Index('idx_study_members_study_id_role', 'study_id', 'role'),
+        Index('idx_study_members_user_id', 'user_id'),
     )

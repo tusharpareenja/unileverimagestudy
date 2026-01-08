@@ -3,13 +3,14 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any, Literal
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, AliasChoices
 from typing import Any, Dict, Optional
 
 StudyType = Literal['grid', 'layer', 'text']
 StudyStatus = Literal['draft', 'active', 'paused', 'completed']
 ElementType = Literal['image', 'text']
 LayerType = Literal['image', 'text']
+StudyRole = Literal['admin', 'editor', 'viewer']
 
 # ---------- Nested value objects ----------
 
@@ -183,6 +184,31 @@ class StudyUpdate(BaseModel):
     classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
     status: Optional[StudyStatus] = None
 
+# ---------- Study Sharing schemas ----------
+
+class StudyMemberBase(BaseModel):
+    email: str = Field(..., validation_alias=AliasChoices("email", "invited_email"))
+    role: StudyRole
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+class StudyMemberInvite(StudyMemberBase):
+    pass
+
+class StudyMemberOut(StudyMemberBase):
+    id: UUID
+    user_id: Optional[UUID] = None
+    created_at: datetime
+    updated_at: datetime
+    
+    # Optional nested user details if available
+    name: Optional[str] = None
+    is_registered: bool = False
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+class StudyMemberUpdate(BaseModel):
+    role: StudyRole
+
 # ---------- Read models ----------
 
 class StudyListItem(BaseModel):
@@ -242,6 +268,7 @@ class StudyOut(BaseModel):
     main_question: str
     orientation_text: str
     study_type: StudyType
+    user_role: Optional[str] = None
     background_image_url: Optional[str] = None
     aspect_ratio: Optional[str] = None
     rating_scale: RatingScale

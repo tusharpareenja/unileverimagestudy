@@ -6,11 +6,11 @@ from uuid import UUID, uuid4
 from datetime import datetime
 
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import select, func, desc, and_
+from sqlalchemy import select, func, desc, and_, or_
 from fastapi import HTTPException, status
 import logging
 
-from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage, StudyClassificationQuestion, StudyCategory
+from app.models.study_model import Study, StudyElement, StudyLayer, LayerImage, StudyClassificationQuestion, StudyCategory, StudyMember
 from app.models.response_model import StudyResponse
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem,
@@ -105,8 +105,34 @@ def _load_owned_study(db: Session, study_id: UUID, owner_id: UUID, for_update: b
     if for_update:
         stmt = stmt.with_for_update()
     study = db.scalars(stmt).first()
+
+    if not study:
+        # Check if the user is a member (Editor or Viewer)
+        stmt_member = (
+            select(Study)
+            .join(StudyMember, StudyMember.study_id == Study.id)
+            .options(
+                selectinload(Study.categories),
+                selectinload(Study.elements),
+                selectinload(Study.layers).selectinload(StudyLayer.images),
+                selectinload(Study.classification_questions),
+            )
+            .where(Study.id == study_id, StudyMember.user_id == owner_id)
+        )
+        study = db.scalars(stmt_member).first()
+        
     if not study:
         raise HTTPException(status_code=404, detail="Study not found or access denied.")
+    
+    # If for_update is True, we only allow Creator or Admin/Editor role
+    if for_update:
+        if study.creator_id != owner_id:
+            # Check role
+            stmt_role = select(StudyMember.role).where(StudyMember.study_id == study_id, StudyMember.user_id == owner_id)
+            role = db.scalar(stmt_role)
+            if role not in ('admin', 'editor'):
+                raise HTTPException(status_code=403, detail="You do not have permission to edit this study.")
+                
     return study
 
 def _load_owned_study_minimal(db: Session, study_id: UUID, owner_id: UUID, for_update: bool = False) -> Study:
@@ -607,9 +633,25 @@ def list_studies(
             abandoned_subq.label("abandoned_responses_calc"),
             avg_duration_subq.label("avg_duration_calc"),
         )
-        .where(Study.creator_id == owner_id)
+        .outerjoin(StudyMember, and_(StudyMember.study_id == Study.id, StudyMember.user_id == owner_id))
+        .where(
+            or_(
+                Study.creator_id == owner_id,
+                StudyMember.user_id == owner_id
+            )
+        )
     )
-    count_stmt = select(func.count()).select_from(Study).where(Study.creator_id == owner_id)
+    count_stmt = (
+        select(func.count(Study.id.distinct()))
+        .select_from(Study)
+        .outerjoin(StudyMember, and_(StudyMember.study_id == Study.id, StudyMember.user_id == owner_id))
+        .where(
+            or_(
+                Study.creator_id == owner_id,
+                StudyMember.user_id == owner_id
+            )
+        )
+    )
     if status_filter:
         base_stmt = base_stmt.where(Study.status == status_filter)
         count_stmt = count_stmt.where(Study.status == status_filter)
@@ -634,7 +676,13 @@ def update_study(
     logger.info(f"Payload: {payload.model_dump(exclude_none=True)}")
 
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
-    # Allow editing even when active (per new requirement)
+    # Allow editing even when active (per new requirement), 
+    # BUT only for the original creator once it's launched.
+    if study.launched_at and study.creator_id != owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="the study has already been launched by the admin please go to home page"
+        )
 
     # Handle status change if provided (align with change_status rules)
     if payload.status is not None:
@@ -865,7 +913,12 @@ def update_study_fast(
     else:
         study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
     
-    # Allow editing even when active (per new requirement)
+    # Prevent members from editing launched studies
+    if study.launched_at and study.creator_id != owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="the study has already been launched by the admin please go to home page"
+        )
 
     # Handle status change if provided (align with change_status rules)
     if payload.status is not None:
@@ -939,6 +992,13 @@ def update_and_launch_study_fast(
     """Ultra-optimized function that combines update and launch in a single transaction."""
     # Load study with minimal data for maximum performance
     study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
+    
+    # Prevent members from editing launched studies
+    if study.launched_at and study.creator_id != owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="the study has already been launched by the admin please go to home page"
+        )
     
     # Apply scalar updates
     if payload.title is not None:

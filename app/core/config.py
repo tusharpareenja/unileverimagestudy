@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     CLOUDINARY_CLOUD_NAME: str | None = None
     CLOUDINARY_API_KEY: str | None = None
     CLOUDINARY_API_SECRET: str | None = None
-    CLOUDINARY_FOLDER: str = "unilever_image_study"
+    CLOUDINARY_FOLDER: str = "mindsurve"
     
     # Azure Blob Storage Settings (support multiple env var names via validation aliases)
     AZURE_STORAGE_CONNECTION_STRING: str | None = Field(
@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     )  # Optional, appended to URLs for private containers
     
     # Application Settings
-    BASE_URL: str = "https://mindgenome.vercel.app"  # Base URL for share links in frontend
+    BASE_URL: str = "https://mindsurve.com"  # Base URL for share links in frontend
     
     # Task Generation Settings
     TASK_GENERATION_TIMEOUT: int = 3600  # 60 minutes timeout for task generation (Azure max is ~4-5 min for sync requests)
@@ -85,8 +85,7 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str | None = None
     SMTP_PASSWORD: str | None = None
     FROM_EMAIL: str 
-    APP_NAME: str = "Unilever Image Study"
-    FRONTEND_URL: str = "https://mindgenome.vercel.app"
+    APP_NAME: str = "mindsurve"
+    FRONTEND_URL: str = "https://mindsurve.com"
 
 settings = Settings()
-

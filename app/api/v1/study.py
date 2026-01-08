@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_active_user
 from app.db.session import get_db
 from app.models.user_model import User
-from app.models.study_model import Study
+from app.models.study_model import Study, StudyMember
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem, StudyLaunchOut,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus,
@@ -21,6 +21,8 @@ from app.schemas.study_schema import (
 from app.services import study as study_service
 from app.services.response import StudyResponseService
 from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
+from app.services.study_member_service import study_member_service
+from app.schemas.study_schema import StudyMemberInvite, StudyMemberOut, StudyMemberUpdate
 from app.core.config import settings
 
 router = APIRouter()
@@ -289,8 +291,25 @@ def get_study_preview_endpoint(
     study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
     ar = (study.audience_segmentation or {}).get('aspect_ratio')
 
+    # Determine user role
+    user_role = "viewer"
+    if study.creator_id == current_user.id:
+        user_role = "admin"
+    else:
+        # Check if member
+        from sqlalchemy import select
+        member = db.scalar(
+            select(StudyMember).where(
+                StudyMember.study_id == study.id,
+                StudyMember.user_id == current_user.id
+            )
+        )
+        if member:
+            user_role = member.role
+
     # Build response dict via pydantic but ensure classification_questions are included
     out = StudyOut.model_validate(study).model_dump()
+    out['user_role'] = user_role
     # Ensure aspect_ratio is present
     out['aspect_ratio'] = ar
 
@@ -560,6 +579,62 @@ def validate_tasks_endpoint(
     current_user: User = Depends(get_current_active_user),
 ):
     return study_service.validate_tasks(db=db, study_id=study_id, owner_id=current_user.id)
+
+
+# ---------- Sharing Endpoints ----------
+
+@router.post("/{study_id}/members/invite", response_model=StudyMemberOut)
+def invite_study_member_endpoint(
+    study_id: UUID,
+    payload: StudyMemberInvite,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Invite a new member to the study by email."""
+    return study_member_service.invite_member(
+        db=db, study_id=study_id, inviter=current_user, payload=payload
+    )
+
+
+@router.get("/{study_id}/members", response_model=List[StudyMemberOut])
+def list_study_members_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """List all members of a study."""
+    # Ensure current user has access to see members
+    # (Creators or existing members can see others)
+    study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+    return study_member_service.list_members(db=db, study_id=study_id)
+
+
+@router.patch("/{study_id}/members/{member_id}", response_model=StudyMemberOut)
+def update_study_member_endpoint(
+    study_id: UUID,
+    member_id: UUID,
+    payload: StudyMemberUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Update a study member's role."""
+    return study_member_service.update_member_role(
+        db=db, study_id=study_id, member_id=member_id, current_user=current_user, payload=payload
+    )
+
+
+@router.delete("/{study_id}/members/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_study_member_endpoint(
+    study_id: UUID,
+    member_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Remove a member from the study."""
+    study_member_service.remove_member(
+        db=db, study_id=study_id, member_id=member_id, current_user=current_user
+    )
+    return None
 
 
 @router.get("/{study_id}/stats")
