@@ -19,7 +19,7 @@ class EmailService:
         self.smtp_username = settings.SMTP_USERNAME
         self.smtp_password = settings.SMTP_PASSWORD
         self.from_email = settings.FROM_EMAIL
-        self.app_name = settings.APP_NAME
+        self.app_name = "Mindsurve"
         self.frontend_url = settings.FRONTEND_URL
     
     def send_password_reset_email(self, user_email: str, user_name: str, reset_token: str) -> bool:
