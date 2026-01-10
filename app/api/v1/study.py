@@ -605,7 +605,7 @@ def list_study_members_endpoint(
     """List all members of a study."""
     # Ensure current user has access to see members
     # (Creators or existing members can see others)
-    study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+    study_service.check_study_access(db=db, study_id=study_id, user_id=current_user.id)
     return study_member_service.list_members(db=db, study_id=study_id)
 
 

@@ -411,6 +411,30 @@ def get_study_exists(db: Session, study_id: UUID, owner_id: UUID) -> bool:
     stmt = select(Study.id).where(Study.id == study_id, Study.creator_id == owner_id)
     return db.scalars(stmt).first() is not None
 
+def check_study_access(db: Session, study_id: UUID, user_id: UUID) -> None:
+    """
+    Verify if a user has access to a study (Creator or Member).
+    Raises HTTPException if access is denied.
+    Does NOT load full study data.
+    """
+    # Check if creator
+    stmt_creator = select(Study.creator_id).where(Study.id == study_id)
+    creator_id = db.scalar(stmt_creator)
+    
+    if not creator_id:
+        raise HTTPException(status_code=404, detail="Study not found")
+        
+    if creator_id == user_id:
+        return
+
+    # Check if member
+    stmt_member = select(StudyMember.id).where(
+        StudyMember.study_id == study_id,
+        StudyMember.user_id == user_id
+    )
+    if not db.scalar(stmt_member):
+        raise HTTPException(status_code=403, detail="Access denied")
+
 def get_study_public(db: Session, study_id: UUID) -> Optional[Study]:
     """
     Get study information for public access (no authentication required).
