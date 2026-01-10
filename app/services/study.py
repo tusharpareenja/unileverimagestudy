@@ -700,9 +700,9 @@ def update_study(
     logger.info(f"Payload: {payload.model_dump(exclude_none=True)}")
 
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
-    # Allow editing even when active (per new requirement), 
-    # BUT only for the original creator once it's launched.
-    if study.launched_at and study.creator_id != owner_id:
+    # Allow editing even when active, but only for the original creator once it's active.
+    # Editors can edit draft studies, but not active/launched studies.
+    if study.status == 'active' and study.creator_id != owner_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="the study has already been launched by the admin please go to home page"
@@ -937,8 +937,8 @@ def update_study_fast(
     else:
         study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
     
-    # Prevent members from editing launched studies
-    if study.launched_at and study.creator_id != owner_id:
+    # Prevent members from editing active/launched studies
+    if study.status == 'active' and study.creator_id != owner_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="the study has already been launched by the admin please go to home page"
@@ -1017,8 +1017,8 @@ def update_and_launch_study_fast(
     # Load study with minimal data for maximum performance
     study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
     
-    # Prevent members from editing launched studies
-    if study.launched_at and study.creator_id != owner_id:
+    # Prevent members from editing active/launched studies
+    if study.status == 'active' and study.creator_id != owner_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="the study has already been launched by the admin please go to home page"

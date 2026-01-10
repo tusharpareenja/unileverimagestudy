@@ -602,11 +602,35 @@ def list_study_members_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """List all members of a study."""
+    """List all members of a study, including the creator as admin."""
     # Ensure current user has access to see members
     # (Creators or existing members can see others)
     study_service.check_study_access(db=db, study_id=study_id, user_id=current_user.id)
-    return study_member_service.list_members(db=db, study_id=study_id)
+    
+    members = study_member_service.list_members(db=db, study_id=study_id)
+    
+    # Enrich members with user details (name, is_registered)
+    enriched_members = []
+    for member in members:
+        member_dict = {
+            "id": member.id,
+            "user_id": member.user_id,
+            "email": member.invited_email,
+            "role": member.role,
+            "created_at": member.created_at,
+            "updated_at": member.updated_at,
+            "name": None,
+            "is_registered": False
+        }
+        
+        # If user relationship is loaded, get the name
+        if hasattr(member, 'user') and member.user:
+            member_dict["name"] = member.user.name
+            member_dict["is_registered"] = True
+        
+        enriched_members.append(member_dict)
+    
+    return enriched_members
 
 
 @router.patch("/{study_id}/members/{member_id}", response_model=StudyMemberOut)

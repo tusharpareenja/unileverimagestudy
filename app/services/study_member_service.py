@@ -25,16 +25,22 @@ class StudyMemberService:
             raise HTTPException(status_code=404, detail="Study not found")
         
         if study.creator_id != inviter.id:
-            # Check if inviter is an admin member
-            admin_member = db.scalars(
+            # Get the member record for the inviter
+            inviter_member = db.scalars(
                 select(StudyMember).where(
                     StudyMember.study_id == study_id,
-                    StudyMember.user_id == inviter.id,
-                    StudyMember.role == 'admin'
+                    StudyMember.user_id == inviter.id
                 )
             ).first()
-            if not admin_member:
-                raise HTTPException(status_code=403, detail="Only admins can invite members")
+
+            if not inviter_member:
+                raise HTTPException(status_code=403, detail="Permission denied")
+
+            if inviter_member.role == 'viewer':
+                raise HTTPException(status_code=403, detail="Viewers cannot invite members")
+            
+            if inviter_member.role == 'editor' and payload.role == 'admin':
+                raise HTTPException(status_code=403, detail="Editors cannot invite admins")
 
         # 2. Check if already a member
         existing_member = db.scalars(
@@ -93,8 +99,59 @@ class StudyMemberService:
         return new_member
 
     def list_members(self, db: Session, study_id: UUID) -> List[StudyMember]:
-        stmt = select(StudyMember).where(StudyMember.study_id == study_id).order_by(StudyMember.created_at)
-        return list(db.scalars(stmt).all())
+        """
+        List all members of a study, including the study creator as an admin.
+        The creator will always appear first in the list with role='admin'.
+        """
+        from sqlalchemy.orm import joinedload
+        
+        # Fetch the study with creator relationship eagerly loaded
+        stmt = select(Study).where(Study.id == study_id).options(joinedload(Study.creator))
+        study = db.scalars(stmt).first()
+        
+        if not study:
+            raise HTTPException(status_code=404, detail="Study not found")
+        
+        logger.info(f"Study creator_id: {study.creator_id}, creator loaded: {study.creator is not None}")
+        
+        # Fetch all StudyMember records
+        members_stmt = select(StudyMember).where(StudyMember.study_id == study_id).order_by(StudyMember.created_at)
+        members = list(db.scalars(members_stmt).all())
+        
+        logger.info(f"Found {len(members)} existing members")
+        
+        # Check if creator is already in the members list
+        creator_in_members = any(m.user_id == study.creator_id for m in members)
+        
+        logger.info(f"Creator in members: {creator_in_members}")
+        
+        if not creator_in_members:
+            # Create a synthetic StudyMember object for the creator
+            creator_member = StudyMember(
+                id=study.creator_id,  # Use creator_id as a pseudo-id
+                study_id=study_id,
+                user_id=study.creator_id,
+                role='admin',
+                invited_email=study.creator.email,
+                created_at=study.created_at,
+                updated_at=study.updated_at
+            )
+            # Attach the user object to avoid additional queries
+            creator_member.user = study.creator
+            
+            logger.info(f"Adding creator {study.creator.name} ({study.creator.email}) to members list")
+            
+            # Insert creator at the beginning of the list
+            members.insert(0, creator_member)
+        else:
+            # If creator is in members, move them to the front
+            creator_member = next((m for m in members if m.user_id == study.creator_id), None)
+            if creator_member:
+                members.remove(creator_member)
+                members.insert(0, creator_member)
+                logger.info(f"Moved creator to front of list")
+        
+        return members
 
     def update_member_role(self, db: Session, study_id: UUID, member_id: UUID, current_user: User, payload: StudyMemberUpdate) -> StudyMember:
         member = db.get(StudyMember, member_id)
