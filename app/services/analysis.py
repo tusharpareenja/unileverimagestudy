@@ -270,6 +270,615 @@ class StudyAnalysisService:
         output.seek(0)
         return output
 
+    def generate_json_report(self, df: pd.DataFrame, study_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generates the JSON report from the DataFrame and Study Data.
+        Returns a dictionary with sheet names as keys and their data as values.
+        """
+        # 1. Preprocess Data (same as generate_report)
+        elements_json = study_data.get("elements", [])
+        categories_json = study_data.get("categories", [])
+        
+        # 2. Element Metadata & Column Mapping (same as generate_report)
+        element_meta = []
+        for el in elements_json:
+            cat_obj = el.get("category", {})
+            if not cat_obj and el.get("category_id"):
+                found_cat = next((c for c in categories_json if c.get("id") == el.get("category_id")), {})
+                cat_obj = found_cat
+            
+            cat_name = cat_obj.get("name")
+            el_name = el.get("name")
+            
+            if not cat_name or not el_name:
+                continue
+                
+            internal_col_name = f"{cat_name}_{el_name}"
+            candidates = [
+                internal_col_name,
+                f"{cat_name}-{el_name}",
+                f"{cat_name}-{el_name}".replace('_', '-').replace(' ', '-'),
+                f"{cat_name}_{el_name}".replace(' ', '_')
+            ]
+            
+            actual_col = None
+            for cand in candidates:
+                if cand in df.columns:
+                    actual_col = cand
+                    break
+            
+            if actual_col:
+                element_meta.append({
+                    "csv_col": actual_col,
+                    "category_name": cat_name,
+                    "element_name": el_name,
+                    "category_order": cat_obj.get("order", 0),
+                })
+
+        element_cols_raw = [m["csv_col"] for m in element_meta]
+        seen = set()
+        element_cols = []
+        for col in element_cols_raw:
+            if col not in seen:
+                element_cols.append(col)
+                seen.add(col)
+        
+        col_to_catname = {m["csv_col"]: m["category_name"] for m in element_meta}
+        col_to_eltname = {m["csv_col"]: m["element_name"] for m in element_meta}
+        
+        cat_order = {}
+        for m in element_meta:
+            name = m["category_name"]
+            order = m["category_order"]
+            if name not in cat_order or order < cat_order[name]:
+                cat_order[name] = order
+        sorted_categories = sorted(cat_order.keys(), key=lambda c: cat_order[c])
+
+        # 3. Classification Columns
+        known_cols = {self.PANEL_COL, self.RATING_COL, self.RESPONSE_TIME_COL, 
+                      self.GENDER_COL, self.AGE_COL, self.TASK_COL}
+        known_cols.update(element_cols)
+        
+        classification_cols = []
+        class_qs = study_data.get("classification_questions", [])
+        for q in class_qs:
+            q_text = q.get("question_text")
+            if q_text and q_text in df.columns:
+                classification_cols.append(q_text)
+                
+        # 4. Run Analysis (same as generate_report)
+        coef_table_T = self._run_panel_regressions(df, element_cols, "TOP")
+        coef_table_B = self._run_panel_regressions(df, element_cols, "BOTTOM")
+        coef_table_R = self._run_panel_regressions(df, element_cols, "RESPONSE")
+        
+        base_size = df[self.PANEL_COL].nunique()
+        
+        element_means_T = coef_table_T[element_cols].mean(axis=0).round().astype(int)
+        element_means_B = coef_table_B[element_cols].mean(axis=0).round().astype(int)
+        element_means_R = coef_table_R[element_cols].mean(axis=0)
+        
+        gender_groups_T = self._build_gender_groups(coef_table_T, df, element_cols)
+        gender_groups_B = self._build_gender_groups(coef_table_B, df, element_cols)
+        gender_groups_R = self._build_gender_groups(coef_table_R, df, element_cols)
+        
+        age_groups_T = self._build_age_groups(coef_table_T, df, element_cols)
+        age_groups_B = self._build_age_groups(coef_table_B, df, element_cols)
+        age_groups_R = self._build_age_groups(coef_table_R, df, element_cols)
+        
+        class_groups_T = self._build_class_groups(coef_table_T, df, element_cols, classification_cols)
+        class_groups_B = self._build_class_groups(coef_table_B, df, element_cols, classification_cols)
+        class_groups_R = self._build_class_groups(coef_table_R, df, element_cols, classification_cols)
+        
+        intercepts_T = self._run_pooled_regression(df, element_cols, "TOP")
+        intercepts_B = self._run_pooled_regression(df, element_cols, "BOTTOM")
+        intercepts_R = self._run_pooled_regression(df, element_cols, "RESPONSE")
+        
+        coef_threshold_T = intercepts_T.get("threshold")
+        coef_threshold_B = intercepts_B.get("threshold")
+        coef_threshold_R = intercepts_R.get("threshold")
+        
+        # Clustering for Mindsets
+        X_T = coef_table_T[element_cols].to_numpy(dtype=float)
+        n_samples = X_T.shape[0]
+        
+        if n_samples >= 2:
+            labels_2_T = self._custom_kmeans_pearson(X_T, k=2, seed=101)
+        else:
+            labels_2_T = np.zeros(n_samples, dtype=int)
+            
+        if n_samples >= 3:
+            labels_3_T = self._custom_kmeans_pearson(X_T, k=3, seed=202)
+        else:
+            labels_3_T = np.zeros(n_samples, dtype=int)
+        
+        # 5. Build JSON structure
+        result = {}
+        
+        # 5a. Front Page
+        result["Front Page"] = {
+            "Title": study_data.get("title", ""),
+            "Background": study_data.get("background", ""),
+            "Language": study_data.get("language", ""),
+            "Launched At": study_data.get("launched_at", "")
+        }
+        
+        # 5b. Information Block
+        info_block = {
+            "Study Title": study_data.get("title", ""),
+            "Study Type": study_data.get("study_type", ""),
+            "Study Background": study_data.get("background", ""),
+            "Categories": []
+        }
+        
+        categories = study_data.get("categories", [])
+        elements = study_data.get("elements", [])
+        for cat in categories:
+            cat_name = cat.get("name", "")
+            cat_id = cat.get("id")
+            cat_info = {
+                "name": cat_name,
+                "elements": []
+            }
+            c_elements = [e for e in elements if e.get("category_id") == cat_id]
+            for el in c_elements:
+                cat_info["elements"].append({
+                    "name": el.get("name", ""),
+                    "content": el.get("content", "")
+                })
+            info_block["Categories"].append(cat_info)
+        
+        result["Information Block"] = info_block
+        
+        # 5c. RawData - Convert DataFrame to JSON-serializable format
+        raw_data_list = []
+        for _, row in df.iterrows():
+            raw_row = {}
+            for col in df.columns:
+                val = row[col]
+                if pd.isna(val):
+                    raw_row[col] = None
+                elif isinstance(val, (np.integer, np.int64)):
+                    raw_row[col] = int(val)
+                elif isinstance(val, (np.floating, np.float64)):
+                    raw_row[col] = float(val)
+                elif isinstance(val, pd.Timestamp):
+                    raw_row[col] = val.isoformat()
+                else:
+                    raw_row[col] = val
+            raw_data_list.append(raw_row)
+        result["RawData"] = raw_data_list
+        
+        # 5d. Overall Sheets
+        result["(T) Overall"] = self._build_overall_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            element_means_T, base_size, coef_threshold_T, round_vals=True
+        )
+        result["(B) Overall"] = self._build_overall_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            element_means_B, base_size, coef_threshold_B, round_vals=True
+        )
+        result["(R) Overall"] = self._build_overall_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            element_means_R, base_size, coef_threshold_R, round_vals=False
+        )
+        
+        # 5e. Mindsets Sheets
+        result["(T) Mindsets"] = self._build_mindset_json(
+            coef_table_T, element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            base_size, coef_threshold_T, labels_2_T, labels_3_T, round_vals=True
+        )
+        result["(B) Mindsets"] = self._build_mindset_json(
+            coef_table_B, element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            base_size, coef_threshold_B, labels_2_T, labels_3_T, round_vals=True
+        )
+        result["(R) Mindsets"] = self._build_mindset_json(
+            coef_table_R, element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            base_size, coef_threshold_R, labels_2_T, labels_3_T, round_vals=False
+        )
+        
+        # 5f. Gender Sheets
+        result["(T) Gender"] = self._build_segment_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            gender_groups_T, coef_threshold_T, round_vals=True
+        )
+        result["(B) Gender"] = self._build_segment_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            gender_groups_B, coef_threshold_B, round_vals=True
+        )
+        result["(R) Gender"] = self._build_segment_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            gender_groups_R, coef_threshold_R, round_vals=False
+        )
+        
+        # 5g. Age Sheets
+        result["(T) Age"] = self._build_segment_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            age_groups_T, coef_threshold_T, round_vals=True, segment_order=self.AGE_BINS
+        )
+        result["(B) Age"] = self._build_segment_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            age_groups_B, coef_threshold_B, round_vals=True, segment_order=self.AGE_BINS
+        )
+        result["(R) Age"] = self._build_segment_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            age_groups_R, coef_threshold_R, round_vals=False, segment_order=self.AGE_BINS
+        )
+        
+        # 5h. Classification Sheets
+        result["(T) Classification Questions"] = self._build_classification_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            class_groups_T, coef_threshold_T, round_vals=True
+        )
+        result["(B) Classification Questions"] = self._build_classification_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            class_groups_B, coef_threshold_B, round_vals=True
+        )
+        result["(R) Classification Questions"] = self._build_classification_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            class_groups_R, coef_threshold_R, round_vals=False
+        )
+        
+        # 5i. Combined Sheets
+        result["(T) Combined"] = self._build_combined_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            base_size, element_means_T, gender_groups_T, age_groups_T, class_groups_T,
+            coef_threshold_T, round_vals=True
+        )
+        result["(B) Combined"] = self._build_combined_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            base_size, element_means_B, gender_groups_B, age_groups_B, class_groups_B,
+            coef_threshold_B, round_vals=True
+        )
+        result["(R) Combined"] = self._build_combined_json(
+            element_cols, sorted_categories, col_to_catname, col_to_eltname,
+            base_size, element_means_R, gender_groups_R, age_groups_R, class_groups_R,
+            coef_threshold_R, round_vals=False
+        )
+        
+        # 5j. Intercepts Sheets
+        result["(T) Intercepts"] = self._build_intercepts_json(intercepts_T["df"], coef_threshold_T)
+        result["(B) Intercepts"] = self._build_intercepts_json(intercepts_B["df"], coef_threshold_B)
+        result["(R) Intercepts"] = self._build_intercepts_json(intercepts_R["df"], coef_threshold_R)
+        
+        return result
+
+    # --- JSON Builder Helpers ---
+    def _build_overall_json(self, element_cols, sorted_cats, col_to_cat, col_to_elt, means, base, threshold, round_vals):
+        result = {
+            "base_size": int(base),
+            "threshold": float(threshold) if threshold is not None else None,
+            "categories": []
+        }
+        
+        for i, cat_name in enumerate(sorted_cats):
+            letter = self.letters[i]
+            cat_data = {
+                "code": letter,
+                "name": cat_name,
+                "elements": []
+            }
+            
+            cols = [c for c in element_cols if col_to_cat.get(c) == cat_name]
+            for j, col in enumerate(cols, 1):
+                code = f"{letter}{j}"
+                val = means[col]
+                if round_vals:
+                    val = int(val)
+                else:
+                    val = float(val)
+                
+                element_data = {
+                    "code": code,
+                    "name": col_to_elt.get(col, col),
+                    "value": val,
+                    "above_threshold": threshold is not None and val >= threshold
+                }
+                cat_data["elements"].append(element_data)
+            
+            result["categories"].append(cat_data)
+        
+        return result
+
+    def _build_mindset_json(self, coef_df, element_cols, sorted_cats, col_to_cat, col_to_elt, base, threshold, l2, l3, round_vals):
+        counts_2 = np.bincount(l2, minlength=2).tolist()
+        counts_3 = np.bincount(l3, minlength=3).tolist()
+        
+        means_total = coef_df[element_cols].mean(axis=0)
+        means_2 = [
+            coef_df.iloc[l2 == i][element_cols].mean(axis=0) if np.any(l2 == i) 
+            else pd.Series(0, index=element_cols) 
+            for i in range(2)
+        ]
+        means_3 = [
+            coef_df.iloc[l3 == i][element_cols].mean(axis=0) if np.any(l3 == i) 
+            else pd.Series(0, index=element_cols) 
+            for i in range(3)
+        ]
+        
+        result = {
+            "base_size": int(base),
+            "threshold": float(threshold) if threshold is not None else None,
+            "groups": {
+                "Total": {"base_size": int(base)},
+                "Mindset_2": {
+                    f"Mindset_{i+1}_of_2": {"base_size": int(counts_2[i])} 
+                    for i in range(2)
+                },
+                "Mindset_3": {
+                    f"Mindset_{i+1}_of_3": {"base_size": int(counts_3[i])} 
+                    for i in range(3)
+                }
+            },
+            "categories": []
+        }
+        
+        for i, cat_name in enumerate(sorted_cats):
+            letter = self.letters[i]
+            cat_data = {
+                "code": letter,
+                "name": cat_name,
+                "elements": []
+            }
+            
+            cols = [c for c in element_cols if col_to_cat.get(c) == cat_name]
+            for j, col in enumerate(cols, 1):
+                code = f"{letter}{j}"
+                element_name = col_to_elt.get(col, col)
+                
+                def get_val(mean_series):
+                    val = mean_series[col]
+                    if round_vals:
+                        return int(val)
+                    return float(val)
+                
+                element_data = {
+                    "code": code,
+                    "name": element_name,
+                    "values": {
+                        "Total": get_val(means_total),
+                        "Mindset_1_of_2": get_val(means_2[0]),
+                        "Mindset_2_of_2": get_val(means_2[1]),
+                        "Mindset_1_of_3": get_val(means_3[0]),
+                        "Mindset_2_of_3": get_val(means_3[1]),
+                        "Mindset_3_of_3": get_val(means_3[2])
+                    },
+                    "above_threshold": {}
+                }
+                
+                # Check threshold for each value
+                for key, val in element_data["values"].items():
+                    element_data["above_threshold"][key] = threshold is not None and val >= threshold
+                
+                cat_data["elements"].append(element_data)
+            
+            result["categories"].append(cat_data)
+        
+        return result
+
+    def _build_segment_json(self, element_cols, sorted_cats, col_to_cat, col_to_elt, groups, threshold, round_vals, segment_order=None):
+        if not groups:
+            return {"base_size": 0, "threshold": float(threshold) if threshold is not None else None, "segments": {}, "categories": []}
+        
+        result = {
+            "threshold": float(threshold) if threshold is not None else None,
+            "segments": {},
+            "categories": []
+        }
+        
+        keys = segment_order if segment_order else sorted(groups.keys())
+        
+        for k in keys:
+            if k in groups:
+                result["segments"][k] = {
+                    "base_size": groups[k]["base"]
+                }
+        
+        for i, cat_name in enumerate(sorted_cats):
+            letter = self.letters[i]
+            cat_data = {
+                "code": letter,
+                "name": cat_name,
+                "elements": []
+            }
+            
+            cols = [c for c in element_cols if col_to_cat.get(c) == cat_name]
+            for j, col in enumerate(cols, 1):
+                code = f"{letter}{j}"
+                element_name = col_to_elt.get(col, col)
+                
+                element_data = {
+                    "code": code,
+                    "name": element_name,
+                    "values": {},
+                    "above_threshold": {}
+                }
+                
+                for k in keys:
+                    if k in groups:
+                        val = groups[k]["means"][col]
+                        if round_vals:
+                            val = int(round(val))
+                        else:
+                            val = float(val)
+                        element_data["values"][k] = val
+                        element_data["above_threshold"][k] = threshold is not None and val >= threshold
+                
+                cat_data["elements"].append(element_data)
+            
+            result["categories"].append(cat_data)
+        
+        return result
+
+    def _build_classification_json(self, element_cols, sorted_cats, col_to_cat, col_to_elt, groups, threshold, round_vals):
+        if not groups:
+            return {"threshold": float(threshold) if threshold is not None else None, "questions": [], "categories": []}
+        
+        result = {
+            "threshold": float(threshold) if threshold is not None else None,
+            "questions": [],
+            "categories": []
+        }
+        
+        for q_col, info in groups.items():
+            question_data = {
+                "question_text": info["question_text"],
+                "segments": {}
+            }
+            
+            for ans in info["answer_labels"]:
+                question_data["segments"][ans] = {
+                    "base_size": info["segments"][ans]["base"]
+                }
+            
+            result["questions"].append(question_data)
+        
+        for i, cat_name in enumerate(sorted_cats):
+            letter = self.letters[i]
+            cat_data = {
+                "code": letter,
+                "name": cat_name,
+                "elements": []
+            }
+            
+            cols = [c for c in element_cols if col_to_cat.get(c) == cat_name]
+            for j, col in enumerate(cols, 1):
+                code = f"{letter}{j}"
+                element_name = col_to_elt.get(col, col)
+                
+                element_data = {
+                    "code": code,
+                    "name": element_name,
+                    "values": {}
+                }
+                
+                for q_col, info in groups.items():
+                    for ans in info["answer_labels"]:
+                        key = f"{q_col}::{ans}"
+                        val = info["segments"][ans]["means"][col]
+                        if round_vals:
+                            val = int(round(val))
+                        else:
+                            val = float(val)
+                        element_data["values"][key] = {
+                            "value": val,
+                            "above_threshold": threshold is not None and val >= threshold
+                        }
+                
+                cat_data["elements"].append(element_data)
+            
+            result["categories"].append(cat_data)
+        
+        return result
+
+    def _build_combined_json(self, element_cols, sorted_cats, col_to_cat, col_to_elt, base, means, g_groups, a_groups, c_groups, threshold, round_vals):
+        result = {
+            "base_size": int(base),
+            "threshold": float(threshold) if threshold is not None else None,
+            "segments": {
+                "Overall": {"base_size": int(base)},
+                "Gender": {},
+                "Age": {},
+                "Classification": {}
+            },
+            "categories": []
+        }
+        
+        # Gender segments
+        for g in ["Male", "Female"]:
+            if g in g_groups:
+                result["segments"]["Gender"][g] = {"base_size": g_groups[g]["base"]}
+        
+        # Age segments
+        for a in self.AGE_BINS:
+            if a in a_groups:
+                result["segments"]["Age"][a] = {"base_size": a_groups[a]["base"]}
+        
+        # Classification segments
+        for q_col, info in c_groups.items():
+            result["segments"]["Classification"][info["question_text"]] = {
+                "base_size": 0,
+                "answers": {}
+            }
+            for ans in info["answer_labels"]:
+                result["segments"]["Classification"][info["question_text"]]["answers"][ans] = {
+                    "base_size": info["segments"][ans]["base"]
+                }
+        
+        for i, cat_name in enumerate(sorted_cats):
+            letter = self.letters[i]
+            cat_data = {
+                "code": letter,
+                "name": cat_name,
+                "elements": []
+            }
+            
+            cols = [c for c in element_cols if col_to_cat.get(c) == cat_name]
+            for j, col in enumerate(cols, 1):
+                code = f"{letter}{j}"
+                element_name = col_to_elt.get(col, col)
+                
+                def get_val(v):
+                    if round_vals:
+                        return int(round(v))
+                    return float(v)
+                
+                element_data = {
+                    "code": code,
+                    "name": element_name,
+                    "values": {
+                        "Overall": get_val(means[col])
+                    },
+                    "above_threshold": {
+                        "Overall": threshold is not None and get_val(means[col]) >= threshold
+                    }
+                }
+                
+                # Gender values
+                for g in ["Male", "Female"]:
+                    if g in g_groups:
+                        val = get_val(g_groups[g]["means"][col])
+                        element_data["values"][f"Gender::{g}"] = val
+                        element_data["above_threshold"][f"Gender::{g}"] = threshold is not None and val >= threshold
+                
+                # Age values
+                for a in self.AGE_BINS:
+                    if a in a_groups:
+                        val = get_val(a_groups[a]["means"][col])
+                        element_data["values"][f"Age::{a}"] = val
+                        element_data["above_threshold"][f"Age::{a}"] = threshold is not None and val >= threshold
+                
+                # Classification values
+                for q_col, info in c_groups.items():
+                    for ans in info["answer_labels"]:
+                        val = get_val(info["segments"][ans]["means"][col])
+                        key = f"Classification::{q_col}::{ans}"
+                        element_data["values"][key] = val
+                        element_data["above_threshold"][key] = threshold is not None and val >= threshold
+                
+                cat_data["elements"].append(element_data)
+            
+            result["categories"].append(cat_data)
+        
+        return result
+
+    def _build_intercepts_json(self, df, threshold):
+        result = {
+            "threshold": float(threshold) if threshold is not None else None,
+            "data": []
+        }
+        
+        for _, row in df.iterrows():
+            row_data = {
+                "element": str(row["element"]),
+                "beta_no_intercept": float(row["beta_no_intercept"]),
+                "beta_with_intercept": float(row["beta_with_intercept"]),
+                "t_with_intercept": float(row["t_with_intercept"]),
+                "t_above_2": float(row["t_with_intercept"]) >= 2.0
+            }
+            result["data"].append(row_data)
+        
+        return result
+
     # --- Regression Helpers ---
     def _run_panel_regressions(self, df: pd.DataFrame, element_cols: List[str], mode: str) -> pd.DataFrame:
         rows = []

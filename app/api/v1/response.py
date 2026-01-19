@@ -954,6 +954,7 @@ async def export_study_analysis(
     analysis_service = StudyAnalysisService()
     try:
         excel_file = analysis_service.generate_report(df, study_data)
+        excel_json = analysis_service.generate_json_report(df, study_data)
     except Exception as e:
         print(f"Analysis generation failed: {e}")
         import traceback
