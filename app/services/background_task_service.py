@@ -120,8 +120,10 @@ class BackgroundTaskService:
                 result = await self._generate_grid_tasks_async(job, db)
             elif job.payload.get('study_type') == 'layer':
                 result = await self._generate_layer_tasks_async(job, db)
+            elif job.payload.get('study_type') == 'hybrid':
+                result = await self._generate_hybrid_tasks_async(job, db)
             else:
-                raise ValueError(f"Unsupported study type: {job.payload.get('study_type')}. Must be 'grid', 'layer', or 'text'.")
+                raise ValueError(f"Unsupported study type: {job.payload.get('study_type')}. Must be 'grid', 'layer', 'text', or 'hybrid'.")
             
             # Save results
             await self._save_results(job, result, db)
@@ -165,16 +167,28 @@ class BackgroundTaskService:
     
     async def _generate_grid_tasks_async(self, job: TaskGenerationJob, db: Session):
         """Generate grid tasks asynchronously with progress tracking"""
+        return await self._generate_tasks_for_phase(job, db, phase_type=None)
+
+    async def _generate_tasks_for_phase(self, job: TaskGenerationJob, db: Session, phase_type: Optional[str] = None, progress_range: tuple = (20.0, 90.0)):
+        """Helper to generate tasks for a specific phase (or all if phase_type is None)"""
         from app.services.task_generation_core import generate_grid_tasks_v2
-        
-        # Update progress
-        job.progress = 10.0
-        job.message = "Planning task generation..."
         
         # Build categories data
         categories_data = []
-        for cat in job.payload.get('categories', []):
-            cat_elements = [e for e in job.payload.get('elements', []) if e.get('category_id') == cat.get('category_id')]
+        payload_categories = job.payload.get('categories') or []
+        payload_elements = job.payload.get('elements') or []
+        
+        # Filter categories by phase_type if provided
+        filtered_categories = payload_categories
+        if phase_type:
+            filtered_categories = [c for c in payload_categories if c.get('phase_type') == phase_type]
+            
+        if not filtered_categories:
+            logger.warning(f"No categories found for phase_type={phase_type}")
+            return {"tasks": {}, "metadata": {}}
+
+        for cat in filtered_categories:
+            cat_elements = [e for e in payload_elements if e.get('category_id') == cat.get('category_id')]
             categories_data.append({
                 "category_name": cat.get('name'),
                 "elements": [
@@ -189,21 +203,17 @@ class BackgroundTaskService:
                 ]
             })
         
-        job.progress = 20.0
-        job.message = "Starting task generation..."
-        
-        # Prepare progress callback to update job progress
-        total = max(1, int(job.payload.get('audience_segmentation', {}).get('number_of_respondents', 0)) * 5)
+        # Prepare progress callback
+        p_start, p_end = progress_range
         def on_progress(done: int, N: int):
             try:
-                # Map to percentage between 20 and 90 during build
                 frac = max(0.0, min(1.0, done / max(1, N)))
-                job.progress = 20.0 + (70.0 * frac)
-                job.message = f"Building respondents {done}/{N}..."
+                job.progress = p_start + ((p_end - p_start) * frac)
+                phase_msg = f" ({phase_type})" if phase_type else ""
+                job.message = f"Building respondents{phase_msg} {done}/{N}..."
             except Exception:
                 pass
         
-        # Generate tasks with timeout (run in executor)
         loop = asyncio.get_event_loop()
         try:
             result = await asyncio.wait_for(
@@ -221,15 +231,89 @@ class BackgroundTaskService:
             )
         except RuntimeError as e:
             if "Preflight failed" in str(e) or "consider more elements/categories" in str(e):
-                logger.error(f"Preflight error in grid generation: {e}")
-                raise RuntimeError(f"Study configuration error: {str(e)}. Please add more elements/categories or adjust study parameters.")
+                logger.error(f"Preflight error in generation phase {phase_type}: {e}")
+                raise RuntimeError(f"Study configuration error in {phase_type} phase: {str(e)}.")
             else:
                 raise
         
-        job.progress = 90.0
-        job.message = "Saving generated tasks..."
-        
         return result
+
+    async def _generate_hybrid_tasks_async(self, job: TaskGenerationJob, db: Session):
+        """Generate tasks for hybrid studies by combining multiple phases"""
+        phase_order = job.payload.get('phase_order', [])
+        if not phase_order:
+            raise ValueError("Hybrid study requires phase_order")
+            
+        job.progress = 10.0
+        job.message = "Initializing hybrid task generation..."
+        
+        combined_tasks = {}
+        combined_metadata = {"phases": []}
+        
+        is_mix = "mix" in phase_order
+        payload_categories = job.payload.get('categories') or []
+        
+        target_phases = []
+        if is_mix:
+            target_phases = list(set(c.get('phase_type') for i, c in enumerate(payload_categories) if c.get('phase_type')))
+        else:
+            target_phases = phase_order
+
+        num_phases = len(target_phases)
+        tasks_per_respondent_mix = {}
+
+        for i, phase_type in enumerate(target_phases):
+            # Calculate progress range for this phase
+            p_start = 10.0 + (i * (80.0 / num_phases))
+            p_end = 10.0 + ((i + 1) * (80.0 / num_phases))
+            
+            job.message = f"Starting generation for phase: {phase_type}..."
+            phase_result = await self._generate_tasks_for_phase(job, db, phase_type=phase_type, progress_range=(p_start, p_end))
+            
+            # Merge results
+            phase_tasks = phase_result.get('tasks', {})
+            
+            if is_mix:
+                for resp_id, t_list in phase_tasks.items():
+                    if resp_id not in tasks_per_respondent_mix:
+                        tasks_per_respondent_mix[resp_id] = []
+                    for t in t_list:
+                        t['phase_type'] = phase_type
+                        tasks_per_respondent_mix[resp_id].append(t)
+            else:
+                for resp_id, tasks in phase_tasks.items():
+                    if resp_id not in combined_tasks:
+                        combined_tasks[resp_id] = []
+                    
+                    # Update task indexes to be continuous
+                    offset = len(combined_tasks[resp_id])
+                    for t in tasks:
+                        t['task_index'] = int(t.get('task_index', 0)) + offset
+                        t['phase_type'] = phase_type
+                    
+                    combined_tasks[resp_id].extend(tasks)
+            
+            combined_metadata['phases'].append({
+                "phase_type": phase_type,
+                "metadata": phase_result.get('metadata', {})
+            })
+            
+        if is_mix:
+            import random
+            job.message = "Randomizing mixed tasks..."
+            for resp_id, t_list in tasks_per_respondent_mix.items():
+                random.shuffle(t_list)
+                for idx, t in enumerate(t_list):
+                    t['task_index'] = idx
+                combined_tasks[resp_id] = t_list
+
+        job.progress = 90.0
+        job.message = "Combining all phases..."
+        
+        return {
+            "tasks": combined_tasks,
+            "metadata": combined_metadata
+        }
     
     async def _generate_layer_tasks_async(self, job: TaskGenerationJob, db: Session):
         """Generate layer tasks asynchronously with progress tracking"""
@@ -372,6 +456,8 @@ class BackgroundTaskService:
                 study_updates['rating_scale'] = job.payload.get('rating_scale')
             if job.payload.get('audience_segmentation'):
                 study_updates['audience_segmentation'] = job.payload.get('audience_segmentation')
+            if job.payload.get('phase_order'):
+                study_updates['phase_order'] = job.payload.get('phase_order')
             
             # Apply study updates if any
             if study_updates:

@@ -36,16 +36,19 @@ def _ensure_study_type_constraints(payload: StudyCreate) -> None:
     if payload.study_type == 'grid':
         if not payload.elements or len(payload.elements) < 1:
             raise HTTPException(status_code=400, detail="Grid study requires non-empty elements.")
-        # num_elements inferred from elements; tasks_per_consumer will auto-pick
     elif payload.study_type == 'layer':
         if not payload.study_layers or len(payload.study_layers) < 1:
             raise HTTPException(status_code=400, detail="Layer study requires at least one layer with images.")
     elif payload.study_type == 'text':
         if not payload.elements or len(payload.elements) < 1:
             raise HTTPException(status_code=400, detail="Text study requires non-empty elements (statements).")
-        # Text type uses same structure as grid: categories and elements (text statements)
+    elif payload.study_type == 'hybrid':
+        if not payload.elements or len(payload.elements) < 1:
+            raise HTTPException(status_code=400, detail="Hybrid study requires non-empty elements.")
+        if not payload.phase_order or len(payload.phase_order) < 1:
+            raise HTTPException(status_code=400, detail="Hybrid study requires phase_order (e.g., ['grid', 'text'] or ['mix']).")
     else:
-        raise HTTPException(status_code=400, detail="Unsupported study_type. Must be 'grid', 'layer', or 'text'.")
+        raise HTTPException(status_code=400, detail="Unsupported study_type. Must be 'grid', 'layer', 'text', or 'hybrid'.")
 
 def _validate_rating_scale(rating_scale: Dict[str, Any]) -> None:
     logger.info(f"Validating rating scale: {rating_scale}")
@@ -215,6 +218,7 @@ def create_study(
         total_responses=0,
         completed_responses=0,
         abandoned_responses=0,
+        phase_order=payload.phase_order,
         last_step=payload.last_step or 1,
     )
     db.add(study)
@@ -225,7 +229,7 @@ def create_study(
 
     # Children (optimize by avoiding intermediate flushes and using bulk saves)
     with db.no_autoflush:
-        if payload.study_type in ('grid', 'text') and payload.elements:
+        if payload.study_type in ('grid', 'text', 'hybrid') and payload.elements:
             # Create categories first if provided
             category_map = {}  # category_id -> category_uuid
             if payload.categories:
@@ -242,7 +246,8 @@ def create_study(
                         study_id=study.id,
                         category_id=cat.category_id,  # Now using UUID directly
                         name=cat.name,
-                        order=cat.order
+                        order=cat.order,
+                        phase_type=cat.phase_type
                     ))
                 if new_categories:
                     db.bulk_save_objects(new_categories)
@@ -759,11 +764,14 @@ def update_study(
             merged_seg['aspect_ratio'] = existing_seg['aspect_ratio']
         study.audience_segmentation = merged_seg
 
+    if payload.phase_order is not None:
+        study.phase_order = payload.phase_order
+
     # Replace children collections if provided
     if payload.elements is not None:
-        # Only valid for grid and text
-        if study.study_type not in ('grid', 'text'):
-            raise HTTPException(status_code=400, detail="elements can only be set for grid and text studies.")
+        # Only valid for grid, text, and hybrid
+        if study.study_type not in ('grid', 'text', 'hybrid'):
+            raise HTTPException(status_code=400, detail="elements can only be set for grid, text, and hybrid studies.")
 
         # Handle categories first - they must be provided when updating elements
         category_map = {}  # category_id -> category_uuid
@@ -785,7 +793,8 @@ def update_study(
                     study_id=study.id,
                     category_id=cat.category_id,
                     name=cat.name,
-                    order=cat.order
+                    order=cat.order,
+                    phase_type=cat.phase_type
                 ))
             db.flush()
         else:
@@ -992,6 +1001,9 @@ def update_study_fast(
             merged_seg['aspect_ratio'] = ar_top
         study.audience_segmentation = merged_seg
 
+    if payload.phase_order is not None:
+        study.phase_order = payload.phase_order
+
     # For fast updates, we only handle simple scalar fields
     # Complex operations (elements, layers, classification_questions) fall back to full loading
     if payload.elements is not None or payload.study_layers is not None:
@@ -1053,6 +1065,9 @@ def update_and_launch_study_fast(
             # Explicitly preserve existing aspect_ratio if not in incoming payload
             merged_seg['aspect_ratio'] = existing_seg['aspect_ratio']
         study.audience_segmentation = merged_seg
+    
+    if payload.phase_order is not None:
+        study.phase_order = payload.phase_order
 
     # Handle complex updates that require full loading
     if payload.elements is not None or payload.study_layers is not None or payload.classification_questions is not None:
@@ -1300,10 +1315,119 @@ def regenerate_tasks(
         logger.debug("Regenerate layer computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
                      computed, tpc, number_of_respondents, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
         computed_total = computed
-        # total stored only in response; audience_segmentation remains unchanged
+
+    elif study.study_type == 'hybrid':
+        phase_order = study.phase_order or []
+        if not phase_order:
+            raise HTTPException(status_code=400, detail="Hybrid study requires phase_order.")
+        
+        combined_tasks = {}
+        combined_metadata = {"phases": []}
+        
+        # Load all categories and elements once
+        categories = db.scalars(
+            select(StudyCategory).where(StudyCategory.study_id == study.id)
+        ).all()
+        elements = db.scalars(
+            select(StudyElement).where(StudyElement.study_id == study.id)
+        ).all()
+
+        is_mix = "mix" in phase_order
+        # If mix, we need to gather tasks from ALL present phase types, ignoring the specific order list (except to find types)
+        # Actually, "mix" might be the ONLY item, or mixed with others? 
+        # Requirement: "if user choses mix than task will be generated randomly means there will be no bound grid will appear first or tet any one one can ppear at any time"
+        # So if "mix" is selected, we assume ALL configured phases should be generated and mixed.
+        # We can detect relevant phases by looking at the categories' phase_type.
+        
+        target_phases = []
+        if is_mix:
+            # unique phase types from categories
+            target_phases = list(set(c.phase_type for c in categories if c.phase_type))
+            # If for some reason categories don't have phase_type appropriately set, fallback? 
+            # Assuming StudyCategory.phase_type is reliable.
+        else:
+            target_phases = phase_order
+
+        # Temporary storage for mix shuffling
+        tasks_per_respondent_mix = {} # resp_id -> list of tasks
+
+        for phase_type in target_phases:
+            # Generate tasks for this phase
+            phase_categories = [c for c in categories if c.phase_type == phase_type]
+            if not phase_categories:
+                continue
+                
+            cat_data = []
+            for cat in phase_categories:
+                cat_elements = [e for e in elements if e.category_id == cat.id]
+                cat_data.append({
+                    "category_name": cat.name,
+                    "elements": [
+                        {
+                            "element_id": str(el.element_id),
+                            "name": el.name,
+                            "content": el.content,
+                            "alt_text": el.alt_text or el.name,
+                            "element_type": el.element_type,
+                        }
+                        for el in cat_elements
+                    ]
+                })
+            
+            from app.services.task_generation_core import generate_grid_tasks_v2
+            phase_result = generate_grid_tasks_v2(
+                categories_data=cat_data,
+                number_of_respondents=number_of_respondents,
+                exposure_tolerance_cv=exposure_tolerance_cv,
+                seed=seed
+            )
+            
+            phase_tasks = phase_result.get('tasks', {})
+            
+            if is_mix:
+                # Accumulate for shuffling later
+                for resp_id, t_list in phase_tasks.items():
+                    if resp_id not in tasks_per_respondent_mix:
+                        tasks_per_respondent_mix[resp_id] = []
+                    
+                    for t in t_list:
+                        # Tag with phase type but don't set final index yet
+                        t['phase_type'] = phase_type
+                        tasks_per_respondent_mix[resp_id].append(t)
+            else:
+                # Sequential appending
+                for resp_id, t_list in phase_tasks.items():
+                    if resp_id not in combined_tasks:
+                        combined_tasks[resp_id] = []
+                    
+                    offset = len(combined_tasks[resp_id])
+                    for t in t_list:
+                        t['task_index'] = int(t.get('task_index', 0)) + offset
+                        t['phase_type'] = phase_type
+                    combined_tasks[resp_id].extend(t_list)
+            
+            combined_metadata['phases'].append({
+                "phase_type": phase_type,
+                "metadata": phase_result.get('metadata', {})
+            })
+            
+        if is_mix:
+            import random
+            # Shuffle and assign indices
+            combined_tasks = {}
+            for resp_id, t_list in tasks_per_respondent_mix.items():
+                random.shuffle(t_list)
+                # Re-index
+                for idx, t in enumerate(t_list):
+                    t['task_index'] = idx
+                combined_tasks[resp_id] = t_list
+
+        study.tasks = combined_tasks
+        # Simple count for computed_total
+        computed_total = sum(len(v) for v in combined_tasks.values()) if combined_tasks else 0
 
     else:
-        raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}. Must be 'grid', 'layer', or 'text'.")
+        raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}. Must be 'grid', 'layer', 'text', or 'hybrid'.")
 
     # Optimized commit and response generation
     try:

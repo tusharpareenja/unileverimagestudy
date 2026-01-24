@@ -1,6 +1,9 @@
 import asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+import logging
 
 from app.api.v1 import api_router
 from app.api.v1.study import router as study_router
@@ -29,6 +32,17 @@ app.include_router(api_router, prefix="/api/v1")
 app.include_router(study_router, prefix="/api/v1/studies", tags=["studies"])
 app.include_router(response_router, prefix="/api/v1/responses", tags=["responses"])
 app.include_router(uploads_router, prefix="/api/v1/uploads", tags=["uploads"])
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger = logging.getLogger("uvicorn.error")
+    errors = exc.errors()
+    logger.error(f"422 Validation Error: {errors}")
+    return JSONResponse(
+        status_code=422,
+        content={"detail": errors},
+    )
 
 
 @app.get("/")

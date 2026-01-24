@@ -419,7 +419,24 @@ class StudyResponseService:
         # Build a name-keyed visibility map for grid studies
         name_visibility: Dict[str, Any] = {}
         study_row: Optional[Study] = self.db.get(Study, response.study_id)
-        if study_row and str(study_row.study_type) in ('grid', 'text'):
+        
+        # For hybrid studies, determine the effective phase_type from the task definition
+        effective_study_type = str(study_row.study_type) if study_row else None
+        task_phase_type: Optional[str] = None
+        if study_row and str(study_row.study_type) == 'hybrid':
+            try:
+                if isinstance(study_row.tasks, dict):
+                    rk = str(response.respondent_id)
+                    tasks_for_r = study_row.tasks.get(rk)
+                    if isinstance(tasks_for_r, list) and 0 <= response.current_task_index < len(tasks_for_r):
+                        task_def = tasks_for_r[response.current_task_index] or {}
+                        task_phase_type = task_def.get('phase_type')
+                        if task_phase_type in ('grid', 'text'):
+                            effective_study_type = task_phase_type
+            except Exception:
+                pass
+        
+        if study_row and effective_study_type in ('grid', 'text'):
             # Load element id->name map in E-number order
             elements = self.db.execute(
                 select(StudyElement).where(StudyElement.study_id == study_row.id)
@@ -520,11 +537,15 @@ class StudyResponseService:
         else:
             # Non-grid or no study: keep as-is if dict, else empty
             name_visibility = raw_visibility if isinstance(raw_visibility, dict) else {}
+        # For hybrid studies, use the phase_type as task_type; otherwise use study_type
+        task_type_value = task_phase_type if task_phase_type else (str(study_row.study_type) if study_row else None)
+        
         task_data = CompletedTaskCreate(
             task_id=request.task_id,
             respondent_id=response.respondent_id,
             task_index=response.current_task_index,
             elements_shown_in_task=name_visibility,
+            task_type=task_type_value,
             task_start_time=now_utc - timedelta(seconds=request.task_duration_seconds),
             task_completion_time=now_utc,
             task_duration_seconds=request.task_duration_seconds,
@@ -564,8 +585,8 @@ class StudyResponseService:
                     completed_task.layers_shown_in_task = layer_payload
                 if completed_task.elements_shown_content is None:
                     completed_task.elements_shown_content = layer_payload
-        # For grid studies, if elements_shown_content is missing, hydrate from generated tasks
-        if study_row and str(study_row.study_type) in ('grid', 'text'):
+        # For grid/text studies (or hybrid with grid/text phase), if elements_shown_content is missing, hydrate from generated tasks
+        if study_row and effective_study_type in ('grid', 'text'):
             try:
                 if completed_task.elements_shown_content is None and isinstance(study_row.tasks, dict):
                     # Resolve respondent and task index from task_id when possible
@@ -706,13 +727,18 @@ class StudyResponseService:
         now_utc = datetime.utcnow()
         study_row: Optional[Study] = self.db.get(Study, response.study_id)
 
-        # Preload element name->url once for grid enrichment
+        # Preload element name->url once for grid/text/hybrid enrichment
         name_to_url: Dict[str, str] = {}
-        if study_row and str(study_row.study_type) in ('grid', 'text'):
+        if study_row and str(study_row.study_type) in ('grid', 'text', 'hybrid'):
             elems = self.db.execute(
                 select(StudyElement.name, StudyElement.content).where(StudyElement.study_id == response.study_id)
             ).all()
             name_to_url = {str(n).replace(' ', '_'): c for (n, c) in elems}
+
+        # Preload tasks for hybrid phase_type lookup
+        tasks_dict: Dict[str, Any] = {}
+        if study_row and str(study_row.study_type) == 'hybrid' and isinstance(study_row.tasks, dict):
+            tasks_dict = study_row.tasks
 
         tasks_to_insert: List[CompletedTask] = []
         interactions_to_insert: List[ElementInteraction] = []
@@ -721,6 +747,27 @@ class StudyResponseService:
         for item in request.tasks or []:
             # Build task model
             elements_shown_in_task = item.elements_shown_in_task or {}
+            
+            # For hybrid studies, determine the effective phase_type from the task definition
+            effective_study_type = str(study_row.study_type) if study_row else None
+            task_phase_type: Optional[str] = None
+            # Use the actual task index (response.current_task_index) for lookup, NOT parsed from task_id
+            # because task_id can be duplicated across phases (e.g., "5_0" appears in both grid and text phases)
+            actual_task_index = response.current_task_index
+            if study_row and str(study_row.study_type) == 'hybrid':
+                try:
+                    # Use respondent_id to find the right tasks list
+                    candidate_keys = [str(response.respondent_id), str(max(0, (response.respondent_id or 0) - 1))]
+                    for rk in candidate_keys:
+                        tasks_for_r = tasks_dict.get(rk)
+                        if isinstance(tasks_for_r, list) and 0 <= actual_task_index < len(tasks_for_r):
+                            task_def = tasks_for_r[actual_task_index] or {}
+                            task_phase_type = task_def.get('phase_type')
+                            if task_phase_type in ('grid', 'text'):
+                                effective_study_type = task_phase_type
+                            break
+                except Exception:
+                    pass
             
             # For layer studies, enhance elements_shown_in_task with z-index information
             if study_row and str(study_row.study_type) == 'layer' and isinstance(elements_shown_in_task, dict):
@@ -772,6 +819,9 @@ class StudyResponseService:
                 
                 elements_shown_in_task = enhanced_elements_shown
             
+            # For hybrid studies, use the phase_type as task_type; otherwise use study_type
+            task_type_value = task_phase_type if task_phase_type else (str(study_row.study_type) if study_row else None)
+            
             task_model = CompletedTask(
                 task_id=item.task_id,
                 respondent_id=response.respondent_id,
@@ -783,24 +833,18 @@ class StudyResponseService:
                 task_duration_seconds=item.task_duration_seconds,
                 rating_given=item.rating_given,
                 rating_timestamp=now_utc,
-                task_type=str(study_row.study_type) if study_row and study_row.study_type else None
+                task_type=task_type_value
             )
             task_model.study_response_id = response.id
 
-            # Grid enrichment for content map if missing
-            if study_row and str(study_row.study_type) in ('grid', 'text') and task_model.elements_shown_in_task and not task_model.elements_shown_content:
+            # Grid/text enrichment for content map if missing (also applies to hybrid grid/text phases)
+            if study_row and effective_study_type in ('grid', 'text') and task_model.elements_shown_in_task and not task_model.elements_shown_content:
                 enriched = None
-                # Try: resolve from Study.tasks by task_id
+                # Try: resolve from Study.tasks using actual_task_index (NOT parsed from task_id)
+                # because task_id can be duplicated across phases (e.g., "5_0" in both grid and text)
                 try:
-                    rid = None
-                    tidx = None
-                    parts = str(item.task_id).split('_')
-                    if len(parts) == 2:
-                        rid = int(parts[0])
-                        tidx = int(parts[1])
-                    # Candidate respondent keys: exact, zero-based variant, session respondent ids
+                    # Candidate respondent keys
                     candidate_keys = [
-                        str(rid), str(max(0, (rid or 0) - 1)),
                         str(response.respondent_id), str(max(0, (response.respondent_id or 0) - 1))
                     ]
                     tasks_for_r = None
@@ -809,8 +853,8 @@ class StudyResponseService:
                         if isinstance(val, list):
                             tasks_for_r = val
                             break
-                    if isinstance(tasks_for_r, list) and isinstance(tidx, int) and 0 <= tidx < len(tasks_for_r):
-                        tdef = tasks_for_r[tidx]
+                    if isinstance(tasks_for_r, list) and 0 <= actual_task_index < len(tasks_for_r):
+                        tdef = tasks_for_r[actual_task_index]
                         if isinstance(tdef, dict):
                             esc = tdef.get('elements_shown_content')
                             if esc:
@@ -1070,7 +1114,7 @@ class StudyResponseService:
         header.extend(["Gender", "Age", "Task"])
         # If study is grid, add CategoryName_ImageName columns; else add layer columns
         study_obj: Optional[Study] = self.db.get(Study, study_id)
-        is_grid = bool(study_obj and str(study_obj.study_type) == 'grid')
+        is_grid = bool(study_obj and str(study_obj.study_type) in ('grid', 'text', 'hybrid'))
         grid_columns: List[tuple[str, str, int]] = []  # (cat_name, element_name, one_based_index_within_cat)
         if is_grid:
             # Load categories with elements to build deterministic headers
@@ -1536,7 +1580,7 @@ class StudyResponseService:
 
         # Grid headers (CategoryName_ImageName by category order and element_id)
         grid_columns_opt: List[tuple[str, str, int]] = []  # (cat_name, element_name, one_based_index)
-        if str(study.study_type) in ('grid', 'text'):
+        if str(study.study_type) in ('grid', 'text', 'hybrid'):
             from app.models.study_model import StudyCategory, StudyElement
             categories = self.db.execute(
                 select(StudyCategory)
@@ -2327,7 +2371,7 @@ class StudyResponseService:
         full_df['Task'] = full_df['task_index'].fillna(0).astype(int) + 1
         
         # Determine dynamic columns
-        is_grid = str(study.study_type) in ('grid', 'text')
+        is_grid = str(study.study_type) in ('grid', 'text', 'hybrid')
         dynamic_cols = []
                 
         if is_grid:

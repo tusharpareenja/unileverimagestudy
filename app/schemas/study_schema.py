@@ -6,7 +6,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict, field_validator, AliasChoices
 from typing import Any, Dict, Optional
 
-StudyType = Literal['grid', 'layer', 'text']
+StudyType = Literal['grid', 'layer', 'text', 'hybrid']
 StudyStatus = Literal['draft', 'active', 'paused', 'completed']
 ElementType = Literal['image', 'text']
 LayerType = Literal['image', 'text']
@@ -49,6 +49,7 @@ class StudyCategoryIn(BaseModel):
     category_id: UUID  # UUID instead of string
     name: str = Field(..., max_length=100)
     order: int = 0
+    phase_type: Optional[StudyType] = None
 
 class StudyCategoryOut(StudyCategoryIn):
     id: UUID
@@ -148,6 +149,9 @@ class StudyBase(BaseModel):
     aspect_ratio: Optional[str] = Field(default=None, description="Aspect ratio string like 3:4 or 4:3")
     rating_scale: RatingScale
     audience_segmentation: AudienceSegmentation
+    # phase_order can be strict types OR just strings to support 'mix'
+    phase_order: Optional[List[str]] = None
+
     last_step: Optional[int] = Field(default=1, ge=1)
 
 class StudyCreateMinimal(BaseModel):
@@ -182,6 +186,8 @@ class StudyUpdate(BaseModel):
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
     classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
+    phase_order: Optional[List[str]] = None
+
     status: Optional[StudyStatus] = None
 
 # ---------- Study Sharing schemas ----------
@@ -273,6 +279,8 @@ class StudyOut(BaseModel):
     aspect_ratio: Optional[str] = None
     rating_scale: RatingScale
     audience_segmentation: AudienceSegmentation
+    phase_order: Optional[List[str]] = None
+
 
     # Children
     categories: Optional[List[StudyCategoryOut]] = None
@@ -351,6 +359,8 @@ class GenerateTasksRequest(BaseModel):
     study_layers: Optional[List[StudyLayerIn]] = None
     exposure_tolerance_cv: Optional[float] = None
     exposure_tolerance_pct: Optional[float] = None
+    phase_order: Optional[List[str]] = None
+
     seed: Optional[int] = None
 
 class GenerateTasksResult(BaseModel):

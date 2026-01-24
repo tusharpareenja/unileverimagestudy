@@ -972,6 +972,136 @@ async def export_study_analysis(
         headers=headers
     )
 
+@router.get("/study/{study_id}/analysis-json")
+async def export_study_analysis_json(
+    study_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Export a comprehensive JSON report with regression analysis, segmentation, and clustering.
+    """
+    # Verify user owns the study
+    from app.services import study as study_service
+    from app.models.study_model import Study
+    from sqlalchemy.orm import defer, selectinload
+    
+    study_obj = (
+        db.query(Study)
+        .options(defer(Study.tasks))
+        .filter(Study.id == study_id)
+        .first()
+    )
+    if not study_obj:
+        raise HTTPException(status_code=404, detail="Study not found")
+    
+    # Verify ownership or membership
+    is_authorized = False
+    if study_obj.creator_id == current_user.id:
+        is_authorized = True
+    else:
+        # Check membership
+        from app.models.study_model import StudyMember
+        member = db.scalar(
+            select(StudyMember).where(
+                StudyMember.study_id == study_id,
+                StudyMember.user_id == current_user.id
+            )
+        )
+        if member:
+            is_authorized = True
+
+    if not is_authorized:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # 1. Get DataFrame
+    response_service = StudyResponseService(db)
+    df = response_service.get_study_dataframe(study_id)
+    
+    # 2. Build study_data dict from the ORM object
+    study_data = {
+        "title": study_obj.title,
+        "study_type": study_obj.study_type,
+        "background": study_obj.background_image_url,
+        "language": study_obj.language,
+        "launched_at": study_obj.created_at.isoformat() if study_obj.created_at else "",
+        "categories": [],
+        "elements": [],
+        "classification_questions": []
+    }
+    
+    # Populate lists based on study type
+    if str(study_obj.study_type) == 'layer':
+        # Map Layers -> Categories, Images -> Elements
+        sorted_layers = sorted(study_obj.layers, key=lambda x: x.order)
+        
+        for layer in sorted_layers:
+            cat_id = str(layer.layer_id)
+            study_data["categories"].append({
+                "id": cat_id,
+                "name": layer.name,
+                "order": layer.order
+            })
+            
+            sorted_images = sorted(layer.images, key=lambda x: x.order)
+            for img in sorted_images:
+                study_data["elements"].append({
+                    "id": str(img.image_id),
+                    "name": img.name,
+                    "content": img.url,
+                    "category_id": cat_id,
+                    "category": {"name": layer.name, "order": layer.order}
+                })
+    else:
+        # Grid and text logic (both use categories and elements)
+        for cat in study_obj.categories:
+            study_data["categories"].append({
+                "id": str(cat.id),
+                "name": cat.name,
+                "order": cat.order
+            })
+            for el in cat.elements:
+                study_data["elements"].append({
+                    "id": str(el.id),
+                    "name": el.name,
+                    "content": el.content,
+                    "category_id": str(cat.id),
+                    "category": {"name": cat.name, "order": cat.order}
+                })
+            
+    for q in study_obj.classification_questions:
+        study_data["classification_questions"].append({
+            "question_id": q.question_id,
+            "question_text": q.question_text,
+            "answer_options": q.answer_options
+        })
+        
+    # 3. Generate JSON Report
+    analysis_service = StudyAnalysisService()
+    try:
+        json_report = analysis_service.generate_json_report(df, study_data)
+    except Exception as e:
+        print(f"JSON Analysis generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate JSON analysis report: {str(e)}")
+    
+    # Sanitize NaN/Inf values that are not JSON compliant
+    import math
+    def sanitize_for_json(obj):
+        if isinstance(obj, dict):
+            return {k: sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize_for_json(item) for item in obj]
+        elif isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
+        else:
+            return obj
+    
+    return sanitize_for_json(json_report)
+
 @router.get("/respondent/{respondent_id}/study/{study_id}/info")
 async def get_respondent_study_info(
     respondent_id: int,

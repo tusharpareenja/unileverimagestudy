@@ -151,7 +151,7 @@ class StudyResponse(Base):
     
     # Relationships
     study = relationship("Study", back_populates="study_responses")
-    completed_tasks = relationship("CompletedTask", back_populates="study_response", cascade="all, delete-orphan")
+    completed_tasks = relationship("CompletedTask", back_populates="study_response", cascade="all, delete-orphan", order_by="CompletedTask.task_index")
     classification_answers = relationship("ClassificationAnswer", back_populates="study_response", cascade="all, delete-orphan")
     element_interactions = relationship("ElementInteraction", back_populates="study_response", cascade="all, delete-orphan")
     task_sessions = relationship("TaskSession", back_populates="study_response", cascade="all, delete-orphan")

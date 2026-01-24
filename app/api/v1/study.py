@@ -103,6 +103,82 @@ def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents
             # If preview generation fails, return empty tasks
             return {}
     
+    elif payload.study_type == 'hybrid':
+        if not payload.elements or not payload.categories or not payload.phase_order:
+            return {}
+            
+        combined_tasks = {}
+        is_mix = "mix" in payload.phase_order
+        target_phases = []
+        if is_mix:
+            target_phases = list(set(c.phase_type for c in payload.categories if c.phase_type))
+        else:
+            target_phases = payload.phase_order
+
+        tasks_per_respondent_mix = {}
+
+        for phase_type in target_phases:
+            phase_categories = [c for c in payload.categories if c.phase_type == phase_type]
+            if not phase_categories:
+                continue
+                
+            cat_data = []
+            for cat in phase_categories:
+                cat_elements = [e for e in payload.elements if e.category_id == cat.category_id]
+                cat_data.append({
+                    "category_name": cat.name,
+                    "elements": [
+                        {
+                            "element_id": str(el.element_id),
+                            "name": el.name,
+                            "content": el.content,
+                            "alt_text": el.alt_text or el.name,
+                            "element_type": el.element_type,
+                        }
+                        for el in cat_elements
+                    ]
+                })
+            
+            from app.services.task_generation_core import generate_grid_tasks_v2
+            try:
+                phase_result = generate_grid_tasks_v2(
+                    categories_data=cat_data,
+                    number_of_respondents=preview_respondents,
+                    exposure_tolerance_cv=payload.exposure_tolerance_cv or 1.0,
+                    seed=payload.seed
+                )
+                phase_tasks = phase_result.get('tasks', {})
+                
+                if is_mix:
+                    for resp_id, t_list in phase_tasks.items():
+                        if resp_id not in tasks_per_respondent_mix:
+                            tasks_per_respondent_mix[resp_id] = []
+                        for t in t_list:
+                            t['phase_type'] = phase_type
+                            tasks_per_respondent_mix[resp_id].append(t)
+                else:
+                    for resp_id, t_list in phase_tasks.items():
+                        if resp_id not in combined_tasks:
+                            combined_tasks[resp_id] = []
+                        
+                        offset = len(combined_tasks[resp_id])
+                        for t in t_list:
+                            t['task_index'] = int(t.get('task_index', 0)) + offset
+                            t['phase_type'] = phase_type
+                        combined_tasks[resp_id].extend(t_list)
+            except Exception:
+                continue
+        
+        if is_mix:
+            import random
+            for resp_id, t_list in tasks_per_respondent_mix.items():
+                random.shuffle(t_list)
+                for idx, t in enumerate(t_list):
+                    t['task_index'] = idx
+                combined_tasks[resp_id] = t_list
+                
+        return combined_tasks
+
     return {}
 
 

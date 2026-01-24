@@ -8,7 +8,7 @@ from sqlalchemy.orm import relationship
 from app.db.base import Base
 import uuid
 
-study_type_enum = Enum('grid', 'layer', 'text', name='study_type_enum')
+study_type_enum = Enum('grid', 'layer', 'text', 'hybrid', name='study_type_enum')
 study_status_enum = Enum('draft', 'active', 'paused', 'completed', name='study_status_enum')
 element_type_enum = Enum('image', 'text', name='element_type_enum')
 layer_type_enum = Enum('image', 'text', name='layer_type_enum')
@@ -33,6 +33,7 @@ class Study(Base):
     rating_scale = Column(JSONB, nullable=False)         # {min_value, max_value in {5,7,9}, labels...}
     audience_segmentation = Column('iped_parameters', JSONB, nullable=False)  # renamed logically; same column
     tasks = Column(JSONB, nullable=True)                 # generated task matrix
+    phase_order = Column(JSONB, nullable=True)           # e.g., ['grid', 'text']
 
     # Ownership / meta
     creator_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
@@ -86,6 +87,7 @@ class StudyCategory(Base):
     category_id = Column(UUID(as_uuid=True), nullable=False)  # UUID instead of string
     name = Column(String(100), nullable=False)
     order = Column(Integer, nullable=False, default=0)
+    phase_type = Column(study_type_enum, nullable=True)  # Associated phase ('grid' or 'text')
 
     study = relationship("Study", back_populates="categories", lazy="selectin")
     elements = relationship("StudyElement", back_populates="category", cascade="all, delete-orphan", lazy="selectin")
