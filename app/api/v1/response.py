@@ -22,6 +22,8 @@ from app.schemas.response_schema import (
     BulkSubmitTasksRequest, BulkSubmitTasksResponse,
     SubmitClassificationRequest, SubmitClassificationResponse,
     AbandonStudyRequest, AbandonStudyResponse, UpdateUserDetailsRequest,
+    SubmitProductIdRequest, SubmitProductIdResponse,
+    SubmitPanelistRequest, SubmitPanelistResponse,
     StudyAnalytics, ResponseAnalytics, CompletedTaskOut,
     ClassificationAnswerOut, ElementInteractionOut, TaskSessionOut, TaskSessionCreate,
     ElementInteractionCreate, CompletedTaskCreate, ClassificationAnswerCreate, StudyResponseCreate
@@ -295,6 +297,57 @@ async def update_user_details(
         "success": success,
         "message": "User details updated successfully" if success else "Failed to update user details"
     }
+
+@router.post("/session/{session_id}/product-id", response_model=SubmitProductIdResponse)
+async def submit_product_id(
+    session_id: str,
+    request: SubmitProductIdRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Submit a product ID for a study session.
+    This endpoint is public and doesn't require authentication.
+    """
+    service = StudyResponseService(db)
+    success = service.submit_product_id(session_id, request.product_id)
+    
+    if not success:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found"
+        )
+    
+    return SubmitProductIdResponse(
+        success=True,
+        message="Product ID submitted successfully"
+    )
+
+@router.post("/session/{session_id}/panelist", response_model=SubmitPanelistResponse)
+async def submit_panelist(
+    session_id: str,
+    request: SubmitPanelistRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Submit a panelist ID for a study session.
+    This endpoint is public and doesn't require authentication.
+    """
+    service = StudyResponseService(db)
+    panelist_info = service.submit_panelist_info(session_id, request.panelist_id)
+    
+    if not panelist_info:
+        raise HTTPException(
+            status_code=404,
+            detail="Session or Panelist not found"
+        )
+    
+    return SubmitPanelistResponse(
+        success=True,
+        panelist_name=panelist_info["name"],
+        panelist_age=panelist_info["age"],
+        panelist_gender=panelist_info["gender"],
+        message="Panelist information submitted successfully"
+    )
 
 # ---------- Study Response Management (Authenticated) ----------
 
@@ -1217,7 +1270,8 @@ async def get_respondent_study_info(
             "main_question": study["main_question"],
             "orientation_text": study["orientation_text"],
             "rating_scale": study["rating_scale"],
-            "language": study["language"]
+            "language": study["language"],
+            "toggle_shuffle": study.get("toggle_shuffle", False)
         },
         "metadata": {
             "tasks_per_consumer": tasks_per_consumer,

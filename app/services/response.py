@@ -15,6 +15,7 @@ from app.models.response_model import (
     StudyResponse, CompletedTask, ClassificationAnswer, 
     ElementInteraction, TaskSession
 )
+from app.models.panelist_model import Panelist
 from app.models.study_model import Study, StudyClassificationQuestion, StudyElement
 from app.schemas.response_schema import (
     StudyResponseCreate, StudyResponseUpdate, StudyResponseOut,
@@ -92,6 +93,7 @@ class StudyResponseService:
             ip_address=response_data.ip_address,
             user_agent=response_data.user_agent,
             browser_info=response_data.browser_info,
+            product_id=getattr(response_data, 'product_id', None),
             last_activity=datetime.utcnow(),
             status='in_progress',  # Set status as in_progress when session starts
             is_abandoned=False,    # Set to False initially, will be True after 15 minutes if no activity
@@ -366,6 +368,7 @@ class StudyResponseService:
             personal_info=combined_personal_info,
             ip_address=ip_address,
             user_agent=user_agent,
+            product_id=getattr(request, 'product_id', None),
             last_activity=now_utc,
             status='in_progress',
             is_abandoned=False,
@@ -715,6 +718,53 @@ class StudyResponseService:
         self.db.commit()
         
         return True
+
+    def submit_product_id(self, session_id: str, product_id: str) -> bool:
+        """Update product ID for a study session - optimized for speed."""
+        from sqlalchemy import update
+        stmt = (
+            update(StudyResponse)
+            .where(StudyResponse.session_id == session_id)
+            .values(product_id=product_id, last_activity=datetime.utcnow())
+        )
+        result = self.db.execute(stmt)
+        self.db.commit()
+        return result.rowcount > 0
+
+    def submit_panelist_info(self, session_id: str, panelist_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Submit panelist ID, fetch details, and update study response.
+        Returns dict with panelist info if successful, None if session/panelist not found.
+        """
+        response = self.get_response_by_session(session_id)
+        if not response:
+            return None
+        
+        panelist = self.db.get(Panelist, panelist_id)
+        if not panelist:
+            return None
+            
+        # Update response with panelist ID
+        response.panelist_id = panelist_id
+        
+        # Update personal info
+        current_info = response.personal_info or {}
+        current_info['age'] = panelist.age
+        current_info['gender'] = panelist.gender
+        current_info['panelist_name'] = panelist.name
+        
+        # Use simple assignment to trigger JSONB update in SQLAlchemy
+        response.personal_info = dict(current_info)
+        response.last_activity = datetime.utcnow()
+        
+        self.db.commit()
+        self.db.refresh(response)
+        
+        return {
+            "name": panelist.name,
+            "age": panelist.age,
+            "gender": panelist.gender
+        }
 
     def submit_tasks_bulk(self, session_id: str, request: BulkSubmitTasksRequest) -> BulkSubmitTasksResponse:
         """Submit multiple completed tasks in a single transaction (optimized for large payloads)."""

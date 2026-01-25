@@ -145,6 +145,12 @@ class StudyResponse(Base):
     abandonment_timestamp = Column(DateTime(timezone=True), nullable=True)
     abandonment_reason = Column(String(200), nullable=True)
     
+    # Client-specific features
+    product_id = Column(String(100), nullable=True) # Optional hexadecimal product id
+    
+    # Panelist Integration
+    panelist_id = Column(String(10), ForeignKey('panelists.id'), nullable=True, index=True)
+    
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

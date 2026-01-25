@@ -151,6 +151,7 @@ class StudyBase(BaseModel):
     audience_segmentation: AudienceSegmentation
     # phase_order can be strict types OR just strings to support 'mix'
     phase_order: Optional[List[str]] = None
+    toggle_shuffle: bool = False
 
     last_step: Optional[int] = Field(default=1, ge=1)
 
@@ -187,6 +188,7 @@ class StudyUpdate(BaseModel):
     study_layers: Optional[List[StudyLayerIn]] = None
     classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
     phase_order: Optional[List[str]] = None
+    toggle_shuffle: Optional[bool] = None
 
     status: Optional[StudyStatus] = None
 
@@ -245,6 +247,7 @@ class StudyPublicMinimal(BaseModel):
     status: str
     orientation_text: str
     language: str
+    creator_email: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=False)
 
@@ -263,6 +266,7 @@ class StudyBasicDetails(BaseModel):
     study_config: Optional[Dict[str, Any]] = None  # For additional configuration
     classification_questions: Optional[List[StudyClassificationQuestionOut]] = None
     element_count: Optional[int] = None  # Number of images (grid/layer) or statements (text)
+    toggle_shuffle: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -280,6 +284,7 @@ class StudyOut(BaseModel):
     rating_scale: RatingScale
     audience_segmentation: AudienceSegmentation
     phase_order: Optional[List[str]] = None
+    toggle_shuffle: bool = False
 
 
     # Children
@@ -295,6 +300,7 @@ class StudyOut(BaseModel):
     share_token: str
     share_url: Optional[str] = None
     jobid: Optional[str] = None
+    creator_email: Optional[str] = None
 
     created_at: datetime
     updated_at: datetime
@@ -360,6 +366,7 @@ class GenerateTasksRequest(BaseModel):
     exposure_tolerance_cv: Optional[float] = None
     exposure_tolerance_pct: Optional[float] = None
     phase_order: Optional[List[str]] = None
+    toggle_shuffle: Optional[bool] = None
 
     seed: Optional[int] = None
 

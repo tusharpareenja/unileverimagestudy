@@ -219,6 +219,7 @@ def create_study(
         completed_responses=0,
         abandoned_responses=0,
         phase_order=payload.phase_order,
+        toggle_shuffle=payload.toggle_shuffle,
         last_step=payload.last_step or 1,
     )
     db.add(study)
@@ -399,6 +400,7 @@ def create_study_minimal(
         status='draft',
         share_token=share_token,
         share_url=_build_share_url(settings.BASE_URL, str(study_id)),
+        toggle_shuffle=False,
         last_step=last_step,
     )
 
@@ -519,6 +521,7 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
 
 def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str, Any]:
     """Get study with status checking and appropriate messaging."""
+    from app.models.user_model import User as UserModel
     row = db.execute(
         select(
             Study.id,
@@ -529,7 +532,9 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
             Study.share_token,
             Study.orientation_text,
             Study.language,
-        ).where(Study.id == study_id)
+            UserModel.email.label("creator_email")
+        ).join(UserModel, UserModel.id == Study.creator_id)
+        .where(Study.id == study_id)
     ).first()
     
     if not row:
@@ -597,6 +602,7 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
         "status": row.status,
         "orientation_text": row.orientation_text,
         "language": row.language,
+        "creator_email": row.creator_email,
     }
 
 def get_study_share_details(db: Session, study_id: UUID) -> Optional[Dict[str, Any]]:
@@ -766,6 +772,9 @@ def update_study(
 
     if payload.phase_order is not None:
         study.phase_order = payload.phase_order
+
+    if payload.toggle_shuffle is not None:
+        study.toggle_shuffle = payload.toggle_shuffle
 
     # Replace children collections if provided
     if payload.elements is not None:
@@ -1535,7 +1544,7 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
     # Ultra-fast raw SQL query - only essential fields
     query = text("""
         SELECT id, title, status, study_type, created_at, background, 
-               main_question, orientation_text, rating_scale, iped_parameters, language
+               main_question, orientation_text, rating_scale, iped_parameters, language, toggle_shuffle
         FROM studies 
         WHERE id = :study_id
     """)

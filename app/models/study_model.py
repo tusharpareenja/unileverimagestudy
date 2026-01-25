@@ -1,6 +1,6 @@
 # app/models/study.py
 from sqlalchemy import (
-    Column, String, Integer, DateTime, Enum, ForeignKey, Index, UniqueConstraint, Text
+    Column, String, Integer, DateTime, Enum, ForeignKey, Index, UniqueConstraint, Text, Boolean
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func, expression
@@ -57,6 +57,9 @@ class Study(Base):
 
     # Background job tracking
     jobid = Column(String(255), nullable=True, index=True)
+
+    # Shuffling config
+    toggle_shuffle = Column(Boolean, nullable=False, server_default=expression.false(), default=False)
 
     # Relations
     creator = relationship("User", back_populates="studies", lazy="selectin", passive_deletes=True)
