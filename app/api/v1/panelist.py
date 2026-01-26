@@ -19,6 +19,8 @@ def get_panelists(
     """
     try:
         return panelist_service.get_by_creator(db=db, creator_email=creator_email, number=number)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -32,20 +34,24 @@ def create_panelist(
     """
     try:
         return panelist_service.create(db=db, panelist_in=panelist_in)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/search", response_model=List[PanelistResponse])
 def search_panelists(
     creator_email: str = Query(..., description="Creator email to search within"),
-    query: str = Query(..., description="Search by ID or Name"),
+    query: str = Query(..., description="Search by ID"),
     number: int = Query(10, description="Limit results"),
     db: Session = Depends(get_db)
 ):
     """
-    Search panelists by ID or Name.
+    Search panelists by ID.
     """
     try:
         return panelist_service.search(db=db, query=query, creator_email=creator_email, number=number)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

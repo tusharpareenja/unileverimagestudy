@@ -343,7 +343,6 @@ async def submit_panelist(
     
     return SubmitPanelistResponse(
         success=True,
-        panelist_name=panelist_info["name"],
         panelist_age=panelist_info["age"],
         panelist_gender=panelist_info["gender"],
         message="Panelist information submitted successfully"

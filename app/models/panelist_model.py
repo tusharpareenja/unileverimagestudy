@@ -1,18 +1,12 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.sql import func
 from app.db.base import Base
-import random
-import string
-
-def generate_panelist_id():
-    """Generate a unique 10-character alphanumeric ID"""
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
 
 class Panelist(Base):
     __tablename__ = "panelists"
 
-    id = Column(String(10), primary_key=True, default=generate_panelist_id)
-    name = Column(String(100), nullable=False)
+    internal_id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(String(8), nullable=False, index=True)
     age = Column(Integer, nullable=True)
     gender = Column(String(50), nullable=True)
     # Creator email to link with the user who created this panelist
@@ -22,8 +16,9 @@ class Panelist(Base):
     
     __table_args__ = (
         Index("idx_panelist_creator", "creator_email"),
-        Index("idx_panelist_search", "id", "name"),
+        # Ensure ID is unique per creator (allows same ID across different creators)
+        UniqueConstraint("creator_email", "id", name="uq_panelist_creator_id"),
     )
 
     def __repr__(self):
-        return f"<Panelist(id={self.id}, name='{self.name}', creator='{self.creator_email}')>"
+        return f"<Panelist(id={self.id}, creator='{self.creator_email}')>"

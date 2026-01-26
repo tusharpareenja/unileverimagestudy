@@ -1529,7 +1529,8 @@ def get_study_basic_details(db: Session, study_id: UUID, owner_id: UUID) -> Opti
         "orientation_text": study.orientation_text,
         "rating_scale": study.rating_scale,
         "study_config": study_config,
-        "classification_questions": study.classification_questions
+        "classification_questions": study.classification_questions,
+        "toggle_shuffle": study.toggle_shuffle
     }
 
 
@@ -1620,5 +1621,6 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         "language": result.language,
         "study_config": study_config,
         "classification_questions": classification_questions,
-        "element_count": element_count
+        "element_count": element_count,
+        "toggle_shuffle": result.toggle_shuffle
     }

@@ -740,18 +740,30 @@ class StudyResponseService:
         if not response:
             return None
         
-        panelist = self.db.get(Panelist, panelist_id)
+        # Look up panelist by alphanumeric ID and creator email
+        # Since multiple creators can use the same ID, we must filter by the study's creator
+        from app.models.study_model import Study
+        from app.models.user_model import User
+        
+        panelist = self.db.query(Panelist).join(
+            User, User.email == Panelist.creator_email
+        ).join(
+            Study, Study.creator_id == User.id
+        ).filter(
+            Panelist.id == panelist_id,
+            Study.id == response.study_id
+        ).first()
+        
         if not panelist:
             return None
             
         # Update response with panelist ID
         response.panelist_id = panelist_id
         
-        # Update personal info
+        # Update personal info with age and gender only (no name)
         current_info = response.personal_info or {}
         current_info['age'] = panelist.age
         current_info['gender'] = panelist.gender
-        current_info['panelist_name'] = panelist.name
         
         # Use simple assignment to trigger JSONB update in SQLAlchemy
         response.personal_info = dict(current_info)
@@ -761,7 +773,7 @@ class StudyResponseService:
         self.db.refresh(response)
         
         return {
-            "name": panelist.name,
+            "panelist_id": panelist.id,
             "age": panelist.age,
             "gender": panelist.gender
         }
