@@ -6,7 +6,7 @@ class Panelist(Base):
     __tablename__ = "panelists"
 
     internal_id = Column(Integer, primary_key=True, autoincrement=True)
-    id = Column(String(8), nullable=False, index=True)
+    id = Column(String(50), nullable=False, index=True)
     age = Column(Integer, nullable=True)
     gender = Column(String(50), nullable=True)
     # Creator email to link with the user who created this panelist

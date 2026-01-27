@@ -7,19 +7,19 @@ class PanelistBase(BaseModel):
     gender: Optional[str] = None
 
 class PanelistCreate(PanelistBase):
-    id: str = Field(..., min_length=8, max_length=8, description="8-character alphanumeric panelist ID")
+    id: str = Field(..., max_length=50, description="Up to 50-character alphanumeric panelist ID")
     creator_email: str
     
     @field_validator('id')
     @classmethod
     def validate_id_format(cls, v: str) -> str:
-        """Validate that ID is exactly 8 alphanumeric characters"""
+        """Validate that ID is up to 50 alphanumeric characters"""
         if not v:
             raise ValueError("Panelist ID is required")
-        if len(v) != 8:
-            raise ValueError("Panelist ID must be exactly 8 characters")
-        if not re.match(r'^[A-Za-z0-9]{8}$', v):
-            raise ValueError("Panelist ID must contain only letters and numbers")
+        if len(v) > 50:
+            raise ValueError("Panelist ID must be at most 50 characters")
+        if not re.match(r'^[A-Za-z0-9]{1,50}$', v):
+            raise ValueError("Panelist ID must contain only letters and numbers (1-50 characters)")
         # Convert to uppercase for consistency
         return v.upper()
 

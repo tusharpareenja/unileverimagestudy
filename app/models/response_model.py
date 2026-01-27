@@ -149,7 +149,7 @@ class StudyResponse(Base):
     product_id = Column(String(100), nullable=True) # Optional hexadecimal product id
     
     # Panelist Integration
-    panelist_id = Column(String(8), nullable=True, index=True)
+    panelist_id = Column(String(50), nullable=True, index=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
