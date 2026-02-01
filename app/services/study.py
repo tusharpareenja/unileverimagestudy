@@ -147,6 +147,16 @@ def _load_owned_study_minimal(db: Session, study_id: UUID, owner_id: UUID, for_u
     if for_update:
         stmt = stmt.with_for_update()
     study = db.scalars(stmt).first()
+
+    if not study:
+        # Check if user is a member
+        stmt_member = (
+            select(Study)
+            .join(StudyMember, StudyMember.study_id == Study.id)
+            .where(Study.id == study_id, StudyMember.user_id == owner_id)
+        )
+        study = db.scalars(stmt_member).first()
+
     if not study:
         raise HTTPException(status_code=404, detail="Study not found or access denied.")
     return study
@@ -159,6 +169,17 @@ def _load_owned_study_launch_only(db: Session, study_id: UUID, owner_id: UUID) -
         .with_for_update()
     )
     result = db.execute(stmt).first()
+    
+    if not result:
+        # Check if user is a member
+        stmt_member = (
+            select(Study.id, Study.title, Study.status, Study.launched_at, Study.creator_id)
+            .join(StudyMember, StudyMember.study_id == Study.id)
+            .where(Study.id == study_id, StudyMember.user_id == owner_id)
+            .with_for_update()
+        )
+        result = db.execute(stmt_member).first()
+
     if not result:
         raise HTTPException(status_code=404, detail="Study not found or access denied.")
     
@@ -1208,6 +1229,17 @@ def regenerate_tasks(
         .where(Study.id == study_id, Study.creator_id == owner_id)
         .with_for_update()
     ).first()
+
+    if not study:
+        # Check if user is a member
+        stmt_member = (
+            select(Study)
+            .join(StudyMember, StudyMember.study_id == Study.id)
+            .where(Study.id == study_id, StudyMember.user_id == owner_id)
+            .with_for_update()
+        )
+        study = db.scalars(stmt_member).first()
+
     if not study:
         raise HTTPException(status_code=404, detail="Study not found or access denied.")
     

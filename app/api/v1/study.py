@@ -185,13 +185,28 @@ def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents
 def _ensure_study_exists(payload: GenerateTasksRequest, db: Session, current_user: User):
     """Helper function to ensure study exists, creating it if necessary"""
     from sqlalchemy import select
-    from app.models.study_model import Study as StudyModel
+    from app.models.study_model import Study as StudyModel, StudyMember
+    import logging
+    logger = logging.getLogger(__name__)
     
     if payload.study_id is not None:
         study_row = db.scalars(
             select(StudyModel).where(StudyModel.id == payload.study_id, StudyModel.creator_id == current_user.id)
         ).first()
+
         if not study_row:
+            # Check if the user is a member (Editor or Admin)
+            stmt_member = (
+                select(StudyModel)
+                .join(StudyMember, StudyMember.study_id == StudyModel.id)
+                .where(StudyModel.id == payload.study_id, StudyMember.user_id == current_user.id)
+            )
+            study_row = db.scalars(stmt_member).first()
+            if study_row:
+                logger.info(f"User {current_user.id} accessed study {payload.study_id} as a member.")
+
+        if not study_row:
+            logger.error(f"Access denied or study not found for user {current_user.id} and study {payload.study_id}")
             raise HTTPException(status_code=404, detail="Study not found or access denied.")
         return study_row
     else:
@@ -876,7 +891,24 @@ def generate_tasks_from_body_endpoint(
         study_row = db.scalars(
             select(StudyModel).where(StudyModel.id == payload.study_id, StudyModel.creator_id == current_user.id)
         ).first()
+
         if not study_row:
+            # Check if user is a member
+            stmt_member = (
+                select(StudyModel)
+                .join(StudyMember, StudyMember.study_id == StudyModel.id)
+                .where(StudyModel.id == payload.study_id, StudyMember.user_id == current_user.id)
+            )
+            study_row = db.scalars(stmt_member).first()
+            if study_row:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.info(f"User {current_user.id} (Member) is regenerating tasks for study {payload.study_id}")
+
+        if not study_row:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Sync task generation: Study not found or access denied for user {current_user.id}, study {payload.study_id}")
             raise HTTPException(status_code=404, detail="Study not found or access denied.")
     else:
         # Create a new draft study if minimal required fields provided
@@ -1224,6 +1256,10 @@ def get_task_generation_result(
 
     # Clear the jobid from the database now that we're retrieving the results
     study.jobid = None
+    
+    # Job is NOT deleted here to prevent race conditions (404s) on multiple requests.
+    # The background system cleanup (every 24h) will handle deletion.
+    
     db.commit()
 
     # Prepare lightweight layer metadata including transform
