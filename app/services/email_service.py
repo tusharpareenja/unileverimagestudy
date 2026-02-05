@@ -321,6 +321,93 @@ class EmailService:
             logger.error(f"Failed to send study invitation email to {to_email}: {str(e)}")
             return False
 
+    def send_project_invitation(
+        self, 
+        to_email: str, 
+        user_name: str, 
+        project_name: str, 
+        inviter_name: str, 
+        role: str,
+        is_new_user: bool = False
+    ) -> bool:
+        """
+        Send project invitation email
+        """
+        try:
+            subject = f"You have been invited in project {project_name}"
+            
+            action_text = "View Project" if not is_new_user else "Create Account & View Project"
+            action_url = f"{self.frontend_url}/login"
+            
+            message = f"You have been invited as a <strong>{role}</strong> to the project <strong>'{project_name}'</strong> by <strong>{inviter_name}</strong>."
+            message += "<br><br>As a project member, you'll have access to all studies within this project."
+            if is_new_user:
+                message += "<br><br>It looks like you don't have an account yet. Please create an account using this email to see the project."
+
+            html_body = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: #2c3e50;">Project Invitation</h2>
+                    
+                    <p>Hello {user_name},</p>
+                    
+                    <p>{message}</p>
+                    
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{action_url}" 
+                           style="background-color: #3498db; color: white; padding: 12px 30px; 
+                                   text-decoration: none; border-radius: 5px; display: inline-block;">
+                            {action_text}
+                        </a>
+                    </div>
+                    
+                    <p>Or copy and paste this link into your browser:</p>
+                    <p style="word-break: break-all; background-color: #f8f9fa; padding: 10px; 
+                             border-radius: 3px; font-family: monospace;">
+                        {action_url}
+                    </p>
+                    
+                    <p>If you have any questions, please contact the person who invited you or our support team.</p>
+                    
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+                    <p style="font-size: 12px; color: #666;">
+                        This email was sent from {self.app_name}.
+                    </p>
+                </div>
+            </body>
+            </html>
+            """
+            
+            text_body = f"""
+            Project Invitation - {self.app_name}
+            
+            Hello {user_name},
+            
+            You have been invited as a {role} to the project '{project_name}' by {inviter_name}.
+            
+            As a project member, you'll have access to all studies within this project.
+            
+            {'Please create an account to see the project' if is_new_user else 'You can view the project by logging in'}:
+            {action_url}
+            
+            If you have any questions, please contact the person who invited you or our support team.
+            
+            ---
+            This email was sent from {self.app_name}.
+            """
+            
+            return self._send_email(
+                to_email=to_email,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to send project invitation email to {to_email}: {str(e)}")
+            return False
+
 
 # Global email service instance
 email_service = EmailService()

@@ -10,6 +10,7 @@ from app.api.v1.study import router as study_router
 from app.api.v1.response import router as response_router
 from app.api.v1.uploads import router as uploads_router
 from app.api.v1.panelist import router as panelist_router
+from app.api.v1.project import router as project_router
 from app.core.config import settings
 from app.core.cloudinary_config import init_cloudinary
 
@@ -34,6 +35,7 @@ app.include_router(study_router, prefix="/api/v1/studies", tags=["studies"])
 app.include_router(response_router, prefix="/api/v1/responses", tags=["responses"])
 app.include_router(uploads_router, prefix="/api/v1/uploads", tags=["uploads"])
 app.include_router(panelist_router, prefix="/api/v1/panelist", tags=["panelist"])
+app.include_router(project_router, prefix="/api/v1/projects", tags=["projects"])
 
 
 @app.exception_handler(RequestValidationError)

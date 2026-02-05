@@ -161,6 +161,7 @@ class StudyCreateMinimal(BaseModel):
     background: str
     language: str = Field(default='en', max_length=10)
     last_step: Optional[int] = Field(default=1, ge=1)
+    project_id: Optional[UUID] = Field(None, description="Optional project ID to affiliate this study with")
 
 class StudyCreate(StudyBase):
     # For grid studies, provide elements; for layer studies, provide study_layers
@@ -168,6 +169,7 @@ class StudyCreate(StudyBase):
     elements: Optional[List[StudyElementIn]] = None
     study_layers: Optional[List[StudyLayerIn]] = None
     classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
+    project_id: Optional[UUID] = Field(None, description="Optional project ID to affiliate this study with")
 
 class StudyUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=255)
@@ -182,6 +184,7 @@ class StudyUpdate(BaseModel):
     # Optional aspect ratio for layer studies, e.g., "3:4", "4:3"
     aspect_ratio: Optional[str] = Field(default=None, description="Aspect ratio string like 3:4 or 4:3")
     last_step: Optional[int] = Field(default=None, ge=1)
+    project_id: Optional[UUID] = Field(None, description="Optional project ID to affiliate this study with")
     # Replacing full collections (server should decide whether allowed while active)
     categories: Optional[List[StudyCategoryIn]] = None
     elements: Optional[List[StudyElementIn]] = None

@@ -120,15 +120,47 @@ class StudyMemberService:
         
         logger.info(f"Found {len(members)} existing members")
         
-        # Check if creator is already in the members list
-        creator_in_members = any(m.user_id == study.creator_id for m in members)
+        # Helper to get project info if exists
+        project = None
+        project_creator_id = None
+        if study.project_id:
+            from app.models.project_model import Project
+            project = db.get(Project, study.project_id)
+            if project:
+                project_creator_id = project.creator_id
+
+        # 1. Handle Study Creator (Owner)
+        creator_member = next((m for m in members if m.user_id == study.creator_id), None)
         
-        logger.info(f"Creator in members: {creator_in_members}")
-        
-        if not creator_in_members:
-            # Create a synthetic StudyMember object for the creator
-            creator_member = StudyMember(
-                id=study.creator_id,  # Use creator_id as a pseudo-id
+        if creator_member:
+            members.remove(creator_member)
+            
+            # Determine role:
+            # If no project OR they are the project creator -> 'admin'
+            # If they are just a member in the project -> keep existing role (e.g. 'editor')
+            target_role = 'admin'
+            if project_creator_id and study.creator_id != project_creator_id:
+                # Keep their existing role (likely 'editor' synced from project)
+                target_role = creator_member.role
+            
+            # Create synthetic/updated member
+            creator_member_obj = StudyMember(
+                id=study.creator_id,
+                study_id=study_id,
+                user_id=study.creator_id,
+                role=target_role,
+                invited_email=study.creator.email,
+                created_at=study.created_at,
+                updated_at=study.updated_at
+            )
+            creator_member_obj.user = study.creator
+            members.insert(0, creator_member_obj)
+            logger.info(f"Added study creator to list with role {target_role}")
+            
+        else:
+            # Not in list (e.g. standalone study or sync missed) -> force 'admin'
+            creator_member_obj = StudyMember(
+                id=study.creator_id,
                 study_id=study_id,
                 user_id=study.creator_id,
                 role='admin',
@@ -136,20 +168,32 @@ class StudyMemberService:
                 created_at=study.created_at,
                 updated_at=study.updated_at
             )
-            # Attach the user object to avoid additional queries
-            creator_member.user = study.creator
+            creator_member_obj.user = study.creator
+            members.insert(0, creator_member_obj)
+            logger.info(f"Added study creator to list as default admin")
+
+        # 2. Handle Project Creator (if study belongs to a project)
+        if project and project_creator_id and project_creator_id != study.creator_id:
+            # Check if this project creator is already in the list
+            pc_member = next((m for m in members if m.user_id == project_creator_id), None)
             
-            logger.info(f"Adding creator {study.creator.name} ({study.creator.email}) to members list")
-            
-            # Insert creator at the beginning of the list
-            members.insert(0, creator_member)
-        else:
-            # If creator is in members, move them to the front
-            creator_member = next((m for m in members if m.user_id == study.creator_id), None)
-            if creator_member:
-                members.remove(creator_member)
-                members.insert(0, creator_member)
-                logger.info(f"Moved creator to front of list")
+            if not pc_member:
+                # Not in list, add them as synthetic admin
+                pc_obj = StudyMember(
+                    id=project_creator_id, 
+                    study_id=study_id,
+                    user_id=project_creator_id,
+                    role='admin',
+                    invited_email=project.creator.email,
+                    created_at=project.created_at, 
+                    updated_at=project.updated_at
+                )
+                pc_obj.user = project.creator
+                members.insert(1, pc_obj) # Insert after study creator
+                logger.info(f"Added project creator {project.creator.email} to members list as admin")
+            else:
+                # If present (e.g. synced as viewer?), force display as 'admin' because they own the project
+                pc_member.role = 'admin'
         
         return members
 

@@ -46,6 +46,14 @@ class User(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    projects = relationship(
+        "Project",
+        back_populates="creator",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
 
     # Indexes for better query performance
     __table_args__ = (

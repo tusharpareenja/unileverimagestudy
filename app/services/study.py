@@ -233,6 +233,7 @@ def create_study(
         audience_segmentation=audience_segmentation_json,
         tasks=None,
         creator_id=creator_id,
+        project_id=getattr(payload, 'project_id', None),
         status='draft',
         share_token=share_token,
         share_url=None,  # Will be set after study.id is available
@@ -375,6 +376,13 @@ def create_study(
 
     db.commit()
     db.refresh(study)
+    
+    # If study is part of a project, automatically add all project members to this study
+    if study.project_id:
+        from app.services.project_member_service import project_member_service
+        project_member_service.sync_new_study_to_project_members(db, study.id, study.project_id)
+        db.commit()
+    
     return study
 
 def create_study_minimal(
@@ -383,7 +391,8 @@ def create_study_minimal(
     title: str,
     background: str,
     language: str = 'en',
-    last_step: int = 1
+    last_step: int = 1,
+    project_id: Optional[UUID] = None
 ) -> UUID:
     """
     Ultra-fast study creation with only essential fields.
@@ -418,6 +427,7 @@ def create_study_minimal(
         },
         audience_segmentation={},
         creator_id=creator_id,
+        project_id=project_id,
         status='draft',
         share_token=share_token,
         share_url=_build_share_url(settings.BASE_URL, str(study_id)),
@@ -427,6 +437,12 @@ def create_study_minimal(
 
     db.execute(stmt)
     db.commit()
+
+    # If study is part of a project, automatically add all project members
+    if project_id:
+        from app.services.project_member_service import project_member_service
+        project_member_service.sync_new_study_to_project_members(db, study_id, project_id)
+        db.commit()
 
     # Return UUID directly - no ORM object needed
     return study_id
@@ -441,21 +457,35 @@ def get_study_exists(db: Session, study_id: UUID, owner_id: UUID) -> bool:
 
 def check_study_access(db: Session, study_id: UUID, user_id: UUID) -> None:
     """
-    Verify if a user has access to a study (Creator or Member).
+    Verify if a user has access to a study (Creator, Project Owner, or Member).
     Raises HTTPException if access is denied.
     Does NOT load full study data.
     """
-    # Check if creator
-    stmt_creator = select(Study.creator_id).where(Study.id == study_id)
-    creator_id = db.scalar(stmt_creator)
+    from app.models.project_model import Project
+
+    # Check study existence and ownership (Study Creator OR Project Creator)
+    stmt = (
+        select(Study.creator_id, Project.creator_id)
+        .outerjoin(Project, Study.project_id == Project.id)
+        .where(Study.id == study_id)
+    )
+    result = db.execute(stmt).first()
     
-    if not creator_id:
+    if not result:
+        # Study doesn't exist
         raise HTTPException(status_code=404, detail="Study not found")
         
-    if creator_id == user_id:
+    study_creator_id, project_creator_id = result
+    
+    # 1. Access allowed if user is Study Creator
+    if study_creator_id == user_id:
         return
 
-    # Check if member
+    # 2. Access allowed if user is Project Creator (Owner)
+    if project_creator_id == user_id:
+        return
+
+    # 3. Check if member
     stmt_member = select(StudyMember.id).where(
         StudyMember.study_id == study_id,
         StudyMember.user_id == user_id
@@ -796,6 +826,9 @@ def update_study(
 
     if payload.toggle_shuffle is not None:
         study.toggle_shuffle = payload.toggle_shuffle
+
+    if payload.project_id is not None:
+        study.project_id = payload.project_id
 
     # Replace children collections if provided
     if payload.elements is not None:

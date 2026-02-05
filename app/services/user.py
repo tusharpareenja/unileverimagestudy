@@ -81,16 +81,8 @@ class UserService:
             self.db.commit()
             self.db.refresh(db_user)
             
-            # --- Link any pending study invitations ---
-            from app.models.study_model import StudyMember
-            from sqlalchemy import update
-            self.db.execute(
-                update(StudyMember)
-                .where(StudyMember.invited_email == db_user.email, StudyMember.user_id == None)
-                .values(user_id=db_user.id)
-            )
-            self.db.commit()
-            # ------------------------------------------
+            # Link any pending project or study invitations
+            self._link_pending_invitations(db_user)
 
             logger.info("User created successfully: user_id=%s email=%s", db_user.id, db_user.email)
         except Exception:
@@ -320,6 +312,33 @@ class UserService:
             logger.error(f"Error getting user by reset token: {str(e)}")
             return None
 
+    def _link_pending_invitations(self, db_user: User):
+        """Link any pending project or study invitations to the new user ID"""
+        from sqlalchemy import update
+        from app.models.project_model import ProjectMember
+        from app.models.study_model import StudyMember
+        
+        try:
+            # 1. Link project invitations
+            self.db.execute(
+                update(ProjectMember)
+                .where(ProjectMember.invited_email == db_user.email, ProjectMember.user_id == None)
+                .values(user_id=db_user.id)
+            )
+            
+            # 2. Link study invitations
+            self.db.execute(
+                update(StudyMember)
+                .where(StudyMember.invited_email == db_user.email, StudyMember.user_id == None)
+                .values(user_id=db_user.id)
+            )
+            
+            self.db.commit()
+            logger.info("Linked pending invitations for user: %s", db_user.email)
+        except Exception:
+            logger.exception("Failed to link pending invitations for user: %s", db_user.email)
+            self.db.rollback()
+
     def create_user_from_oauth(self, oauth_data: OAuthData) -> User:
         """
         Create a new user from OAuth data
@@ -355,6 +374,10 @@ class UserService:
             self.db.add(db_user)
             self.db.commit()
             self.db.refresh(db_user)
+            
+            # Link any pending project or study invitations
+            self._link_pending_invitations(db_user)
+            
             logger.info("OAuth user created successfully: user_id=%s email=%s", db_user.id, db_user.email)
             return db_user
         except Exception as e:

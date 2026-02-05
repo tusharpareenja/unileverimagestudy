@@ -285,6 +285,7 @@ def create_study_minimal_endpoint(
         background=payload.background,
         language=payload.language,
         last_step=payload.last_step or 1,
+        project_id=getattr(payload, 'project_id', None),
     )
     return StudyCreateMinimalResponse(id=study_id)
 
@@ -384,7 +385,21 @@ def get_study_preview_endpoint(
 
     # Determine user role
     user_role = "viewer"
-    if study.creator_id == current_user.id:
+    
+    # Check if project creator
+    is_project_creator = False
+    if study.project_id:
+        # Check if project relation is loaded, else fetch
+        if study.project and study.project.creator_id == current_user.id:
+            is_project_creator = True
+        elif not study.project:
+            # Fallback query if project not loaded
+            from app.models.project_model import Project
+            proj = db.get(Project, study.project_id)
+            if proj and proj.creator_id == current_user.id:
+                is_project_creator = True
+
+    if study.creator_id == current_user.id or is_project_creator:
         user_role = "admin"
     else:
         # Check if member

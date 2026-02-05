@@ -37,6 +37,7 @@ class Study(Base):
 
     # Ownership / meta
     creator_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey('projects.id', ondelete='SET NULL'), nullable=True, index=True)
     status = Column(study_status_enum, nullable=False, server_default='draft')
     share_token = Column(String(255), nullable=False, unique=True, index=True)
     share_url = Column(Text, nullable=True)
@@ -63,6 +64,7 @@ class Study(Base):
 
     # Relations
     creator = relationship("User", back_populates="studies", lazy="selectin", passive_deletes=True)
+    project = relationship("Project", back_populates="studies", lazy="selectin", passive_deletes=True)
     # Grid categories for grouping elements
     categories = relationship("StudyCategory", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     elements = relationship("StudyElement", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
