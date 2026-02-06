@@ -94,7 +94,62 @@ def _maybe_upload_data_url_to_cloudinary(url_or_data: Optional[str]) -> tuple[st
         return secure_url, public_id
     return val, None
 
+
+def _get_effective_edit_permission(db: Session, study: Study, user_id: UUID) -> bool:
+    """
+    Check if user can edit a study, respecting project-level role hierarchy.
+    
+    Permission hierarchy:
+    1. Project owner can always edit studies in their project
+    2. Study creator can edit ONLY IF their project role is 'editor' (not 'viewer')
+    3. Study members with 'admin' or 'editor' role can edit
+    4. Studies without a project: creator can always edit
+    
+    Returns True if user can edit, False otherwise.
+    """
+    from app.models.project_model import Project, ProjectMember
+    
+    # 1. Check project-level permissions if study belongs to a project
+    if study.project_id:
+        project = db.get(Project, study.project_id)
+        if project:
+            # Project owner can always edit
+            if project.creator_id == user_id:
+                return True
+            
+            # Check project member role
+            project_member = db.scalars(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == study.project_id,
+                    ProjectMember.user_id == user_id
+                )
+            ).first()
+            
+            if project_member:
+                # Only project editors can edit studies (even if they created them)
+                if project_member.role != 'editor':
+                    return False
+                return True
+            
+            # User is not a project member - fall through to study-level checks
+    
+    # 2. Study creator (not in a project, or project member check didn't apply) can edit
+    if study.creator_id == user_id:
+        return True
+    
+    # 3. Check study-level member role
+    study_member_role = db.scalar(
+        select(StudyMember.role).where(
+            StudyMember.study_id == study.id,
+            StudyMember.user_id == user_id
+        )
+    )
+    
+    return study_member_role in ('admin', 'editor')
+
+
 def _load_owned_study(db: Session, study_id: UUID, owner_id: UUID, for_update: bool = False) -> Study:
+
     stmt = (
         select(Study)
         .options(
@@ -127,14 +182,11 @@ def _load_owned_study(db: Session, study_id: UUID, owner_id: UUID, for_update: b
     if not study:
         raise HTTPException(status_code=404, detail="Study not found or access denied.")
     
-    # If for_update is True, we only allow Creator or Admin/Editor role
+    # If for_update is True, check effective edit permission (respects project-level roles)
     if for_update:
-        if study.creator_id != owner_id:
-            # Check role
-            stmt_role = select(StudyMember.role).where(StudyMember.study_id == study_id, StudyMember.user_id == owner_id)
-            role = db.scalar(stmt_role)
-            if role not in ('admin', 'editor'):
-                raise HTTPException(status_code=403, detail="You do not have permission to edit this study.")
+        if not _get_effective_edit_permission(db, study, owner_id):
+            raise HTTPException(status_code=403, detail="You do not have permission to edit this study.")
+
                 
     return study
 
@@ -762,9 +814,9 @@ def update_study(
     logger.info(f"Payload: {payload.model_dump(exclude_none=True)}")
 
     study = _load_owned_study(db, study_id, owner_id, for_update=True)
-    # Allow editing even when active, but only for the original creator once it's active.
-    # Editors can edit draft studies, but not active/launched studies.
-    if study.status == 'active' and study.creator_id != owner_id:
+    # Allow editing even when active, but only for users with edit permission.
+    # Project viewers cannot edit even if they created the study.
+    if study.status == 'active' and not _get_effective_edit_permission(db, study, owner_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="the study has already been launched by the admin please go to home page"
@@ -1009,8 +1061,8 @@ def update_study_fast(
     else:
         study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
     
-    # Prevent members from editing active/launched studies
-    if study.status == 'active' and study.creator_id != owner_id:
+    # Prevent non-authorized users from editing active/launched studies (respects project-level roles)
+    if study.status == 'active' and not _get_effective_edit_permission(db, study, owner_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="the study has already been launched by the admin please go to home page"
@@ -1092,8 +1144,8 @@ def update_and_launch_study_fast(
     # Load study with minimal data for maximum performance
     study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
     
-    # Prevent members from editing active/launched studies
-    if study.status == 'active' and study.creator_id != owner_id:
+    # Prevent non-authorized users from editing active/launched studies (respects project-level roles)
+    if study.status == 'active' and not _get_effective_edit_permission(db, study, owner_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="the study has already been launched by the admin please go to home page"

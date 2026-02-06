@@ -7,6 +7,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.core.dependencies import get_current_active_user
 from app.db.session import get_db
@@ -383,27 +384,46 @@ def get_study_preview_endpoint(
     study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
     ar = (study.audience_segmentation or {}).get('aspect_ratio')
 
-    # Determine user role
+    # Determine user role (respects project-level role hierarchy)
     user_role = "viewer"
     
-    # Check if project creator
+    # Check if project creator (project owner always has admin access)
     is_project_creator = False
+    project_member_role = None
+    
     if study.project_id:
+        from app.models.project_model import Project, ProjectMember
+        
         # Check if project relation is loaded, else fetch
-        if study.project and study.project.creator_id == current_user.id:
-            is_project_creator = True
-        elif not study.project:
-            # Fallback query if project not loaded
-            from app.models.project_model import Project
-            proj = db.get(Project, study.project_id)
-            if proj and proj.creator_id == current_user.id:
+        project = study.project if study.project else db.get(Project, study.project_id)
+        
+        if project:
+            if project.creator_id == current_user.id:
                 is_project_creator = True
+            else:
+                # Check project member role
+                project_member = db.scalars(
+                    select(ProjectMember).where(
+                        ProjectMember.project_id == study.project_id,
+                        ProjectMember.user_id == current_user.id
+                    )
+                ).first()
+                if project_member:
+                    project_member_role = project_member.role
 
-    if study.creator_id == current_user.id or is_project_creator:
+    # Determine final user_role based on hierarchy
+    if is_project_creator:
+        # Project owner always has admin access
+        user_role = "admin"
+    elif project_member_role:
+        # Project member role takes precedence over study creator status
+        # If they're a project viewer, they're a viewer even if they created the study
+        user_role = project_member_role if project_member_role == 'editor' else 'viewer'
+    elif study.creator_id == current_user.id:
+        # Study creator (not in a project) is admin
         user_role = "admin"
     else:
-        # Check if member
-        from sqlalchemy import select
+        # Check study member role
         member = db.scalar(
             select(StudyMember).where(
                 StudyMember.study_id == study.id,
@@ -412,6 +432,7 @@ def get_study_preview_endpoint(
         )
         if member:
             user_role = member.role
+
 
     # Build response dict via pydantic but ensure classification_questions are included
     out = StudyOut.model_validate(study).model_dump()
