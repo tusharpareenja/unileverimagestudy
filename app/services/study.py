@@ -708,6 +708,76 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
         "creator_email": row.creator_email,
     }
 
+
+def get_study_public_preview(db: Session, study_id: UUID) -> Dict[str, Any]:
+    """
+    Get study information for public access, bypassing status checks.
+    Used for previewing studies that are in draft or paused status.
+    """
+    from app.models.user_model import User as UserModel
+    row = db.execute(
+        select(
+            Study.id,
+            Study.title,
+            Study.study_type,
+            Study.audience_segmentation,
+            Study.status,
+            Study.share_token,
+            Study.orientation_text,
+            Study.language,
+            UserModel.email.label("creator_email")
+        ).join(UserModel, UserModel.id == Study.creator_id)
+        .where(Study.id == study_id)
+    ).first()
+    
+    if not row:
+        return {
+            "error": "Study not found",
+            "message": "The study you are looking for does not exist."
+        }
+    
+    # Bypass all status checks
+    
+    respondents_target = 0
+    try:
+        seg = row.audience_segmentation or {}
+        respondents_target = int(seg.get('number_of_respondents') or 0)
+    except Exception:
+        respondents_target = 0
+    
+    # Get number of tasks per respondent from study.tasks
+    tasks_per_respondent = 0
+    try:
+        # Load the study to access tasks
+        study = db.get(Study, study_id)
+        if study and study.tasks:
+            if isinstance(study.tasks, dict) and study.tasks:
+                # Get tasks for the first respondent to determine tasks per respondent
+                first_respondent_key = next(iter(study.tasks.keys()))
+                first_respondent_tasks = study.tasks[first_respondent_key]
+                if isinstance(first_respondent_tasks, list):
+                    tasks_per_respondent = len(first_respondent_tasks)
+                else:
+                    tasks_per_respondent = 1 if first_respondent_tasks else 0
+            elif isinstance(study.tasks, list):
+                # If tasks is a flat list, we can't determine per-respondent count
+                tasks_per_respondent = 0
+    except Exception:
+        tasks_per_respondent = 0
+    
+    return {
+        "id": str(row.id),
+        "title": row.title,
+        "study_type": row.study_type,
+        "respondents_target": respondents_target,
+        "tasks_per_respondent": tasks_per_respondent,
+        "status": row.status,
+        "orientation_text": row.orientation_text,
+        "language": row.language,
+        "creator_email": row.creator_email,
+    }
+
+
 def get_study_share_details(db: Session, study_id: UUID) -> Optional[Dict[str, Any]]:
     """Lightweight fetch of share URL and basic status info for a study."""
     row = db.execute(

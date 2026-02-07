@@ -1154,6 +1154,20 @@ async def export_study_analysis_json(
     
     return sanitize_for_json(json_report)
 
+
+@router.get("/respondent/preview/study/{study_id}/info")
+async def get_preview_study_info(
+    study_id: UUID,
+    db: Session = Depends(get_db)
+):
+    """
+    Replica of the respondent info API for previewing a study.
+    Always uses respondent_id=1 and works even for draft studies.
+    """
+    # Reuse the logic from get_respondent_study_info with respondent_id=1
+    return await get_respondent_study_info(respondent_id=1, study_id=study_id, db=db)
+
+
 @router.get("/respondent/{respondent_id}/study/{study_id}/info")
 async def get_respondent_study_info(
     respondent_id: int,

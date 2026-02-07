@@ -539,6 +539,28 @@ def check_study_ownership_endpoint(
     return {"is_owner": is_owner, "is_active": is_active}
 
 
+@router.get("/public/preview/{study_id}")
+def get_study_public_preview_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Get study information for public preview (no authentication required).
+    Bypasses status checks to allow viewing draft or paused studies.
+    """
+    result = study_service.get_study_public_preview(db=db, study_id=study_id)
+    
+    # Check if there's an error in the result
+    if "error" in result:
+        if result["error"] == "Study not found":
+            raise HTTPException(
+                status_code=404, 
+                detail=result["message"]
+            )
+    
+    return result
+
+
 @router.get("/public/{study_id}")
 def get_study_public_endpoint(
     study_id: UUID,
