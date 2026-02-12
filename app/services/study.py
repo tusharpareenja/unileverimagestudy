@@ -133,10 +133,20 @@ def _get_effective_edit_permission(db: Session, study: Study, user_id: UUID) -> 
             
             # User is not a project member - fall through to study-level checks
     
-    # 2. Study creator (not in a project, or project member check didn't apply) can edit
+    # 2. Study creator: can edit only if standalone study, or if still in project.
+    #    If study has a project and user is creator but not project member, they were
+    #    removed from project and demoted to viewer → use StudyMember role (no edit).
     if study.creator_id == user_id:
-        return True
-    
+        if study.project_id:
+            study_member_role = db.scalar(
+                select(StudyMember.role).where(
+                    StudyMember.study_id == study.id,
+                    StudyMember.user_id == user_id
+                )
+            )
+            return study_member_role in ('admin', 'editor')
+        return True  # Standalone study: creator can always edit
+
     # 3. Check study-level member role
     study_member_role = db.scalar(
         select(StudyMember.role).where(

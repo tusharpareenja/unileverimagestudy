@@ -419,8 +419,17 @@ def get_study_preview_endpoint(
         # Project member role takes precedence over study creator status
         # If they're a project viewer, they're a viewer even if they created the study
         user_role = project_member_role if project_member_role == 'editor' else 'viewer'
+    elif study.creator_id == current_user.id and study.project_id:
+        # Study creator who was removed from project: demoted to viewer (use StudyMember role)
+        member = db.scalar(
+            select(StudyMember).where(
+                StudyMember.study_id == study.id,
+                StudyMember.user_id == current_user.id
+            )
+        )
+        user_role = member.role if member else "viewer"
     elif study.creator_id == current_user.id:
-        # Study creator (not in a project) is admin
+        # Study creator, standalone study (no project) is admin
         user_role = "admin"
     else:
         # Check study member role

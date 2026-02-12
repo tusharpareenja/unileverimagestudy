@@ -320,7 +320,8 @@ class ProjectMemberService:
     ):
         """
         Remove a member from the project.
-        Also removes them from all studies in the project.
+        For studies they created: keep access but demote to viewer.
+        For other studies in the project: remove access (delete StudyMember).
         """
         member = db.get(ProjectMember, member_id)
         if not member or member.project_id != project_id:
@@ -337,20 +338,45 @@ class ProjectMemberService:
             select(Study.id).where(Study.project_id == project_id)
         ).all()
 
+        # Studies where this member is the creator (only if they have a user_id)
+        study_ids_created_by_member = set()
+        if member.user_id and study_ids:
+            study_ids_created_by_member = set(
+                db.scalars(
+                    select(Study.id).where(
+                        Study.project_id == project_id,
+                        Study.creator_id == member.user_id,
+                    )
+                ).all()
+            )
+
         study_members_deleted = 0
+        study_members_demoted = 0
         if study_ids:
-            # Remove from all studies in the project
-            # Use study_id.in_(study_ids) to avoid JOIN in delete query
-            study_members_deleted = db.query(StudyMember).filter(
-                StudyMember.study_id.in_(study_ids),
-                StudyMember.invited_email == member.invited_email
-            ).delete(synchronize_session=False)
+            # Demote to viewer for studies they created (keep access, view-only)
+            if study_ids_created_by_member:
+                demoted = db.query(StudyMember).filter(
+                    StudyMember.study_id.in_(study_ids_created_by_member),
+                    StudyMember.invited_email == member.invited_email,
+                ).update({StudyMember.role: "viewer"}, synchronize_session=False)
+                study_members_demoted = demoted
+
+            # Remove from studies they did not create
+            delete_ids = [s for s in study_ids if s not in study_ids_created_by_member]
+            if delete_ids:
+                study_members_deleted = db.query(StudyMember).filter(
+                    StudyMember.study_id.in_(delete_ids),
+                    StudyMember.invited_email == member.invited_email,
+                ).delete(synchronize_session=False)
 
         # Remove from project
         db.delete(member)
         db.commit()
         
-        logger.info(f"Removed member {member.invited_email} from project and {study_members_deleted} studies")
+        logger.info(
+            f"Removed member {member.invited_email} from project; "
+            f"demoted to viewer in {study_members_demoted} study(ies), removed from {study_members_deleted} study(ies)"
+        )
 
 
 project_member_service = ProjectMemberService()
