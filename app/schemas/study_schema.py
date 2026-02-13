@@ -220,6 +220,11 @@ class StudyMemberOut(StudyMemberBase):
 class StudyMemberUpdate(BaseModel):
     role: StudyRole
 
+
+class CopyStudyRequest(BaseModel):
+    """Optional payload for copy study; when project_id is set, the copy is associated with that project."""
+    project_id: Optional[UUID] = Field(None, description="Optional project ID to put the copy in")
+
 # ---------- Read models ----------
 
 class StudyListItem(BaseModel):
@@ -230,6 +235,7 @@ class StudyListItem(BaseModel):
     created_at: datetime
     last_step: int | None = None
     jobid: Optional[str] = None
+    project_id: Optional[UUID] = None
     total_responses: int
     completed_responses: int
     abandoned_responses: int
@@ -238,6 +244,7 @@ class StudyListItem(BaseModel):
     abandonment_rate: float | int = 0
     respondents_target: int | None = 0
     respondents_completed: int | None = 0
+    user_role: Optional[str] = None  # current user's role for this study (admin/editor/viewer)
     model_config = ConfigDict(from_attributes=True)
 
 

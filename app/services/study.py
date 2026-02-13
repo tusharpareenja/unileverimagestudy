@@ -1,6 +1,7 @@
 # app/services/study.py
 from __future__ import annotations
 
+import re
 from typing import Optional, Tuple, List, Dict, Any
 from uuid import UUID, uuid4
 from datetime import datetime
@@ -511,6 +512,179 @@ def create_study_minimal(
 
 def get_study(db: Session, study_id: UUID, owner_id: UUID) -> Study:
     return _load_owned_study(db, study_id, owner_id, for_update=False)
+
+
+def _next_copy_title(db: Session, source_title: str, creator_id: UUID) -> str:
+    """
+    Compute title for a study copy: "{base_name} (copy 1)", "{base_name} (copy 2)", etc.
+    Base name is derived from source_title (strips "Copy of " / " - N" or " (copy N)" if present).
+    """
+    copy_prefix = "Copy of "
+    if source_title.startswith(copy_prefix):
+        base = source_title[len(copy_prefix):].strip()
+        base = re.sub(r"\s+-\s+\d+$", "", base).strip()
+    else:
+        base = source_title
+    # Strip trailing " (copy N)" so we get the same base when copying a copy
+    base = re.sub(r"\s+\(copy\s+\d+\)$", "", base, flags=re.IGNORECASE).strip()
+    base_name = base or "Study"
+
+    prefix = base_name + " (copy "
+    # Escape LIKE special chars in prefix so we only match literal " (copy "
+    prefix_escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    stmt = select(Study.title).where(
+        Study.creator_id == creator_id,
+        Study.title.like(prefix_escaped + "%", escape="\\"),
+    )
+    titles = db.execute(stmt).scalars().all()
+    max_n = 0
+    for title in titles:
+        m = re.match(r"^" + re.escape(base_name) + r"\s+\(copy\s+(\d+)\)\s*$", title, re.IGNORECASE)
+        if m:
+            max_n = max(max_n, int(m.group(1)))
+    return f"{base_name} (copy {max_n + 1})"
+
+
+def copy_study(db: Session, study_id: UUID, user_id: UUID, project_id: Optional[UUID] = None) -> Study:
+    """
+    Create an exact copy of a study (layer, grid, hybrid, text config) without tasks.
+    The copy is in draft with last_step=6 so the user can generate tasks.
+    Any user with access (creator or member) can copy any study (active, draft, completed).
+    Copy title: "{name} (copy 1)", "{name} (copy 2)", etc.
+    project_id is not copied from the source; pass project_id in the request payload to associate the copy with a project.
+    """
+    source = get_study(db, study_id, user_id)
+
+    copy_title = _next_copy_title(db, source.title, user_id)
+
+    new_id = uuid4()
+    share_token = _generate_share_token()
+    new_study = Study(
+        id=new_id,
+        title=copy_title,
+        background=source.background,
+        language=source.language,
+        main_question=source.main_question,
+        orientation_text=source.orientation_text,
+        study_type=source.study_type,
+        background_image_url=source.background_image_url,
+        rating_scale=source.rating_scale or {},
+        audience_segmentation=source.audience_segmentation or {},
+        phase_order=source.phase_order,
+        toggle_shuffle=source.toggle_shuffle or False,
+        tasks=None,
+        creator_id=user_id,
+        project_id=project_id,
+        status='draft',
+        share_token=share_token,
+        share_url=_build_share_url(settings.BASE_URL, str(new_id)),
+        launched_at=None,
+        completed_at=None,
+        total_responses=0,
+        completed_responses=0,
+        abandoned_responses=0,
+        last_step=6,
+        jobid=None,
+    )
+    db.add(new_study)
+    db.flush()
+
+    # Map old category id -> new category (for elements)
+    category_map = {}
+    if source.categories:
+        new_categories: List[StudyCategory] = []
+        for cat in source.categories:
+            new_cat = StudyCategory(
+                id=uuid4(),
+                study_id=new_study.id,
+                category_id=cat.category_id,
+                name=cat.name,
+                order=cat.order,
+                phase_type=cat.phase_type,
+            )
+            category_map[cat.id] = new_cat
+            new_categories.append(new_cat)
+        db.bulk_save_objects(new_categories)
+        db.flush()
+
+    if source.elements:
+        new_elements: List[StudyElement] = []
+        for elem in source.elements:
+            new_elements.append(StudyElement(
+                id=uuid4(),
+                study_id=new_study.id,
+                category_id=category_map[elem.category_id].id,
+                element_id=elem.element_id,
+                name=elem.name,
+                description=elem.description,
+                element_type=elem.element_type,
+                content=elem.content,
+                cloudinary_public_id=elem.cloudinary_public_id,
+                alt_text=elem.alt_text,
+            ))
+        db.bulk_save_objects(new_elements)
+
+    if source.layers:
+        new_layers: List[StudyLayer] = []
+        for layer in source.layers:
+            new_layer = StudyLayer(
+                id=uuid4(),
+                study_id=new_study.id,
+                layer_id=layer.layer_id,
+                name=layer.name,
+                description=layer.description,
+                layer_type=layer.layer_type,
+                z_index=layer.z_index,
+                order=layer.order,
+                transform=layer.transform,
+            )
+            new_layers.append(new_layer)
+        db.bulk_save_objects(new_layers)
+        db.flush()
+
+        new_images: List[LayerImage] = []
+        for old_layer, new_layer in zip(source.layers, new_layers):
+            for img in old_layer.images or []:
+                new_images.append(LayerImage(
+                    id=uuid4(),
+                    layer_id=new_layer.id,
+                    image_id=img.image_id,
+                    name=img.name,
+                    url=img.url,
+                    cloudinary_public_id=img.cloudinary_public_id,
+                    alt_text=img.alt_text,
+                    order=img.order,
+                    config=img.config,
+                ))
+        if new_images:
+            db.bulk_save_objects(new_images)
+
+    if source.classification_questions:
+        new_questions: List[StudyClassificationQuestion] = []
+        for q in source.classification_questions:
+            new_questions.append(StudyClassificationQuestion(
+                id=uuid4(),
+                study_id=new_study.id,
+                question_id=q.question_id,
+                question_text=q.question_text,
+                question_type=q.question_type,
+                is_required=q.is_required,
+                order=q.order,
+                answer_options=q.answer_options,
+                config=q.config,
+            ))
+        db.bulk_save_objects(new_questions)
+
+    db.commit()
+    db.refresh(new_study)
+
+    if new_study.project_id:
+        from app.services.project_member_service import project_member_service
+        project_member_service.sync_new_study_to_project_members(db, new_study.id, new_study.project_id)
+        db.commit()
+
+    return new_study
+
 
 def get_study_exists(db: Session, study_id: UUID, owner_id: UUID) -> bool:
     """Lightweight check if study exists and is owned by user."""
@@ -1324,9 +1498,24 @@ def launch_study_ultra_fast(
     return study
 
 def delete_study(db: Session, study_id: UUID, owner_id: UUID) -> None:
-    study = _load_owned_study(db, study_id, owner_id, for_update=True)
+    """Delete a study (non-active only). Uses minimal load for speed; CASCADE removes related rows."""
+    study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
+    if not _get_effective_edit_permission(db, study, owner_id):
+        raise HTTPException(status_code=403, detail="You do not have permission to delete this study.")
     if study.status == 'active':
         raise HTTPException(status_code=400, detail="Cannot delete active studies.")
+    db.delete(study)
+    db.commit()
+
+
+def delete_draft_study(db: Session, study_id: UUID, owner_id: UUID) -> None:
+    """Delete a study only if it is in draft status. Raises 400 if not draft."""
+    study = _load_owned_study_minimal(db, study_id, owner_id, for_update=True)
+    if study.status != 'draft':
+        raise HTTPException(
+            status_code=400,
+            detail="Only draft studies can be deleted. Study status is '%s'." % study.status,
+        )
     db.delete(study)
     db.commit()
 

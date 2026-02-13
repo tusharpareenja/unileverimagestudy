@@ -72,6 +72,7 @@ class Study(Base):
     classification_questions = relationship("StudyClassificationQuestion", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     study_responses = relationship("StudyResponse", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     members = relationship("StudyMember", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
+    filter_history = relationship("StudyFilterHistory", back_populates="study", cascade="all, delete-orphan", lazy="noload")
 
     __table_args__ = (
         UniqueConstraint('share_token', name='uq_studies_share_token'),
@@ -234,4 +235,30 @@ class StudyMember(Base):
         UniqueConstraint('study_id', 'invited_email', name='uq_study_members_study_email'),
         Index('idx_study_members_study_id_role', 'study_id', 'role'),
         Index('idx_study_members_user_id', 'user_id'),
+    )
+
+
+class StudyFilterHistory(Base):
+    """
+    Stores filter selections (history) for study analysis.
+    Used so users can save and reload filter combinations.
+    """
+    __tablename__ = "study_filter_history"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    study_id = Column(UUID(as_uuid=True), ForeignKey('studies.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+
+    # Stored filter payload: { "age_groups": [], "genders": [], "classification_filters": {} }
+    filters = Column(JSONB, nullable=False, server_default='{}')
+    name = Column(String(255), nullable=True, index=True)  # Optional label e.g. "Male 18-24 No"
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    study = relationship("Study", back_populates="filter_history", lazy="noload")
+    user = relationship("User", back_populates="filter_history", lazy="noload")
+
+    __table_args__ = (
+        Index('idx_study_filter_history_study_user', 'study_id', 'user_id'),
+        Index('idx_study_filter_history_created', 'study_id', 'created_at'),
     )

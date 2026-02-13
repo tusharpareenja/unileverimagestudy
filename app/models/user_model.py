@@ -53,7 +53,12 @@ class User(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-
+    filter_history = relationship(
+        "StudyFilterHistory",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy="noload",
+    )
 
     # Indexes for better query performance
     __table_args__ = (

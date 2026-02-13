@@ -26,7 +26,8 @@ from app.schemas.response_schema import (
     SubmitPanelistRequest, SubmitPanelistResponse,
     StudyAnalytics, ResponseAnalytics, CompletedTaskOut,
     ClassificationAnswerOut, ElementInteractionOut, TaskSessionOut, TaskSessionCreate,
-    ElementInteractionCreate, CompletedTaskCreate, ClassificationAnswerCreate, StudyResponseCreate
+    ElementInteractionCreate, CompletedTaskCreate, ClassificationAnswerCreate, StudyResponseCreate,
+    StudyFilterPayload,
 )
 from app.services.response import StudyResponseService, TaskSessionService
 from app.services.analysis import StudyAnalysisService
@@ -1153,6 +1154,275 @@ async def export_study_analysis_json(
             return obj
     
     return sanitize_for_json(json_report)
+
+
+@router.get("/study/{study_id}/filters")
+async def list_study_filter_history(
+    study_id: UUID,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    List saved filter history for the study (current user only).
+    Returns filters ordered by created_at descending.
+    """
+    from sqlalchemy.orm import defer
+    from app.models.study_model import Study, StudyFilterHistory
+
+    study_obj = (
+        db.query(Study)
+        .options(defer(Study.tasks))
+        .filter(Study.id == study_id)
+        .first()
+    )
+    if not study_obj:
+        raise HTTPException(status_code=404, detail="Study not found")
+
+    is_authorized = study_obj.creator_id == current_user.id
+    if not is_authorized:
+        member = db.scalar(
+            select(StudyMember).where(
+                StudyMember.study_id == study_id,
+                StudyMember.user_id == current_user.id,
+            )
+        )
+        if not member:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    rows = (
+        db.query(StudyFilterHistory)
+        .filter(
+            StudyFilterHistory.study_id == study_id,
+            StudyFilterHistory.user_id == current_user.id,
+        )
+        .order_by(StudyFilterHistory.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": str(r.id),
+            "study_id": str(r.study_id),
+            "filters": r.filters or {},
+            "name": r.name,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/study/{study_id}/filter")
+async def filter_study_regression_report(
+    study_id: UUID,
+    payload: StudyFilterPayload,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Run panel regressions (TOP, BOTTOM, RESPONSE) on a filtered subset of respondents.
+    Returns meta (counts, filters), top/bottom/response coefficient_means, and optionally per_panelist.
+    """
+    from sqlalchemy.orm import defer
+
+    study_obj = (
+        db.query(Study)
+        .options(defer(Study.tasks))
+        .filter(Study.id == study_id)
+        .first()
+    )
+    if not study_obj:
+        raise HTTPException(status_code=404, detail="Study not found")
+
+    is_authorized = False
+    if study_obj.creator_id == current_user.id:
+        is_authorized = True
+    else:
+        member = db.scalar(
+            select(StudyMember).where(
+                StudyMember.study_id == study_id,
+                StudyMember.user_id == current_user.id
+            )
+        )
+        if member:
+            is_authorized = True
+
+    if not is_authorized:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    response_service = StudyResponseService(db)
+    df = response_service.get_study_dataframe(study_id)
+
+    study_data = {
+        "title": study_obj.title,
+        "study_type": study_obj.study_type,
+        "background": getattr(study_obj, "background_image_url", None) or "",
+        "language": study_obj.language,
+        "launched_at": study_obj.created_at.isoformat() if study_obj.created_at else "",
+        "categories": [],
+        "elements": [],
+        "classification_questions": [],
+    }
+
+    if str(study_obj.study_type) == "layer":
+        sorted_layers = sorted(study_obj.layers, key=lambda x: x.order)
+        for layer in sorted_layers:
+            cat_id = str(layer.layer_id)
+            study_data["categories"].append({
+                "id": cat_id,
+                "name": layer.name,
+                "order": layer.order,
+            })
+            for img in sorted(layer.images, key=lambda x: x.order):
+                study_data["elements"].append({
+                    "id": str(img.image_id),
+                    "name": img.name,
+                    "content": img.url,
+                    "category_id": cat_id,
+                    "category": {"name": layer.name, "order": layer.order},
+                })
+    else:
+        for cat in study_obj.categories:
+            study_data["categories"].append({
+                "id": str(cat.id),
+                "name": cat.name,
+                "order": cat.order,
+            })
+            for el in cat.elements:
+                study_data["elements"].append({
+                    "id": str(el.id),
+                    "name": el.name,
+                    "content": el.content,
+                    "category_id": str(cat.id),
+                    "category": {"name": cat.name, "order": cat.order},
+                })
+
+    for q in study_obj.classification_questions:
+        study_data["classification_questions"].append({
+            "question_id": q.question_id,
+            "question_text": q.question_text,
+            "answer_options": q.answer_options,
+        })
+
+    filters_dict = payload.filters.model_dump(exclude_none=True) if payload.filters else None
+
+    analysis_service = StudyAnalysisService()
+    try:
+        report = analysis_service.run_filtered_regression_report(
+            study_data=study_data,
+            df=df,
+            filters=filters_dict,
+            include_per_panelist=payload.include_per_panelist,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to run filtered regression report: {str(e)}",
+        )
+
+    # Enrich response with element content and category/element structure
+    element_columns = report.get("meta", {}).get("element_columns") or []
+    col_to_detail = {}
+    for el in study_data.get("elements") or []:
+        cat_obj = el.get("category") or next(
+            (c for c in (study_data.get("categories") or []) if c.get("id") == el.get("category_id")),
+            {},
+        )
+        cat_name = cat_obj.get("name")
+        el_name = el.get("name")
+        content = el.get("content")
+        if content is None:
+            content = ""
+        if not cat_name or not el_name:
+            continue
+        candidates = [
+            f"{cat_name}_{el_name}",
+            f"{cat_name}-{el_name}",
+            f"{cat_name}-{el_name}".replace("_", "-").replace(" ", "-"),
+            f"{cat_name}_{el_name}".replace(" ", "_"),
+        ]
+        for cand in candidates:
+            if cand in element_columns:
+                col_to_detail[cand] = {
+                    "category_name": cat_name,
+                    "element_name": el_name,
+                    "content": content,
+                }
+                break
+
+    element_details = []
+    for col in element_columns:
+        detail = col_to_detail.get(col)
+        if detail:
+            element_details.append({
+                "column": col,
+                "category_name": detail["category_name"],
+                "element_name": detail["element_name"],
+                "content": detail["content"],
+            })
+        else:
+            element_details.append({
+                "column": col,
+                "category_name": "",
+                "element_name": col,
+                "content": "",
+            })
+    report["element_details"] = element_details
+
+    # by_category: group by category_name with coefficients per element
+    cat_order = {c["name"]: c.get("order", 0) for c in (study_data.get("categories") or [])}
+    by_category_map = {}
+    top_cm = report.get("top", {}).get("coefficient_means") or {}
+    bottom_cm = report.get("bottom", {}).get("coefficient_means") or {}
+    response_cm = report.get("response", {}).get("coefficient_means") or {}
+    for ed in element_details:
+        cat_name = ed["category_name"] or "Other"
+        if cat_name not in by_category_map:
+            by_category_map[cat_name] = []
+        col = ed["column"]
+        by_category_map[cat_name].append({
+            "element_name": ed["element_name"],
+            "content": ed["content"],
+            "top": top_cm.get(col),
+            "bottom": bottom_cm.get(col),
+            "response": response_cm.get(col),
+        })
+    report["by_category"] = [
+        {"category_name": cat_name, "elements": elements}
+        for cat_name, elements in sorted(by_category_map.items(), key=lambda x: (cat_order.get(x[0], 999), x[0]))
+    ]
+
+    # Save to filter history only after report is ready (keeps API fast; insert is trivial)
+    if payload.save_to_history:
+        try:
+            from app.models.study_model import StudyFilterHistory
+            filters_json = filters_dict if filters_dict else {}
+            record = StudyFilterHistory(
+                study_id=study_id,
+                user_id=current_user.id,
+                filters=filters_json,
+                name=payload.name[:255] if payload.name else None,
+            )
+            db.add(record)
+            db.commit()
+        except Exception:
+            db.rollback()
+            # Don't fail the request if save fails
+
+    import math
+    def sanitize_for_json(obj):
+        if isinstance(obj, dict):
+            return {k: sanitize_for_json(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [sanitize_for_json(item) for item in obj]
+        elif isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+            return obj
+        else:
+            return obj
+
+    return sanitize_for_json(report)
 
 
 @router.get("/respondent/preview/study/{study_id}/info")

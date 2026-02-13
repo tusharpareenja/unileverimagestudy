@@ -387,6 +387,45 @@ class ResponseAnalytics(BaseModel):
     abandonment_analysis: Optional[Dict[str, Any]] = None
 
 
+# ---------- Study Filter (Analysis) Schemas ----------
+
+class StudyFilterCriteria(BaseModel):
+    """Filter criteria for study regression report. All criteria are ANDed."""
+    age_groups: Optional[List[str]] = Field(
+        None,
+        description="Age bins e.g. ['18-24', '25-34']. Values: 13-17, 18-24, 25-34, 35-44, 45-54, 55-64, 65+",
+    )
+    genders: Optional[List[str]] = Field(
+        None,
+        description="Normalized genders e.g. ['Male', 'Female']",
+    )
+    classification_filters: Optional[Dict[str, List[str]]] = Field(
+        None,
+        description="Map question_text to list of allowed answers e.g. {'What is your region?': ['North', 'South']}",
+    )
+
+
+class StudyFilterPayload(BaseModel):
+    """Request body for POST /study/{study_id}/filter (filtered regression report)."""
+    filters: Optional[StudyFilterCriteria] = Field(
+        None,
+        description="Filter criteria. Omitted or empty = no filtering (full study).",
+    )
+    include_per_panelist: bool = Field(
+        default=False,
+        description="If true, include per-panelist coefficient tables in the response.",
+    )
+    save_to_history: bool = Field(
+        default=True,
+        description="If true, save this filter selection to the user's filter history for the study.",
+    )
+    name: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Optional label for this filter when saving to history (e.g. 'Male 18-24 No').",
+    )
+
+
 # Rebuild models to resolve forward references
 def rebuild_models():
     """Rebuild all models to resolve forward references"""

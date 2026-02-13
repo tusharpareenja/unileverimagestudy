@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -17,7 +17,7 @@ from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem, StudyLaunchOut,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus,
     GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal, StudyBasicDetails,
-    StudyCreateMinimal, StudyCreateMinimalResponse
+    StudyCreateMinimal, StudyCreateMinimalResponse, CopyStudyRequest
 )
 from app.services import study as study_service
 from app.services.response import StudyResponseService
@@ -291,6 +291,62 @@ def create_study_minimal_endpoint(
     return StudyCreateMinimalResponse(id=study_id)
 
 
+@router.post("/{study_id}/copy", response_model=StudyOut, status_code=status.HTTP_201_CREATED)
+def copy_study_endpoint(
+    study_id: UUID,
+    payload: Optional[CopyStudyRequest] = Body(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Create an exact copy of a study (config only; no tasks).
+    The copy is in draft with last_step=6. project_id is not copied from the source.
+    Send project_id in the body to associate the copy with a project; otherwise the copy is standalone.
+    """
+    body = payload or CopyStudyRequest()
+    new_study = study_service.copy_study(
+        db=db,
+        study_id=study_id,
+        user_id=current_user.id,
+        project_id=body.project_id,
+    )
+    # Reload with relations so StudyOut has categories, elements, layers, classification_questions
+    study = study_service.get_study(db=db, study_id=new_study.id, owner_id=current_user.id)
+    try:
+        ar = (study.audience_segmentation or {}).get('aspect_ratio')
+        out = StudyOut.model_validate(study).model_dump()
+        out['aspect_ratio'] = ar
+        return out
+    except Exception:
+        return study
+
+
+def _user_role_for_study(
+    study_id: UUID,
+    creator_id: UUID,
+    project_id: Optional[UUID],
+    project_creator_map: Dict[UUID, UUID],
+    project_role_map: Dict[UUID, str],
+    study_role_map: Dict[UUID, str],
+    current_user_id: UUID,
+) -> str:
+    """Compute current user's role for a study (same hierarchy as preview endpoint). No DB calls."""
+    is_project_creator = (
+        project_id is not None
+        and project_creator_map.get(project_id) == current_user_id
+    )
+    project_member_role = project_role_map.get(project_id) if project_id else None
+    if is_project_creator:
+        return "admin"
+    if project_member_role:
+        return project_member_role if project_member_role == "editor" else "viewer"
+    if creator_id == current_user_id and project_id:
+        return study_role_map.get(study_id) or "viewer"
+    if creator_id == current_user_id:
+        return "admin"
+    return study_role_map.get(study_id) or "viewer"
+
+
 @router.get("", response_model=List[StudyListItem])
 def list_studies_endpoint(
     status_filter: Optional[StudyStatus] = Query(None),
@@ -309,6 +365,37 @@ def list_studies_endpoint(
     # Lightweight enrichment: only the counters needed for the list card
     if not rows:
         return []
+    study_ids = [row[0].id for row in rows]
+    project_ids = list({row[0].project_id for row in rows if row[0].project_id is not None})
+    project_creator_map: Dict[UUID, UUID] = {}
+    project_role_map: Dict[UUID, str] = {}
+    study_role_map: Dict[UUID, str] = {}
+    if project_ids:
+        from app.models.project_model import Project, ProjectMember
+        projects = db.execute(
+            select(Project.id, Project.creator_id).where(Project.id.in_(project_ids))
+        ).all()
+        project_creator_map = {p.id: p.creator_id for p in projects}
+        project_members = db.execute(
+            select(ProjectMember.project_id, ProjectMember.role).where(
+                ProjectMember.project_id.in_(project_ids),
+                ProjectMember.user_id == current_user.id,
+            )
+        ).all()
+        project_role_map = {
+            r.project_id: (r.role if isinstance(r.role, str) else getattr(r.role, "value", str(r.role)))
+            for r in project_members
+        }
+    study_members = db.execute(
+        select(StudyMember.study_id, StudyMember.role).where(
+            StudyMember.study_id.in_(study_ids),
+            StudyMember.user_id == current_user.id,
+        )
+    ).all()
+    study_role_map = {
+        r.study_id: (r.role if isinstance(r.role, str) else getattr(r.role, "value", str(r.role)))
+        for r in study_members
+    }
     enriched: List[StudyListItem] = []
     for row in rows:
         # row is (Study, total_calc, completed_calc, abandoned_calc, avg_duration_calc)
@@ -319,6 +406,15 @@ def list_studies_endpoint(
         avg_duration_calc = float(row[4] or 0)
         item = StudyListItem.model_validate(s).model_dump()
         respondents_target = int((s.audience_segmentation or {}).get("number_of_respondents") or 0)
+        user_role = _user_role_for_study(
+            s.id,
+            s.creator_id,
+            s.project_id,
+            project_creator_map,
+            project_role_map,
+            study_role_map,
+            current_user.id,
+        )
         item.update({
             "total_responses": total_calc,
             "completed_responses": completed_calc,
@@ -328,6 +424,7 @@ def list_studies_endpoint(
             "average_duration": avg_duration_calc,
             "completion_rate": (completed_calc / total_calc * 100) if total_calc else 0,
             "abandonment_rate": (abandoned_calc / total_calc * 100) if total_calc else 0,
+            "user_role": user_role,
         })
         enriched.append(StudyListItem(**item))
     return enriched

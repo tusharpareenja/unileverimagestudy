@@ -655,6 +655,260 @@ class StudyAnalysisService:
         
         return result
 
+
+    def run_filtered_regression_report(
+        self,
+        study_data: Dict[str, Any],
+        df: pd.DataFrame,
+        filters: Optional[Dict[str, Any]] = None,
+        include_per_panelist: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run panel regressions (TOP, BOTTOM, RESPONSE) on a filtered subset of the
+        respondents DataFrame. Production-ready: accepts the pre-built df and
+        returns a JSON-serializable report.
+
+        Args:
+            study_data: Study config with categories, elements, classification_questions.
+            df: Respondents DataFrame with columns Panelist, Rating, ResponseTime, Task,
+                Gender, Age (or AgeGroup), and element columns (CategoryName_ElementName).
+                May include classification question columns (question_text as column name).
+            filters: Optional dict with:
+                - age_groups: list of age bin strings, e.g. ["18-24", "25-34"]
+                - genders: list of normalized genders, e.g. ["Male", "Female"]
+                - classification_filters: dict { "question_text": ["answer1", "answer2"] }
+                Panelists must match all provided filter criteria.
+            include_per_panelist: If True, include per-panelist coefficient tables in the report.
+
+        Returns:
+            JSON-serializable dict with meta (counts, filters, element_columns), top, bottom,
+            response (coefficient_means per mode), and optionally per_panelist.
+        """
+        filters = filters or {}
+        age_groups = filters.get("age_groups") or []
+        genders = filters.get("genders") or []
+        classification_filters = filters.get("classification_filters") or {}
+
+        # Resolve element columns (same logic as generate_json_report)
+        element_cols = self._resolve_element_cols(study_data, df)
+        if not element_cols:
+            return self._empty_filtered_report(
+                "No element columns found in DataFrame for this study.", filters
+            )
+
+        # Required columns
+        required = [self.PANEL_COL, self.RATING_COL, self.RESPONSE_TIME_COL, self.TASK_COL]
+        missing = [c for c in required if c not in df.columns]
+        if missing:
+            return self._empty_filtered_report(
+                f"DataFrame missing required columns: {missing}", filters
+            )
+
+        rows_before = len(df)
+        panelists_before = int(df[self.PANEL_COL].nunique())
+
+        # Filter df
+        df_filtered = self._filter_df_by_filters(
+            df, age_groups=age_groups, genders=genders, classification_filters=classification_filters
+        )
+        df_filtered = df_filtered.sort_values([self.PANEL_COL, self.TASK_COL]).reset_index(drop=True)
+
+        rows_after = len(df_filtered)
+        panelists_after = int(df_filtered[self.PANEL_COL].nunique())
+
+        if df_filtered.empty or not element_cols:
+            return self._empty_filtered_report(
+                "No respondents match the applied filters.",
+                filters,
+                rows_before=rows_before,
+                panelists_before=panelists_before,
+                rows_after=0,
+                panelists_after=0,
+                element_columns=element_cols,
+            )
+
+        # Run regressions
+        coef_T = self._run_panel_regressions(df_filtered, element_cols, "TOP")
+        coef_B = self._run_panel_regressions(df_filtered, element_cols, "BOTTOM")
+        coef_R = self._run_panel_regressions(df_filtered, element_cols, "RESPONSE")
+
+        means_T = coef_T[element_cols].mean(axis=0)
+        means_B = coef_B[element_cols].mean(axis=0)
+        means_R = coef_R[element_cols].mean(axis=0)
+
+        def to_json_serializable(val):
+            if pd.isna(val):
+                return None
+            if isinstance(val, (np.integer, np.int64)):
+                return int(val)
+            if isinstance(val, (np.floating, np.float64)):
+                return float(val)
+            return val
+
+        def series_to_dict(s, round_vals=False):
+            return {k: to_json_serializable(round(v) if round_vals else v) for k, v in s.items()}
+
+        report = {
+            "meta": {
+                "filters_applied": {
+                    "age_groups": list(age_groups),
+                    "genders": list(genders),
+                    "classification_filters": dict(classification_filters),
+                },
+                "total_rows_before_filter": rows_before,
+                "total_rows_after_filter": rows_after,
+                "panelists_before_filter": panelists_before,
+                "panelists_after_filter": panelists_after,
+                "element_columns": list(element_cols),
+            },
+            "top": {
+                "coefficient_means": series_to_dict(means_T, round_vals=True),
+            },
+            "bottom": {
+                "coefficient_means": series_to_dict(means_B, round_vals=True),
+            },
+            "response": {
+                "coefficient_means": series_to_dict(means_R, round_vals=False),
+            },
+        }
+
+        if include_per_panelist:
+            report["per_panelist"] = {
+                "top": coef_T.to_dict(orient="records"),
+                "bottom": coef_B.to_dict(orient="records"),
+                "response": coef_R.to_dict(orient="records"),
+            }
+            # Ensure per_panelist values are JSON-serializable
+            for mode in ("top", "bottom", "response"):
+                for row in report["per_panelist"][mode]:
+                    for k, v in row.items():
+                        row[k] = to_json_serializable(v)
+
+        return report
+
+    def _empty_filtered_report(
+        self,
+        message: str,
+        filters: Dict[str, Any],
+        rows_before: Optional[int] = None,
+        panelists_before: Optional[int] = None,
+        rows_after: Optional[int] = None,
+        panelists_after: Optional[int] = None,
+        element_columns: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "meta": {
+                "filters_applied": {
+                    "age_groups": list(filters.get("age_groups") or []),
+                    "genders": list(filters.get("genders") or []),
+                    "classification_filters": dict(filters.get("classification_filters") or {}),
+                },
+                "total_rows_before_filter": rows_before,
+                "total_rows_after_filter": rows_after,
+                "panelists_before_filter": panelists_before,
+                "panelists_after_filter": panelists_after,
+                "element_columns": list(element_columns) if element_columns else [],
+                "error": message,
+            },
+            "top": {"coefficient_means": {}},
+            "bottom": {"coefficient_means": {}},
+            "response": {"coefficient_means": {}},
+        }
+
+    def _resolve_element_cols(self, study_data: Dict[str, Any], df: pd.DataFrame) -> List[str]:
+        """Resolve element column names that exist in df (same logic as generate_json_report)."""
+        elements_json = study_data.get("elements", [])
+        categories_json = study_data.get("categories", [])
+        element_meta = []
+        for el in elements_json:
+            cat_obj = el.get("category", {})
+            if not cat_obj and el.get("category_id"):
+                found_cat = next(
+                    (c for c in categories_json if c.get("id") == el.get("category_id")), {}
+                )
+                cat_obj = found_cat
+            cat_name = cat_obj.get("name")
+            el_name = el.get("name")
+            if not cat_name or not el_name:
+                continue
+            candidates = [
+                f"{cat_name}_{el_name}",
+                f"{cat_name}-{el_name}",
+                f"{cat_name}-{el_name}".replace("_", "-").replace(" ", "-"),
+                f"{cat_name}_{el_name}".replace(" ", "_"),
+            ]
+            for cand in candidates:
+                if cand in df.columns:
+                    element_meta.append({"csv_col": cand})
+                    break
+        seen = set()
+        out = []
+        for m in element_meta:
+            c = m["csv_col"]
+            if c not in seen:
+                out.append(c)
+                seen.add(c)
+        return out
+
+    def _filter_df_by_filters(
+        self,
+        df: pd.DataFrame,
+        age_groups: Optional[List[str]] = None,
+        genders: Optional[List[str]] = None,
+        classification_filters: Optional[Dict[str, List[str]]] = None,
+    ) -> pd.DataFrame:
+        """Filter to panelists matching all of age_groups, genders, and classification_filters."""
+        if df.empty:
+            return df
+        age_groups = age_groups or []
+        genders = genders or []
+        classification_filters = classification_filters or {}
+
+        agg_dict = {}
+        if self.PANEL_COL not in df.columns:
+            return df
+        if self.AGE_COL in df.columns:
+            agg_dict[self.AGE_COL] = "first"
+        if self.GENDER_COL in df.columns:
+            agg_dict[self.GENDER_COL] = "first"
+        if not agg_dict:
+            first = df.groupby(self.PANEL_COL).size().to_frame("_n")
+        else:
+            first = df.groupby(self.PANEL_COL).agg(agg_dict)
+        if self.AGE_COL in first.columns:
+            first = first.rename(columns={self.AGE_COL: "_age"})
+        if self.GENDER_COL in first.columns:
+            first = first.rename(columns={self.GENDER_COL: "_gender"})
+        if "AgeGroup" in df.columns:
+            first["_age_bin"] = df.groupby(self.PANEL_COL)["AgeGroup"].first()
+        elif "_age" in first.columns:
+            first["_age_bin"] = first["_age"].apply(self._normalize_age_to_bin)
+        else:
+            first["_age_bin"] = None
+        if "_gender" in first.columns:
+            first["_gender_norm"] = first["_gender"].apply(
+                lambda x: self._normalize_gender(x) if isinstance(x, str) else None
+            )
+        else:
+            first["_gender_norm"] = None
+
+        mask = np.ones(len(first), dtype=bool)
+        if age_groups and "_age_bin" in first.columns and first["_age_bin"].notna().any():
+            mask &= first["_age_bin"].isin(age_groups)
+        if genders and "_gender_norm" in first.columns and first["_gender_norm"].notna().any():
+            mask &= first["_gender_norm"].isin(genders)
+        if classification_filters:
+            for q_text, allowed in classification_filters.items():
+                if not allowed or q_text not in df.columns:
+                    continue
+                ans_per_panel = df.dropna(subset=[q_text]).groupby(self.PANEL_COL)[q_text].first()
+                allowed_set = set(allowed)
+                ok = first.index.isin(ans_per_panel[ans_per_panel.isin(allowed_set)].index)
+                mask &= ok
+
+        keep = first.index[mask].tolist()
+        return df[df[self.PANEL_COL].isin(keep)].copy()
+
     def _build_segment_json(self, element_cols, sorted_cats, col_to_cat, col_to_elt, groups, threshold, round_vals, segment_order=None):
         if not groups:
             return {"base_size": 0, "threshold": float(threshold) if threshold is not None else None, "segments": {}, "categories": []}
@@ -887,11 +1141,11 @@ class StudyAnalysisService:
             
             if mode == "TOP":
                 ratings = g[self.RATING_COL].to_numpy()
-                Y = np.where(ratings >= 4, 100.0, 0.0)
+                Y = np.where(ratings > 4, 100.0, 0.0)
                 Y = Y + self.rng.uniform(-0.5, 0.5, size=Y.shape) * 1e-5
             elif mode == "BOTTOM":
                 ratings = g[self.RATING_COL].to_numpy()
-                Y = np.where(ratings <= 2, 100.0, 0.0)
+                Y = np.where(ratings < 2, 100.0, 0.0)
                 Y = Y + self.rng.uniform(-0.5, 0.5, size=Y.shape) * 1e-5
             else: # RESPONSE
                 # Cap at 7s
