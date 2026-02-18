@@ -23,7 +23,9 @@ from app.schemas.response_schema import (
     ElementInteractionCreate, TaskSessionCreate,
     StartStudyRequest, StartStudyResponse, SubmitTaskRequest,
     SubmitTaskResponse, SubmitClassificationRequest, BulkSubmitTasksRequest, BulkSubmitTasksResponse,
-    AbandonStudyRequest, StudyAnalytics, ResponseAnalytics
+    BulkSubmitTaskItem,
+    AbandonStudyRequest, StudyAnalytics, ResponseAnalytics,
+    SyntheticRespondentPayload,
 )
 
 # ---------- Study Response Service ----------
@@ -805,6 +807,7 @@ class StudyResponseService:
         tasks_to_insert: List[CompletedTask] = []
         interactions_to_insert: List[ElementInteraction] = []
         submitted = 0
+        study_just_completed = False
 
         for item in request.tasks or []:
             # Build task model
@@ -977,11 +980,10 @@ class StudyResponseService:
             response.current_task_index = (response.current_task_index or 0) + 1
             submitted += 1
 
-            # Stop early if completed
+            # Stop early if completed (defer study completion check until after we commit this response)
             if response.current_task_index >= (response.total_tasks_assigned or 0):
                 self._mark_response_completed(response)
-                # Check if study should be auto-completed after this response completion
-                self._check_and_complete_studies()
+                study_just_completed = True
                 break
 
         # Bulk insert
@@ -998,6 +1000,9 @@ class StudyResponseService:
 
         self.db.commit()
 
+        if study_just_completed:
+            self._check_and_complete_studies(study_id=response.study_id)
+
         is_complete = bool(response.is_completed)
         return BulkSubmitTasksResponse(
             success=True,
@@ -1006,6 +1011,119 @@ class StudyResponseService:
             is_study_complete=is_complete,
             completion_percentage=float(response.completion_percentage or 0.0)
         )
+
+    def submit_synthetic_respondent(self, study_id: UUID, payload: SyntheticRespondentPayload) -> Dict[str, Any]:
+        """
+        Store a synthetic respondent using the same tables as real data.
+        Classification and tasks are stored via the same logic as submit-classification and submit-tasks-bulk.
+        Truncates question_id/question_text to fit existing DB column lengths.
+        Tasks without a rating are skipped.
+        """
+        study_row = self.db.get(Study, study_id)
+        if not study_row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Study not found: {study_id}. Use an existing study id from your studies list (e.g. from GET /api/v1/studies or the study detail page)."
+            )
+
+        tasks_with_rating = [t for t in (payload.task_ratings or []) if t.rating is not None]
+        total_tasks_assigned = len(tasks_with_rating)
+
+        session_id = f"synthetic_{payload.panelist_id}_{uuid4().hex[:12]}"
+        now_utc = datetime.utcnow()
+
+        personal_info = None
+        if getattr(payload, "personal_info", None) and isinstance(payload.personal_info, dict):
+            personal_info = dict(payload.personal_info)
+
+        respondent_id = self._get_next_respondent_id(study_id)
+        new_response = StudyResponse(
+            study_id=study_id,
+            session_id=session_id,
+            respondent_id=respondent_id,
+            total_tasks_assigned=total_tasks_assigned,
+            session_start_time=now_utc,
+            personal_info=personal_info,
+            ip_address=None,
+            user_agent=None,
+            last_activity=now_utc,
+            status="in_progress",
+            is_abandoned=False,
+            is_completed=False,
+            panelist_id=payload.panelist_id,
+        )
+        self.db.add(new_response)
+        self.db.commit()
+        self.db.refresh(new_response)
+
+        # Truncate to fit existing DB columns (no migrations)
+        def _truncate(s: str, max_len: int) -> str:
+            return (s or "")[:max_len] if s else ""
+
+        classification_answers = [
+            ClassificationAnswerCreate(
+                question_id=_truncate(v.question_id, 10),
+                question_text=_truncate(v.question_text, 500),
+                answer=_truncate(v.answer, 1000),
+                answer_timestamp=now_utc,
+                time_spent_seconds=0.0,
+            )
+            for v in (payload.classification_answers or {}).values()
+        ]
+        if classification_answers:
+            self.submit_classification(
+                session_id,
+                SubmitClassificationRequest(answers=classification_answers),
+            )
+
+        bulk_tasks: List[BulkSubmitTaskItem] = []
+        for tr in tasks_with_rating:
+            elements_shown = tr.elements_shown or []
+            elements_shown_in_task = {}
+            for e in elements_shown:
+                key = getattr(e, "key", None) or (e.get("key") if isinstance(e, dict) else None)
+                if key:
+                    elements_shown_in_task[key] = 1
+            elements_shown_content = None
+            if elements_shown:
+                # Use same keyed-dict shape as human flow so session/frontend show elements (images) correctly
+                out_map: Dict[str, Any] = {}
+                for e in elements_shown:
+                    key = getattr(e, "key", None) or (e.get("key") if isinstance(e, dict) else None)
+                    if not key:
+                        continue
+                    obj = e.model_dump() if hasattr(e, "model_dump") else (e if isinstance(e, dict) else {})
+                    url = obj.get("url") or obj.get("content")
+                    out_map[key] = {
+                        "name": obj.get("name"),
+                        "url": url,
+                        "visible": 1,
+                    }
+                elements_shown_content = out_map if out_map else None
+            bulk_tasks.append(
+                BulkSubmitTaskItem(
+                    task_id=tr.task_id,
+                    rating_given=tr.rating if tr.rating is not None else 1,
+                    task_duration_seconds=0.0,
+                    elements_shown_in_task=elements_shown_in_task or None,
+                    elements_shown_content=elements_shown_content,
+                )
+            )
+
+        if bulk_tasks:
+            self.submit_tasks_bulk(session_id, BulkSubmitTasksRequest(tasks=bulk_tasks))
+
+        # Align with human flow: update study counters and mark response completed so analysis sees it
+        updated_response = self.get_response_by_session(session_id)
+        if updated_response and updated_response.is_completed:
+            self._update_study_counters(study_id)
+        self.invalidate_analytics_cache(study_id)
+
+        return {
+            "success": True,
+            "session_id": session_id,
+            "message": "Synthetic respondent stored (classification and tasks in same tables as real data).",
+        }
 
     # ---------- CSV Export ----------
 

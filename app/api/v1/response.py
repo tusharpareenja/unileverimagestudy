@@ -24,6 +24,8 @@ from app.schemas.response_schema import (
     AbandonStudyRequest, AbandonStudyResponse, UpdateUserDetailsRequest,
     SubmitProductIdRequest, SubmitProductIdResponse,
     SubmitPanelistRequest, SubmitPanelistResponse,
+    SubmitSyntheticRespondentRequest, SubmitSyntheticRespondentResponse,
+    SyntheticRespondentPayload,
     StudyAnalytics, ResponseAnalytics, CompletedTaskOut,
     ClassificationAnswerOut, ElementInteractionOut, TaskSessionOut, TaskSessionCreate,
     ElementInteractionCreate, CompletedTaskCreate, ClassificationAnswerCreate, StudyResponseCreate,
@@ -94,6 +96,38 @@ async def submit_classification(
         success=success,
         message="Classification answers submitted successfully" if success else "Failed to submit answers"
     )
+
+@router.post("/submit-synthetic-respondent", response_model=SubmitSyntheticRespondentResponse)
+async def submit_synthetic_respondent(
+    http_request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Store one synthetic respondent: classification answers and task ratings.
+    Accepts body as object or as single-element array (e.g. [{ "ready_for_selenium": {...} }]).
+    Accepts either: (study_id + payload) or ready_for_selenium { study_id, classification_answers, task_ratings, rating_scale? }.
+    Uses the same storage as submit-classification and submit-tasks-bulk (no DB changes).
+    """
+    body = await http_request.json()
+    # Client may send array with one object; unwrap so we expect a single object
+    if isinstance(body, list) and len(body) == 1:
+        body = body[0]
+    request = SubmitSyntheticRespondentRequest.model_validate(body)
+    service = StudyResponseService(db)
+    if request.ready_for_selenium is not None:
+        r = request.ready_for_selenium
+        payload = SyntheticRespondentPayload(
+            panelist_id=r.panelist_id or "selenium_1",
+            panelist_number=r.panelist_number if r.panelist_number is not None else 1,
+            classification_answers=r.classification_answers,
+            task_ratings=r.task_ratings,
+        )
+        study_id = r.study_id
+    else:
+        study_id = request.study_id
+        payload = request.payload
+    result = service.submit_synthetic_respondent(study_id, payload)
+    return SubmitSyntheticRespondentResponse(**result)
 
 @router.post("/abandon-study", response_model=AbandonStudyResponse)
 async def abandon_study(

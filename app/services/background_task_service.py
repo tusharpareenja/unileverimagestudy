@@ -138,24 +138,22 @@ class BackgroundTaskService:
         return task
     
     async def _process_job(self, job_id: str, payload: Dict[str, Any], db: Session):
-        """Process a task generation job"""
+        """Process a task generation job or simulate_ai_respondents job"""
         try:
-            # Re-fetch job to ensure session usage is correct (though db is passed in)
-            # Actually, the db session passed from start_job (which comes from run_background_job -> SessionLocal) 
-            # is valid for this thread/task.
-            
             job = db.query(Job).filter(Job.job_id == job_id).first()
             if not job:
-                return # Should not happen
+                return
+
+            # Dispatch by job_type for non-task-generation jobs
+            if payload.get('job_type') == 'simulate_ai_respondents':
+                await self._run_simulate_ai_respondents_async(job_id, payload, db)
+                return
 
             job.status = JobStatus.PROCESSING
             job.message = "Generating tasks..."
             db.commit()
             
-            # Import here to avoid circular imports
-            # (Adapters/Core imports)
-            
-            # Process based on study type
+            # Process based on study type (task generation)
             study_type = payload.get('study_type')
             result = None
             
@@ -215,6 +213,82 @@ class BackgroundTaskService:
         finally:
             if job_id in self.running_tasks:
                 del self.running_tasks[job_id]
+
+    async def _run_simulate_ai_respondents_async(self, job_id: str, payload: Dict[str, Any], db: Session):
+        """Run AI respondent simulation in a thread and update job status."""
+        from uuid import UUID
+        from app.db.session import SessionLocal
+        from app.services.synthetic_simulation_service import run_simulation
+
+        job = db.query(Job).filter(Job.job_id == job_id).first()
+        if not job:
+            return
+        job.status = JobStatus.PROCESSING
+        job.message = "Simulating AI respondents..."
+        db.commit()
+
+        def run_sync():
+            db_sim = SessionLocal()
+            try:
+                study_id = UUID(job.study_id)
+                import os
+                progress_stdout = os.environ.get("SYNTHETIC_PROGRESS_STDOUT", "").strip().lower() in ("1", "true", "yes")
+
+                def progress(done: int, total: int, msg: str):
+                    try:
+                        pct = (100.0 * done / total) if total else 0
+                        line = f"[Simulate AI respondents] {msg} — progress: {pct:.0f}% ({done}/{total})"
+                        logger.info(line)
+                        if progress_stdout:
+                            print(line, flush=True)
+                        j = db_sim.query(Job).filter(Job.job_id == job_id).first()
+                        if j:
+                            j.progress = pct
+                            j.message = msg
+                            db_sim.commit()
+                    except Exception as e:
+                        try:
+                            logger.warning("Progress callback error (non-fatal): %s", e)
+                        except Exception:
+                            pass
+                        try:
+                            db_sim.rollback()
+                        except Exception:
+                            pass
+                return run_simulation(
+                    db_sim,
+                    study_id=study_id,
+                    max_respondents=payload.get("max_respondents"),
+                    progress_callback=progress,
+                    max_panelist_workers=payload.get("max_panelist_workers"),
+                )
+            finally:
+                db_sim.close()
+
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, run_sync)
+        except Exception as e:
+            result = {"success": False, "message": str(e), "error": str(e)}
+
+        job = db.query(Job).filter(Job.job_id == job_id).first()
+        if job:
+            job.completed_at = datetime.utcnow()
+            job.progress = 100.0
+            job.result = self._make_json_serializable(result)
+            if result.get("success"):
+                job.status = JobStatus.COMPLETED
+                job.message = result.get("message", "Simulation completed.")
+                job.error = None
+            else:
+                job.status = JobStatus.FAILED
+                job.message = result.get("message", "Simulation failed.")
+                job.error = result.get("error")
+            db.commit()
+            logger.info(
+                f"Job {job_id} simulate_ai_respondents finished: success={result.get('success')}, "
+                f"message={result.get('message', '')}"
+            )
     
     # --- Helper methods need to accept payload explicitly now since job is DB model ---
     

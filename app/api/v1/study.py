@@ -430,6 +430,85 @@ def list_studies_endpoint(
     return enriched
 
 
+@router.post("/{study_id}/simulate-ai-respondents")
+def simulate_ai_respondents_endpoint(
+    study_id: UUID,
+    run_async: bool = Query(True, description="If True and respondent count exceeds threshold, run in background"),
+    max_respondents: Optional[int] = Query(None, description="Cap on number of respondents to simulate (default from study)"),
+    max_panelist_workers: int = Query(10, ge=1, le=50, description="Number of panelists to run in parallel (AI phase); same as standalone main.py max_workers=10"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Simulate AI respondents for a study: generate panelists (gender, age, classification answers),
+    run AI rating for each respondent's tasks in order, and persist via the same storage as human respondents.
+    """
+    study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
+    if not study.tasks or not isinstance(study.tasks, dict) or len(study.tasks) == 0:
+        raise HTTPException(status_code=400, detail="Study has no tasks. Generate tasks first.")
+    if not study.classification_questions or len(study.classification_questions) == 0:
+        raise HTTPException(status_code=400, detail="Study has no classification questions.")
+
+    seg = study.audience_segmentation or {}
+    N = max_respondents if max_respondents is not None and max_respondents >= 1 else int(seg.get("number_of_respondents") or 0)
+    if N <= 0:
+        try:
+            task_keys = [k for k in study.tasks if str(k).isdigit()]
+            N = max(int(k) for k in task_keys) if task_keys else 0
+        except (ValueError, TypeError):
+            N = 0
+    if N <= 0:
+        raise HTTPException(status_code=400, detail="Could not determine number of respondents (set audience_segmentation.number_of_respondents or ensure tasks have numeric keys).")
+
+    if run_async and N > settings.MAX_RESPONDENTS_FOR_SYNC:
+        import threading
+        import logging
+        from app.services.background_task_service import background_task_service
+
+        logger = logging.getLogger(__name__)
+        job_id = background_task_service.create_job(
+            study_id=str(study_id),
+            user_id=str(current_user.id),
+            payload={"job_type": "simulate_ai_respondents", "max_respondents": N, "max_panelist_workers": max_panelist_workers},
+        )
+        def run_background_job():
+            import asyncio
+            from app.db.session import SessionLocal
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            db_bg = SessionLocal()
+            try:
+                task = loop.run_until_complete(background_task_service.start_job(job_id, db_bg))
+                if task:
+                    loop.run_until_complete(task)
+            except Exception as e:
+                logger.error("Background simulate_ai_respondents job failed: %s", e)
+            finally:
+                try:
+                    db_bg.close()
+                except Exception:
+                    pass
+                loop.close()
+        thread = threading.Thread(target=run_background_job, daemon=True)
+        thread.start()
+        return {
+            "job_id": job_id,
+            "message": "Simulation started in background.",
+            "study_id": str(study_id),
+            "respondents_requested": N,
+        }
+
+    from app.services.synthetic_simulation_service import run_simulation
+    result = run_simulation(
+        db=db,
+        study_id=study_id,
+        study_data=None,
+        max_respondents=max_respondents,
+        max_panelist_workers=max_panelist_workers,
+    )
+    return result
+
+
 @router.get("/{study_id}", response_model=StudyOut)
 def get_study_endpoint(
     study_id: UUID,

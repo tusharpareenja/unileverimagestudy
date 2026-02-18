@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any, Literal
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 # ---------- Element Interaction Schemas ----------
 
@@ -360,6 +360,82 @@ class SubmitPanelistResponse(BaseModel):
     success: bool
     panelist_age: Optional[int]
     panelist_gender: Optional[str]
+    message: str
+
+# ---------- Synthetic Respondent (accepts client JSON; stored like tasks + classification) ----------
+
+class SyntheticClassificationAnswerItem(BaseModel):
+    """Single classification answer in synthetic respondent payload."""
+    question_id: str
+    question_text: str
+    answer: str
+    answer_index: Optional[int] = None
+
+class SyntheticElementShownItem(BaseModel):
+    """Element shown in a task (synthetic payload)."""
+    key: Optional[str] = None
+    element_id: Optional[str] = None
+    name: Optional[str] = None
+    content: Optional[str] = None
+    category_name: Optional[str] = None
+    element_type: Optional[str] = None
+
+class SyntheticTaskRatingItem(BaseModel):
+    """Single task rating in synthetic respondent payload."""
+    task_id: str
+    task_index: Optional[int] = None
+    main_question: Optional[str] = None
+    vignette_content: Optional[str] = None
+    rating: Optional[int] = Field(None, ge=1, le=9)
+    reasoning: Optional[str] = None
+    elements_shown: Optional[List[SyntheticElementShownItem]] = None
+    method: Optional[str] = None
+
+class SyntheticRespondentPayload(BaseModel):
+    """Synthetic respondent: classification_answers + task_ratings (same shape as real). Optional personal_info for Gender/Age in analysis."""
+    panelist_id: str = Field(..., max_length=50)
+    panelist_number: int = Field(..., ge=0)
+    classification_answers: Dict[str, SyntheticClassificationAnswerItem] = Field(default_factory=dict)
+    task_ratings: List[SyntheticTaskRatingItem] = Field(default_factory=list)
+    personal_info: Optional[Dict[str, Any]] = Field(None, description="Demographics (gender, age, age_range) stored like human flow for analysis")
+
+class RatingScaleItem(BaseModel):
+    """Optional rating scale (e.g. from ready_for_selenium). Not stored in DB."""
+    min_value: Optional[int] = None
+    max_value: Optional[int] = None
+    min_label: Optional[str] = None
+    max_label: Optional[str] = None
+    middle_label: Optional[str] = None
+
+class ReadyForSeleniumPayload(BaseModel):
+    """Payload under 'ready_for_selenium': study_id, classification_answers, task_ratings; optional rating_scale and panelist ids."""
+    study_id: UUID
+    classification_answers: Dict[str, SyntheticClassificationAnswerItem] = Field(default_factory=dict)
+    task_ratings: List[SyntheticTaskRatingItem] = Field(default_factory=list)
+    rating_scale: Optional[RatingScaleItem] = None
+    panelist_id: Optional[str] = Field(None, max_length=50)
+    panelist_number: Optional[int] = Field(None, ge=0)
+
+class SubmitSyntheticRespondentRequest(BaseModel):
+    """Request to store one synthetic respondent. Use either (study_id + payload) or ready_for_selenium."""
+    study_id: Optional[UUID] = None
+    payload: Optional[SyntheticRespondentPayload] = None
+    ready_for_selenium: Optional[ReadyForSeleniumPayload] = None
+
+    @model_validator(mode="after")
+    def require_one_format(self):
+        if self.ready_for_selenium is not None:
+            if self.study_id is not None or self.payload is not None:
+                raise ValueError("Use either ready_for_selenium or (study_id + payload), not both.")
+            return self
+        if self.study_id is None or self.payload is None:
+            raise ValueError("Provide either ready_for_selenium or both study_id and payload.")
+        return self
+
+class SubmitSyntheticRespondentResponse(BaseModel):
+    """Response after storing synthetic respondent."""
+    success: bool
+    session_id: str
     message: str
 
 # Rebuild models to resolve forward references ----------

@@ -1,0 +1,3214 @@
+AI_SESSION = {
+    "session_id": "synthetic_panelist_000001_ca872be9609c",
+    "respondent_id": 1,
+    "current_task_index": 32,
+    "completed_tasks_count": 32,
+    "total_tasks_assigned": 32,
+    "session_start_time": "2026-02-17T12:44:19.845815Z",
+    "session_end_time": "2026-02-17T12:44:22.695861Z",
+    "is_completed": true,
+    "personal_info": {
+        "age": 79,
+        "gender": "male",
+        "age_range": "65+"
+    },
+    "ip_address": null,
+    "user_agent": null,
+    "browser_info": null,
+    "completion_percentage": 100.0,
+    "total_study_duration": 2.850046,
+    "last_activity": "2026-02-17T12:44:21.343936Z",
+    "is_abandoned": false,
+    "abandonment_timestamp": null,
+    "abandonment_reason": null,
+    "product_id": null,
+    "panelist_id": "panelist_000001",
+    "id": "607114be-01a0-4ed0-9b9d-6851c85130d5",
+    "study_id": "0710bc51-3bde-429f-ada7-08b68f08ec14",
+    "created_at": "2026-02-17T12:44:19.117416Z",
+    "updated_at": "2026-02-17T12:44:21.810700Z",
+    "completed_tasks": [
+        {
+            "task_id": "1_0",
+            "respondent_id": 1,
+            "task_index": 0,
+            "elements_shown_in_task": {
+                "Garden_3": 1,
+                "Live it_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Garden_3",
+                        "name": "SmartSys.Shape4",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/32ccdb4da4da4cf6b8059176b48ea713_SmartSys.Shape4.png",
+                        "element_id": "a10f515d-fcb4-4cfa-a710-75214e5a7564",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    },
+                    {
+                        "key": "Live it_1",
+                        "name": "Garden.Shape1",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1871380c41410f8c8dcccfcfaccede_Garden.Shape1.png",
+                        "element_id": "477baaca-3313-433a-b16b-b65b274a0e4e",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "bda512b2-fe64-4d73-9444-c47a8f7b1c58",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_1",
+            "respondent_id": 1,
+            "task_index": 1,
+            "elements_shown_in_task": {
+                "Bottle_3": 1,
+                "Garden_1": 1,
+                "Live it_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_3",
+                        "name": "Aura.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/345e74bbc35742f1b5f2492412a4a27b_Aura.Shape3.png",
+                        "element_id": "5bf5a58e-3397-42de-9589-92a2128a0d3a",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Garden_1",
+                        "name": "SmartSys.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/1a868e3770ed4bf4a1589881832286c8_SmartSys.Shape2.png",
+                        "element_id": "8b6dd58e-3c62-4089-b753-ecf1ca49ff61",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    },
+                    {
+                        "key": "Live it_1",
+                        "name": "Garden.Shape1",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1871380c41410f8c8dcccfcfaccede_Garden.Shape1.png",
+                        "element_id": "477baaca-3313-433a-b16b-b65b274a0e4e",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 3,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "0f4c6c2f-698a-42e4-b2db-5c849d391878",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_2",
+            "respondent_id": 1,
+            "task_index": 2,
+            "elements_shown_in_task": {
+                "Bottle_3": 1,
+                "Garden_1": 1,
+                "Live it_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_3",
+                        "name": "Aura.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/345e74bbc35742f1b5f2492412a4a27b_Aura.Shape3.png",
+                        "element_id": "5bf5a58e-3397-42de-9589-92a2128a0d3a",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Garden_1",
+                        "name": "SmartSys.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/1a868e3770ed4bf4a1589881832286c8_SmartSys.Shape2.png",
+                        "element_id": "8b6dd58e-3c62-4089-b753-ecf1ca49ff61",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    },
+                    {
+                        "key": "Live it_3",
+                        "name": "Garden.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/d6d049584d184fafb5141fab0ba3fc53_Garden.Shape3.png",
+                        "element_id": "7e31d309-5323-485f-8e9f-79c7b6c7ad5b",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 3,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "c93e126f-1f97-4296-8b0f-aec72a30554b",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_3",
+            "respondent_id": 1,
+            "task_index": 3,
+            "elements_shown_in_task": {
+                "Bottle_1": 1,
+                "Live it_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_1",
+                        "name": "Aura.Shape1",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/9b2b925e583e4201bf1d3731121bc76a_Aura.Shape1.png",
+                        "element_id": "22d9f450-2182-4ec6-a5f2-8d9e14b2ad9c",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Live it_2",
+                        "name": "Garden.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/4386c06a592b4bc49303376d5912bdfa_Garden.Shape2.png",
+                        "element_id": "f0ab7631-d3da-4493-a210-2ea33575b416",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "10d6ad9c-395a-46c5-b848-799fe2296fc0",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_4",
+            "respondent_id": 1,
+            "task_index": 4,
+            "elements_shown_in_task": {
+                "Garden_1": 1,
+                "Live it_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Garden_1",
+                        "name": "SmartSys.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/1a868e3770ed4bf4a1589881832286c8_SmartSys.Shape2.png",
+                        "element_id": "8b6dd58e-3c62-4089-b753-ecf1ca49ff61",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    },
+                    {
+                        "key": "Live it_1",
+                        "name": "Garden.Shape1",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1871380c41410f8c8dcccfcfaccede_Garden.Shape1.png",
+                        "element_id": "477baaca-3313-433a-b16b-b65b274a0e4e",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "47e5b683-7907-4161-ae46-8f26533e2969",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_5",
+            "respondent_id": 1,
+            "task_index": 5,
+            "elements_shown_in_task": {
+                "Garden_2": 1,
+                "Live it_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Garden_2",
+                        "name": "SmartSys.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1598f6f78f42708d17781d518678e0_SmartSys.Shape3.png",
+                        "element_id": "5ebaf796-c15b-41e2-9448-c4013523cb42",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    },
+                    {
+                        "key": "Live it_3",
+                        "name": "Garden.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/d6d049584d184fafb5141fab0ba3fc53_Garden.Shape3.png",
+                        "element_id": "7e31d309-5323-485f-8e9f-79c7b6c7ad5b",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 3,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "b4189f02-0236-43f7-b0fc-1a87bd7d4e2c",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_6",
+            "respondent_id": 1,
+            "task_index": 6,
+            "elements_shown_in_task": {
+                "Bottle_3": 1,
+                "Garden_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_3",
+                        "name": "Aura.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/345e74bbc35742f1b5f2492412a4a27b_Aura.Shape3.png",
+                        "element_id": "5bf5a58e-3397-42de-9589-92a2128a0d3a",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Garden_2",
+                        "name": "SmartSys.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1598f6f78f42708d17781d518678e0_SmartSys.Shape3.png",
+                        "element_id": "5ebaf796-c15b-41e2-9448-c4013523cb42",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "89c28250-03c4-4016-8a5d-f9aa70a80934",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_7",
+            "respondent_id": 1,
+            "task_index": 7,
+            "elements_shown_in_task": {
+                "Garden_3": 1,
+                "Live it_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Garden_3",
+                        "name": "SmartSys.Shape4",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/32ccdb4da4da4cf6b8059176b48ea713_SmartSys.Shape4.png",
+                        "element_id": "a10f515d-fcb4-4cfa-a710-75214e5a7564",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    },
+                    {
+                        "key": "Live it_2",
+                        "name": "Garden.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/4386c06a592b4bc49303376d5912bdfa_Garden.Shape2.png",
+                        "element_id": "f0ab7631-d3da-4493-a210-2ea33575b416",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 3,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "e188ee67-4657-4bb5-930f-2a995eb0eb85",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_8",
+            "respondent_id": 1,
+            "task_index": 8,
+            "elements_shown_in_task": {
+                "Bottle_1": 1,
+                "Live it_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_1",
+                        "name": "Aura.Shape1",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/9b2b925e583e4201bf1d3731121bc76a_Aura.Shape1.png",
+                        "element_id": "22d9f450-2182-4ec6-a5f2-8d9e14b2ad9c",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Live it_1",
+                        "name": "Garden.Shape1",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1871380c41410f8c8dcccfcfaccede_Garden.Shape1.png",
+                        "element_id": "477baaca-3313-433a-b16b-b65b274a0e4e",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 3,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "b0eb53c1-64da-4dfe-84cc-43b8c77f011b",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_9",
+            "respondent_id": 1,
+            "task_index": 9,
+            "elements_shown_in_task": {
+                "Bottle_2": 1,
+                "Live it_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_2",
+                        "name": "Aura.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/f20c18031d32438a9de3901217093062_Aura.Shape2.png",
+                        "element_id": "48894310-0f6d-481e-899e-02321869fa11",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Live it_2",
+                        "name": "Garden.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/4386c06a592b4bc49303376d5912bdfa_Garden.Shape2.png",
+                        "element_id": "f0ab7631-d3da-4493-a210-2ea33575b416",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "72455cc5-97db-4ee6-b64f-73dd57e9facb",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_10",
+            "respondent_id": 1,
+            "task_index": 10,
+            "elements_shown_in_task": {
+                "Bottle_3": 1,
+                "Garden_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_3",
+                        "name": "Aura.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/345e74bbc35742f1b5f2492412a4a27b_Aura.Shape3.png",
+                        "element_id": "5bf5a58e-3397-42de-9589-92a2128a0d3a",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Garden_1",
+                        "name": "SmartSys.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/1a868e3770ed4bf4a1589881832286c8_SmartSys.Shape2.png",
+                        "element_id": "8b6dd58e-3c62-4089-b753-ecf1ca49ff61",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "f14645c3-589b-49c6-9a35-aebba2dd821f",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_11",
+            "respondent_id": 1,
+            "task_index": 11,
+            "elements_shown_in_task": {
+                "Bottle_2": 1,
+                "Garden_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_2",
+                        "name": "Aura.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/f20c18031d32438a9de3901217093062_Aura.Shape2.png",
+                        "element_id": "48894310-0f6d-481e-899e-02321869fa11",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Garden_3",
+                        "name": "SmartSys.Shape4",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/32ccdb4da4da4cf6b8059176b48ea713_SmartSys.Shape4.png",
+                        "element_id": "a10f515d-fcb4-4cfa-a710-75214e5a7564",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "f0bb66b0-24b6-400d-ac17-583bbf3b5d95",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_12",
+            "respondent_id": 1,
+            "task_index": 12,
+            "elements_shown_in_task": {
+                "Bottle_2": 1,
+                "Live it_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_2",
+                        "name": "Aura.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/f20c18031d32438a9de3901217093062_Aura.Shape2.png",
+                        "element_id": "48894310-0f6d-481e-899e-02321869fa11",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Live it_3",
+                        "name": "Garden.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/d6d049584d184fafb5141fab0ba3fc53_Garden.Shape3.png",
+                        "element_id": "7e31d309-5323-485f-8e9f-79c7b6c7ad5b",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 3,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "629232c1-4502-4a43-a166-ee79782e2c79",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_13",
+            "respondent_id": 1,
+            "task_index": 13,
+            "elements_shown_in_task": {
+                "Bottle_1": 1,
+                "Garden_2": 1,
+                "Live it_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_1",
+                        "name": "Aura.Shape1",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/9b2b925e583e4201bf1d3731121bc76a_Aura.Shape1.png",
+                        "element_id": "22d9f450-2182-4ec6-a5f2-8d9e14b2ad9c",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Garden_2",
+                        "name": "SmartSys.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1598f6f78f42708d17781d518678e0_SmartSys.Shape3.png",
+                        "element_id": "5ebaf796-c15b-41e2-9448-c4013523cb42",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    },
+                    {
+                        "key": "Live it_3",
+                        "name": "Garden.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/d6d049584d184fafb5141fab0ba3fc53_Garden.Shape3.png",
+                        "element_id": "7e31d309-5323-485f-8e9f-79c7b6c7ad5b",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "9f08a918-11c0-45aa-bda7-49d92e7dad50",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_14",
+            "respondent_id": 1,
+            "task_index": 14,
+            "elements_shown_in_task": {
+                "Bottle_1": 1,
+                "Garden_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_1",
+                        "name": "Aura.Shape1",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/9b2b925e583e4201bf1d3731121bc76a_Aura.Shape1.png",
+                        "element_id": "22d9f450-2182-4ec6-a5f2-8d9e14b2ad9c",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Garden_2",
+                        "name": "SmartSys.Shape3",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1598f6f78f42708d17781d518678e0_SmartSys.Shape3.png",
+                        "element_id": "5ebaf796-c15b-41e2-9448-c4013523cb42",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "dcc0fd6b-dd8f-4b87-b8f1-50bc7fd99ab4",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_15",
+            "respondent_id": 1,
+            "task_index": 15,
+            "elements_shown_in_task": {
+                "Bottle_2": 1,
+                "Garden_3": 1,
+                "Live it_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Bottle_2",
+                        "name": "Aura.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/f20c18031d32438a9de3901217093062_Aura.Shape2.png",
+                        "element_id": "48894310-0f6d-481e-899e-02321869fa11",
+                        "element_type": "image",
+                        "category_name": "Bottle"
+                    },
+                    {
+                        "key": "Garden_3",
+                        "name": "SmartSys.Shape4",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/32ccdb4da4da4cf6b8059176b48ea713_SmartSys.Shape4.png",
+                        "element_id": "a10f515d-fcb4-4cfa-a710-75214e5a7564",
+                        "element_type": "image",
+                        "category_name": "Garden"
+                    },
+                    {
+                        "key": "Live it_2",
+                        "name": "Garden.Shape2",
+                        "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/4386c06a592b4bc49303376d5912bdfa_Garden.Shape2.png",
+                        "element_id": "f0ab7631-d3da-4493-a210-2ea33575b416",
+                        "element_type": "image",
+                        "category_name": "Live it"
+                    }
+                ]
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "11a2517a-d377-4f68-8394-79fcca227ec5",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_0",
+            "respondent_id": 1,
+            "task_index": 16,
+            "elements_shown_in_task": {
+                "Lion_1": 1,
+                "Brush_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_1",
+                        "name": "Life can be in danger",
+                        "content": "Life can be in danger",
+                        "element_id": "5658db4b-58aa-4985-aae5-52178c81023b",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Brush_3",
+                        "name": "This is cat",
+                        "content": "This is cat",
+                        "element_id": "1b724b41-8391-4b53-811c-677748f8b50a",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "3b8282ae-0beb-4e0a-85db-30b5eb5e002a",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_1",
+            "respondent_id": 1,
+            "task_index": 17,
+            "elements_shown_in_task": {
+                "Lion_1": 1,
+                "Brush_1": 1,
+                "Animal_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_1",
+                        "name": "Life can be in danger",
+                        "content": "Life can be in danger",
+                        "element_id": "5658db4b-58aa-4985-aae5-52178c81023b",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Brush_1",
+                        "name": "This is lion",
+                        "content": "This is lion",
+                        "element_id": "5905a29e-3c2b-4fe0-aca7-0863efe85602",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    },
+                    {
+                        "key": "Animal_3",
+                        "name": "Life is like wind",
+                        "content": "Life is like wind",
+                        "element_id": "4b679921-ba45-483b-99b8-3aa40f344627",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "759d3851-45db-4cc2-af90-c8850cecc0a8",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_2",
+            "respondent_id": 1,
+            "task_index": 18,
+            "elements_shown_in_task": {
+                "Lion_3": 1,
+                "Brush_1": 1,
+                "Animal_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_3",
+                        "name": "Nice comment",
+                        "content": "Nice comment",
+                        "element_id": "b140b3e0-4bcc-47c0-a855-20751d71a2bb",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Brush_1",
+                        "name": "This is lion",
+                        "content": "This is lion",
+                        "element_id": "5905a29e-3c2b-4fe0-aca7-0863efe85602",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    },
+                    {
+                        "key": "Animal_3",
+                        "name": "Life is like wind",
+                        "content": "Life is like wind",
+                        "element_id": "4b679921-ba45-483b-99b8-3aa40f344627",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 3,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "df39bcd8-2613-4905-a78e-11faa64dd1e3",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_3",
+            "respondent_id": 1,
+            "task_index": 19,
+            "elements_shown_in_task": {
+                "Lion_2": 1,
+                "Animal_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_2",
+                        "name": "Your life is your way",
+                        "content": "Your life is your way",
+                        "element_id": "cdb696c9-e952-4b4f-8ccb-b9075b400fd6",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Animal_1",
+                        "name": "This is DOg",
+                        "content": "This is DOg",
+                        "element_id": "71a330cb-62e3-40c3-9830-43f7958661c6",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "7921974f-d42a-44cc-b01d-aea646e44dca",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_4",
+            "respondent_id": 1,
+            "task_index": 20,
+            "elements_shown_in_task": {
+                "Lion_1": 1,
+                "Brush_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_1",
+                        "name": "Life can be in danger",
+                        "content": "Life can be in danger",
+                        "element_id": "5658db4b-58aa-4985-aae5-52178c81023b",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Brush_1",
+                        "name": "This is lion",
+                        "content": "This is lion",
+                        "element_id": "5905a29e-3c2b-4fe0-aca7-0863efe85602",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "f1750612-eb0a-474e-8e53-a1ee8bf89bf5",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_5",
+            "respondent_id": 1,
+            "task_index": 21,
+            "elements_shown_in_task": {
+                "Lion_3": 1,
+                "Brush_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_3",
+                        "name": "Nice comment",
+                        "content": "Nice comment",
+                        "element_id": "b140b3e0-4bcc-47c0-a855-20751d71a2bb",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Brush_2",
+                        "name": "This is Tiger",
+                        "content": "This is Tiger",
+                        "element_id": "7634c354-3245-4b85-a895-de57d0fba2fe",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "05de24c8-b59c-4ed6-985b-e7c60e19f22e",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_6",
+            "respondent_id": 1,
+            "task_index": 22,
+            "elements_shown_in_task": {
+                "Brush_2": 1,
+                "Animal_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Brush_2",
+                        "name": "This is Tiger",
+                        "content": "This is Tiger",
+                        "element_id": "7634c354-3245-4b85-a895-de57d0fba2fe",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    },
+                    {
+                        "key": "Animal_3",
+                        "name": "Life is like wind",
+                        "content": "Life is like wind",
+                        "element_id": "4b679921-ba45-483b-99b8-3aa40f344627",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "3ed49368-8fb7-4a9b-851e-a7fa5a9c3434",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_7",
+            "respondent_id": 1,
+            "task_index": 23,
+            "elements_shown_in_task": {
+                "Lion_2": 1,
+                "Brush_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_2",
+                        "name": "Your life is your way",
+                        "content": "Your life is your way",
+                        "element_id": "cdb696c9-e952-4b4f-8ccb-b9075b400fd6",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Brush_3",
+                        "name": "This is cat",
+                        "content": "This is cat",
+                        "element_id": "1b724b41-8391-4b53-811c-677748f8b50a",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "211aeb5d-9de5-44f4-b106-e876e3929232",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_8",
+            "respondent_id": 1,
+            "task_index": 24,
+            "elements_shown_in_task": {
+                "Lion_1": 1,
+                "Animal_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_1",
+                        "name": "Life can be in danger",
+                        "content": "Life can be in danger",
+                        "element_id": "5658db4b-58aa-4985-aae5-52178c81023b",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Animal_1",
+                        "name": "This is DOg",
+                        "content": "This is DOg",
+                        "element_id": "71a330cb-62e3-40c3-9830-43f7958661c6",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "b8c5625a-efb0-4ee6-8cea-b90c503f5720",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_9",
+            "respondent_id": 1,
+            "task_index": 25,
+            "elements_shown_in_task": {
+                "Lion_2": 1,
+                "Animal_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_2",
+                        "name": "Your life is your way",
+                        "content": "Your life is your way",
+                        "element_id": "cdb696c9-e952-4b4f-8ccb-b9075b400fd6",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Animal_2",
+                        "name": "This is life",
+                        "content": "This is life",
+                        "element_id": "8352d52a-1c46-41bc-bdfc-6b1b1f273871",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 3,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "b98caf1b-650d-401a-91e4-4a4737b3fa21",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_10",
+            "respondent_id": 1,
+            "task_index": 26,
+            "elements_shown_in_task": {
+                "Brush_1": 1,
+                "Animal_3": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Brush_1",
+                        "name": "This is lion",
+                        "content": "This is lion",
+                        "element_id": "5905a29e-3c2b-4fe0-aca7-0863efe85602",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    },
+                    {
+                        "key": "Animal_3",
+                        "name": "Life is like wind",
+                        "content": "Life is like wind",
+                        "element_id": "4b679921-ba45-483b-99b8-3aa40f344627",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "d0d5ec31-ed68-4d56-8cf4-8d80e3d2e7ff",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_11",
+            "respondent_id": 1,
+            "task_index": 27,
+            "elements_shown_in_task": {
+                "Brush_3": 1,
+                "Animal_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Brush_3",
+                        "name": "This is cat",
+                        "content": "This is cat",
+                        "element_id": "1b724b41-8391-4b53-811c-677748f8b50a",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    },
+                    {
+                        "key": "Animal_2",
+                        "name": "This is life",
+                        "content": "This is life",
+                        "element_id": "8352d52a-1c46-41bc-bdfc-6b1b1f273871",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 1,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "4a315170-1382-4716-9c51-0586b9103308",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_12",
+            "respondent_id": 1,
+            "task_index": 28,
+            "elements_shown_in_task": {
+                "Lion_3": 1,
+                "Animal_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_3",
+                        "name": "Nice comment",
+                        "content": "Nice comment",
+                        "element_id": "b140b3e0-4bcc-47c0-a855-20751d71a2bb",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Animal_2",
+                        "name": "This is life",
+                        "content": "This is life",
+                        "element_id": "8352d52a-1c46-41bc-bdfc-6b1b1f273871",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 4,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "12944504-1ebd-43a5-9014-9d3a4679a473",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_13",
+            "respondent_id": 1,
+            "task_index": 29,
+            "elements_shown_in_task": {
+                "Lion_3": 1,
+                "Brush_2": 1,
+                "Animal_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_3",
+                        "name": "Nice comment",
+                        "content": "Nice comment",
+                        "element_id": "b140b3e0-4bcc-47c0-a855-20751d71a2bb",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Brush_2",
+                        "name": "This is Tiger",
+                        "content": "This is Tiger",
+                        "element_id": "7634c354-3245-4b85-a895-de57d0fba2fe",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    },
+                    {
+                        "key": "Animal_1",
+                        "name": "This is DOg",
+                        "content": "This is DOg",
+                        "element_id": "71a330cb-62e3-40c3-9830-43f7958661c6",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "85c5a763-d2d9-4f46-9810-a225b5508a66",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_14",
+            "respondent_id": 1,
+            "task_index": 30,
+            "elements_shown_in_task": {
+                "Brush_2": 1,
+                "Animal_1": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Brush_2",
+                        "name": "This is Tiger",
+                        "content": "This is Tiger",
+                        "element_id": "7634c354-3245-4b85-a895-de57d0fba2fe",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    },
+                    {
+                        "key": "Animal_1",
+                        "name": "This is DOg",
+                        "content": "This is DOg",
+                        "element_id": "71a330cb-62e3-40c3-9830-43f7958661c6",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "aac52978-392a-4a43-a2c3-a3f09c3fc7a2",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "task_id": "1_15",
+            "respondent_id": 1,
+            "task_index": 31,
+            "elements_shown_in_task": {
+                "Lion_2": 1,
+                "Brush_3": 1,
+                "Animal_2": 1
+            },
+            "elements_shown_content": {
+                "elements": [
+                    {
+                        "key": "Lion_2",
+                        "name": "Your life is your way",
+                        "content": "Your life is your way",
+                        "element_id": "cdb696c9-e952-4b4f-8ccb-b9075b400fd6",
+                        "element_type": "text",
+                        "category_name": "Lion"
+                    },
+                    {
+                        "key": "Brush_3",
+                        "name": "This is cat",
+                        "content": "This is cat",
+                        "element_id": "1b724b41-8391-4b53-811c-677748f8b50a",
+                        "element_type": "text",
+                        "category_name": "Brush"
+                    },
+                    {
+                        "key": "Animal_2",
+                        "name": "This is life",
+                        "content": "This is life",
+                        "element_id": "8352d52a-1c46-41bc-bdfc-6b1b1f273871",
+                        "element_type": "text",
+                        "category_name": "Animal"
+                    }
+                ]
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-17T12:44:21.343936Z",
+            "task_completion_time": "2026-02-17T12:44:21.343936Z",
+            "task_duration_seconds": 0.0,
+            "rating_given": 2,
+            "rating_timestamp": "2026-02-17T12:44:21.343936Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "e2f88ab5-a60c-4350-a27a-dd48edb6298d",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        }
+    ],
+    "classification_answers": [
+        {
+            "question_id": "ae1efa5d-a",
+            "question_text": "Do you like deo",
+            "answer": "Yes",
+            "answer_timestamp": "2026-02-17T12:44:19.845815Z",
+            "time_spent_seconds": 0.0,
+            "id": "84546d5b-a9ed-4834-ad55-52180cb26b66",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "question_id": "90a55f6d-b",
+            "question_text": "Which fragrance do you prefer",
+            "answer": "Woody",
+            "answer_timestamp": "2026-02-17T12:44:19.845815Z",
+            "time_spent_seconds": 0.0,
+            "id": "e7ab24c4-8833-4e32-add4-7e347db39a0c",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        },
+        {
+            "question_id": "388f406d-7",
+            "question_text": "Which bottle do you prefer",
+            "answer": "Plastic",
+            "answer_timestamp": "2026-02-17T12:44:19.845815Z",
+            "time_spent_seconds": 0.0,
+            "id": "1bde95c6-b49d-4c60-a421-5cedbba1e3f3",
+            "study_response_id": "607114be-01a0-4ed0-9b9d-6851c85130d5"
+        }
+    ],
+    "element_interactions": [],
+    "task_sessions": [],
+    "study_layers": [],
+    "background_image_url": null
+}
+
+HUMAN SESSION = {
+    "session_id": "session_ba66333d6c40483d",
+    "respondent_id": 1,
+    "current_task_index": 32,
+    "completed_tasks_count": 32,
+    "total_tasks_assigned": 32,
+    "session_start_time": "2026-02-13T18:08:31.404232Z",
+    "session_end_time": "2026-02-13T18:09:36.542632Z",
+    "is_completed": true,
+    "personal_info": {
+        "age": 20,
+        "gender": "male"
+    },
+    "ip_address": "127.0.0.1",
+    "user_agent": "iPhone Edg/144.0.0.0",
+    "browser_info": null,
+    "completion_percentage": 100.0,
+    "total_study_duration": 65.1384,
+    "last_activity": "2026-02-13T18:09:34.956987Z",
+    "is_abandoned": false,
+    "abandonment_timestamp": null,
+    "abandonment_reason": null,
+    "product_id": null,
+    "panelist_id": "PYQ1122",
+    "id": "ab837497-9435-439b-9ffe-4d0364152f5a",
+    "study_id": "85157397-aa2b-4129-a90b-63be19522249",
+    "created_at": "2026-02-13T18:08:30.464806Z",
+    "updated_at": "2026-02-13T18:09:35.351641Z",
+    "completed_tasks": [
+        {
+            "task_id": "1_0",
+            "respondent_id": 1,
+            "task_index": 0,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 0,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 1,
+                "Garden_3": 0,
+                "Live it_1": 1,
+                "Live it_2": 0,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": null,
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": {
+                    "name": "SmartSys.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1598f6f78f42708d17781d518678e0_SmartSys.Shape3.png",
+                    "alt_text": "SmartSys.Shape3",
+                    "element_id": "e7c0969d-d76f-4396-8c7e-4ed1199fab73",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Garden_3": null,
+                "Live it_1": {
+                    "name": "Garden.Shape1",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1871380c41410f8c8dcccfcfaccede_Garden.Shape1.png",
+                    "alt_text": "Garden.Shape1",
+                    "element_id": "38925e25-c60e-4a5b-a858-74b2fd43f007",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                },
+                "Live it_2": null,
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:25.232951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 3.862,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "90ba9dd8-a72f-4cbb-bdbb-135b8b2dd945",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_1",
+            "respondent_id": 1,
+            "task_index": 1,
+            "elements_shown_in_task": {
+                "Bottle_1": 1,
+                "Bottle_2": 0,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 0,
+                "Garden_3": 0,
+                "Live it_1": 0,
+                "Live it_2": 1,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": {
+                    "name": "Aura.Shape1",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/9b2b925e583e4201bf1d3731121bc76a_Aura.Shape1.png",
+                    "alt_text": "Aura.Shape1",
+                    "element_id": "c8eff0a2-7b03-4056-b6f2-30951b114d8a",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Bottle_2": null,
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": null,
+                "Garden_3": null,
+                "Live it_1": null,
+                "Live it_2": {
+                    "name": "Garden.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/4386c06a592b4bc49303376d5912bdfa_Garden.Shape2.png",
+                    "alt_text": "Garden.Shape2",
+                    "element_id": "b1a8face-7119-4c11-a900-cf56786c6713",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                },
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.936951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.158,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "5069a83f-d434-43d7-9ade-1f9d6f033ef0",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_2",
+            "respondent_id": 1,
+            "task_index": 2,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 1,
+                "Bottle_3": 0,
+                "Garden_1": 1,
+                "Garden_2": 0,
+                "Garden_3": 0,
+                "Live it_1": 1,
+                "Live it_2": 0,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": {
+                    "name": "Aura.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/f20c18031d32438a9de3901217093062_Aura.Shape2.png",
+                    "alt_text": "Aura.Shape2",
+                    "element_id": "18c17fcb-9035-41e2-86f8-0b4aa9238c8c",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Bottle_3": null,
+                "Garden_1": {
+                    "name": "SmartSys.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/1a868e3770ed4bf4a1589881832286c8_SmartSys.Shape2.png",
+                    "alt_text": "SmartSys.Shape2",
+                    "element_id": "02c334a3-6a6c-4408-bc2d-7c7f50cdc71f",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Garden_2": null,
+                "Garden_3": null,
+                "Live it_1": {
+                    "name": "Garden.Shape1",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1871380c41410f8c8dcccfcfaccede_Garden.Shape1.png",
+                    "alt_text": "Garden.Shape1",
+                    "element_id": "38925e25-c60e-4a5b-a858-74b2fd43f007",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                },
+                "Live it_2": null,
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.920951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.174,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "a5c6a703-e67c-4e39-a890-73f22c90c928",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_3",
+            "respondent_id": 1,
+            "task_index": 3,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 0,
+                "Bottle_3": 1,
+                "Garden_1": 1,
+                "Garden_2": 0,
+                "Garden_3": 0,
+                "Live it_1": 0,
+                "Live it_2": 0,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": null,
+                "Bottle_3": {
+                    "name": "Aura.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/345e74bbc35742f1b5f2492412a4a27b_Aura.Shape3.png",
+                    "alt_text": "Aura.Shape3",
+                    "element_id": "1ba3c519-0c4b-43e2-854d-50f13cb9d396",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Garden_1": {
+                    "name": "SmartSys.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/1a868e3770ed4bf4a1589881832286c8_SmartSys.Shape2.png",
+                    "alt_text": "SmartSys.Shape2",
+                    "element_id": "02c334a3-6a6c-4408-bc2d-7c7f50cdc71f",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Garden_2": null,
+                "Garden_3": null,
+                "Live it_1": null,
+                "Live it_2": null,
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.962951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.132,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "e22d7433-610a-46cb-8d82-01314406137e",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_4",
+            "respondent_id": 1,
+            "task_index": 4,
+            "elements_shown_in_task": {
+                "Bottle_1": 1,
+                "Bottle_2": 0,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 0,
+                "Garden_3": 0,
+                "Live it_1": 0,
+                "Live it_2": 0,
+                "Live it_3": 1
+            },
+            "elements_shown_content": {
+                "Bottle_1": {
+                    "name": "Aura.Shape1",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/9b2b925e583e4201bf1d3731121bc76a_Aura.Shape1.png",
+                    "alt_text": "Aura.Shape1",
+                    "element_id": "c8eff0a2-7b03-4056-b6f2-30951b114d8a",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Bottle_2": null,
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": null,
+                "Garden_3": null,
+                "Live it_1": null,
+                "Live it_2": null,
+                "Live it_3": {
+                    "name": "Garden.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/d6d049584d184fafb5141fab0ba3fc53_Garden.Shape3.png",
+                    "alt_text": "Garden.Shape3",
+                    "element_id": "a8b7fbeb-340b-4df1-bfc3-9643bbc0f6b1",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                }
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.975951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.119,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "2e6ebf29-da5d-4dbf-bece-2b45859d9de9",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_5",
+            "respondent_id": 1,
+            "task_index": 5,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 0,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 0,
+                "Garden_3": 1,
+                "Live it_1": 0,
+                "Live it_2": 1,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": null,
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": null,
+                "Garden_3": {
+                    "name": "SmartSys.Shape4",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/32ccdb4da4da4cf6b8059176b48ea713_SmartSys.Shape4.png",
+                    "alt_text": "SmartSys.Shape4",
+                    "element_id": "be3c7b8d-7da3-4378-8948-bbc4e7431a08",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Live it_1": null,
+                "Live it_2": {
+                    "name": "Garden.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/4386c06a592b4bc49303376d5912bdfa_Garden.Shape2.png",
+                    "alt_text": "Garden.Shape2",
+                    "element_id": "b1a8face-7119-4c11-a900-cf56786c6713",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                },
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:27.747951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 1.347,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "5c34f867-fae6-448c-b1aa-ec5b44f15490",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_6",
+            "respondent_id": 1,
+            "task_index": 6,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 1,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 0,
+                "Garden_3": 0,
+                "Live it_1": 1,
+                "Live it_2": 0,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": {
+                    "name": "Aura.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/f20c18031d32438a9de3901217093062_Aura.Shape2.png",
+                    "alt_text": "Aura.Shape2",
+                    "element_id": "18c17fcb-9035-41e2-86f8-0b4aa9238c8c",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": null,
+                "Garden_3": null,
+                "Live it_1": {
+                    "name": "Garden.Shape1",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1871380c41410f8c8dcccfcfaccede_Garden.Shape1.png",
+                    "alt_text": "Garden.Shape1",
+                    "element_id": "38925e25-c60e-4a5b-a858-74b2fd43f007",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                },
+                "Live it_2": null,
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.585951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.509,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "c4d04686-7dcc-4261-8e10-6cb2b712d82c",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_7",
+            "respondent_id": 1,
+            "task_index": 7,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 0,
+                "Bottle_3": 0,
+                "Garden_1": 1,
+                "Garden_2": 0,
+                "Garden_3": 0,
+                "Live it_1": 0,
+                "Live it_2": 1,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": null,
+                "Bottle_3": null,
+                "Garden_1": {
+                    "name": "SmartSys.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/1a868e3770ed4bf4a1589881832286c8_SmartSys.Shape2.png",
+                    "alt_text": "SmartSys.Shape2",
+                    "element_id": "02c334a3-6a6c-4408-bc2d-7c7f50cdc71f",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Garden_2": null,
+                "Garden_3": null,
+                "Live it_1": null,
+                "Live it_2": {
+                    "name": "Garden.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/4386c06a592b4bc49303376d5912bdfa_Garden.Shape2.png",
+                    "alt_text": "Garden.Shape2",
+                    "element_id": "b1a8face-7119-4c11-a900-cf56786c6713",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                },
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.975951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.119,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "e3520e05-8297-45f5-a923-2bf83721ae36",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_8",
+            "respondent_id": 1,
+            "task_index": 8,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 0,
+                "Bottle_3": 0,
+                "Garden_1": 1,
+                "Garden_2": 0,
+                "Garden_3": 0,
+                "Live it_1": 0,
+                "Live it_2": 0,
+                "Live it_3": 1
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": null,
+                "Bottle_3": null,
+                "Garden_1": {
+                    "name": "SmartSys.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/1a868e3770ed4bf4a1589881832286c8_SmartSys.Shape2.png",
+                    "alt_text": "SmartSys.Shape2",
+                    "element_id": "02c334a3-6a6c-4408-bc2d-7c7f50cdc71f",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Garden_2": null,
+                "Garden_3": null,
+                "Live it_1": null,
+                "Live it_2": null,
+                "Live it_3": {
+                    "name": "Garden.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/d6d049584d184fafb5141fab0ba3fc53_Garden.Shape3.png",
+                    "alt_text": "Garden.Shape3",
+                    "element_id": "a8b7fbeb-340b-4df1-bfc3-9643bbc0f6b1",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                }
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.853951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.241,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "fa4863d2-6240-4420-b8ae-0cea79e3a630",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_9",
+            "respondent_id": 1,
+            "task_index": 9,
+            "elements_shown_in_task": {
+                "Bottle_1": 1,
+                "Bottle_2": 0,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 0,
+                "Garden_3": 1,
+                "Live it_1": 0,
+                "Live it_2": 0,
+                "Live it_3": 1
+            },
+            "elements_shown_content": {
+                "Bottle_1": {
+                    "name": "Aura.Shape1",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/9b2b925e583e4201bf1d3731121bc76a_Aura.Shape1.png",
+                    "alt_text": "Aura.Shape1",
+                    "element_id": "c8eff0a2-7b03-4056-b6f2-30951b114d8a",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Bottle_2": null,
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": null,
+                "Garden_3": {
+                    "name": "SmartSys.Shape4",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/32ccdb4da4da4cf6b8059176b48ea713_SmartSys.Shape4.png",
+                    "alt_text": "SmartSys.Shape4",
+                    "element_id": "be3c7b8d-7da3-4378-8948-bbc4e7431a08",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Live it_1": null,
+                "Live it_2": null,
+                "Live it_3": {
+                    "name": "Garden.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/d6d049584d184fafb5141fab0ba3fc53_Garden.Shape3.png",
+                    "alt_text": "Garden.Shape3",
+                    "element_id": "a8b7fbeb-340b-4df1-bfc3-9643bbc0f6b1",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                }
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.761951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.333,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "ba427cd3-880a-4f82-833b-1d846a0392f7",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_10",
+            "respondent_id": 1,
+            "task_index": 10,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 1,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 0,
+                "Garden_3": 1,
+                "Live it_1": 0,
+                "Live it_2": 0,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": {
+                    "name": "Aura.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/f20c18031d32438a9de3901217093062_Aura.Shape2.png",
+                    "alt_text": "Aura.Shape2",
+                    "element_id": "18c17fcb-9035-41e2-86f8-0b4aa9238c8c",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": null,
+                "Garden_3": {
+                    "name": "SmartSys.Shape4",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/32ccdb4da4da4cf6b8059176b48ea713_SmartSys.Shape4.png",
+                    "alt_text": "SmartSys.Shape4",
+                    "element_id": "be3c7b8d-7da3-4378-8948-bbc4e7431a08",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Live it_1": null,
+                "Live it_2": null,
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.906951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.188,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "286ce7cc-3c55-4351-a80a-667239ec4c02",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_11",
+            "respondent_id": 1,
+            "task_index": 11,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 1,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 1,
+                "Garden_3": 0,
+                "Live it_1": 0,
+                "Live it_2": 0,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": {
+                    "name": "Aura.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/f20c18031d32438a9de3901217093062_Aura.Shape2.png",
+                    "alt_text": "Aura.Shape2",
+                    "element_id": "18c17fcb-9035-41e2-86f8-0b4aa9238c8c",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": {
+                    "name": "SmartSys.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1598f6f78f42708d17781d518678e0_SmartSys.Shape3.png",
+                    "alt_text": "SmartSys.Shape3",
+                    "element_id": "e7c0969d-d76f-4396-8c7e-4ed1199fab73",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Garden_3": null,
+                "Live it_1": null,
+                "Live it_2": null,
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.914951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.18,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "c898b0a9-f87b-49ce-89c6-33beb31ef4c8",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_12",
+            "respondent_id": 1,
+            "task_index": 12,
+            "elements_shown_in_task": {
+                "Bottle_1": 1,
+                "Bottle_2": 0,
+                "Bottle_3": 0,
+                "Garden_1": 0,
+                "Garden_2": 0,
+                "Garden_3": 0,
+                "Live it_1": 1,
+                "Live it_2": 0,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": {
+                    "name": "Aura.Shape1",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/9b2b925e583e4201bf1d3731121bc76a_Aura.Shape1.png",
+                    "alt_text": "Aura.Shape1",
+                    "element_id": "c8eff0a2-7b03-4056-b6f2-30951b114d8a",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Bottle_2": null,
+                "Bottle_3": null,
+                "Garden_1": null,
+                "Garden_2": null,
+                "Garden_3": null,
+                "Live it_1": {
+                    "name": "Garden.Shape1",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1871380c41410f8c8dcccfcfaccede_Garden.Shape1.png",
+                    "alt_text": "Garden.Shape1",
+                    "element_id": "38925e25-c60e-4a5b-a858-74b2fd43f007",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                },
+                "Live it_2": null,
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.910951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.184,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "3fd5853b-d78a-4291-9eae-7186e8270703",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_13",
+            "respondent_id": 1,
+            "task_index": 13,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 0,
+                "Bottle_3": 1,
+                "Garden_1": 0,
+                "Garden_2": 0,
+                "Garden_3": 1,
+                "Live it_1": 0,
+                "Live it_2": 1,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": null,
+                "Bottle_3": {
+                    "name": "Aura.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/345e74bbc35742f1b5f2492412a4a27b_Aura.Shape3.png",
+                    "alt_text": "Aura.Shape3",
+                    "element_id": "1ba3c519-0c4b-43e2-854d-50f13cb9d396",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Garden_1": null,
+                "Garden_2": null,
+                "Garden_3": {
+                    "name": "SmartSys.Shape4",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/32ccdb4da4da4cf6b8059176b48ea713_SmartSys.Shape4.png",
+                    "alt_text": "SmartSys.Shape4",
+                    "element_id": "be3c7b8d-7da3-4378-8948-bbc4e7431a08",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Live it_1": null,
+                "Live it_2": {
+                    "name": "Garden.Shape2",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/4386c06a592b4bc49303376d5912bdfa_Garden.Shape2.png",
+                    "alt_text": "Garden.Shape2",
+                    "element_id": "b1a8face-7119-4c11-a900-cf56786c6713",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                },
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.925951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.169,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "37e36075-fafc-4f39-82a5-eb3abcab9e0f",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_14",
+            "respondent_id": 1,
+            "task_index": 14,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 0,
+                "Bottle_3": 1,
+                "Garden_1": 0,
+                "Garden_2": 1,
+                "Garden_3": 0,
+                "Live it_1": 0,
+                "Live it_2": 0,
+                "Live it_3": 1
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": null,
+                "Bottle_3": {
+                    "name": "Aura.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/345e74bbc35742f1b5f2492412a4a27b_Aura.Shape3.png",
+                    "alt_text": "Aura.Shape3",
+                    "element_id": "1ba3c519-0c4b-43e2-854d-50f13cb9d396",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Garden_1": null,
+                "Garden_2": {
+                    "name": "SmartSys.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1598f6f78f42708d17781d518678e0_SmartSys.Shape3.png",
+                    "alt_text": "SmartSys.Shape3",
+                    "element_id": "e7c0969d-d76f-4396-8c7e-4ed1199fab73",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Garden_3": null,
+                "Live it_1": null,
+                "Live it_2": null,
+                "Live it_3": {
+                    "name": "Garden.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/d6d049584d184fafb5141fab0ba3fc53_Garden.Shape3.png",
+                    "alt_text": "Garden.Shape3",
+                    "element_id": "a8b7fbeb-340b-4df1-bfc3-9643bbc0f6b1",
+                    "element_type": "image",
+                    "category_name": "Live it"
+                }
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:28.933951Z",
+            "task_completion_time": "2026-02-13T18:09:29.094951Z",
+            "task_duration_seconds": 0.161,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:29.094951Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "be58fc8e-2af1-4826-b5cf-d7a98f871096",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_15",
+            "respondent_id": 1,
+            "task_index": 15,
+            "elements_shown_in_task": {
+                "Bottle_1": 0,
+                "Bottle_2": 0,
+                "Bottle_3": 1,
+                "Garden_1": 0,
+                "Garden_2": 1,
+                "Garden_3": 0,
+                "Live it_1": 0,
+                "Live it_2": 0,
+                "Live it_3": 0
+            },
+            "elements_shown_content": {
+                "Bottle_1": null,
+                "Bottle_2": null,
+                "Bottle_3": {
+                    "name": "Aura.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/345e74bbc35742f1b5f2492412a4a27b_Aura.Shape3.png",
+                    "alt_text": "Aura.Shape3",
+                    "element_id": "1ba3c519-0c4b-43e2-854d-50f13cb9d396",
+                    "element_type": "image",
+                    "category_name": "Bottle"
+                },
+                "Garden_1": null,
+                "Garden_2": {
+                    "name": "SmartSys.Shape3",
+                    "content": "https://tikuntechwebimages.blob.core.windows.net/mindsurvey/studies/6d1598f6f78f42708d17781d518678e0_SmartSys.Shape3.png",
+                    "alt_text": "SmartSys.Shape3",
+                    "element_id": "e7c0969d-d76f-4396-8c7e-4ed1199fab73",
+                    "element_type": "image",
+                    "category_name": "Garden"
+                },
+                "Garden_3": null,
+                "Live it_1": null,
+                "Live it_2": null,
+                "Live it_3": null
+            },
+            "task_type": "grid",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.729952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.06,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "98da8fe9-2afa-4515-9ea8-a96758128226",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_0",
+            "respondent_id": 1,
+            "task_index": 16,
+            "elements_shown_in_task": {
+                "Lion_1": 1,
+                "Lion_2": 0,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 1,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 0,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": {
+                    "name": "Life can be in danger",
+                    "content": "Life can be in danger",
+                    "alt_text": "Life can be in danger",
+                    "element_id": "75cc7663-b44c-44ee-89c5-1b0ece0dc3db",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Lion_2": null,
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": {
+                    "name": "This is Tiger",
+                    "content": "This is Tiger",
+                    "alt_text": "This is Tiger",
+                    "element_id": "4b3c2f3e-2b9c-418d-817c-dc5a06475b9f",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": null,
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.641952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.148,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "43693ea6-fa41-4600-bc9e-a1becd7e3519",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_1",
+            "respondent_id": 1,
+            "task_index": 17,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 1,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 0,
+                "Brush_3": 0,
+                "Animal_1": 1,
+                "Animal_2": 0,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": {
+                    "name": "Your life is your way",
+                    "content": "Your life is your way",
+                    "alt_text": "Your life is your way",
+                    "element_id": "61cbcca1-f6e4-400f-8811-e8be5d002c7e",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": null,
+                "Brush_3": null,
+                "Animal_1": {
+                    "name": "This is DOg",
+                    "content": "This is DOg",
+                    "alt_text": "This is DOg",
+                    "element_id": "6980fa5c-e0d8-4558-96f3-746e88a6e631",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                },
+                "Animal_2": null,
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.651952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.138,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "49421591-ebf3-464c-8502-acc7340bc0e8",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_2",
+            "respondent_id": 1,
+            "task_index": 18,
+            "elements_shown_in_task": {
+                "Lion_1": 1,
+                "Lion_2": 0,
+                "Lion_3": 0,
+                "Brush_1": 1,
+                "Brush_2": 0,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 1,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": {
+                    "name": "Life can be in danger",
+                    "content": "Life can be in danger",
+                    "alt_text": "Life can be in danger",
+                    "element_id": "75cc7663-b44c-44ee-89c5-1b0ece0dc3db",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Lion_2": null,
+                "Lion_3": null,
+                "Brush_1": {
+                    "name": "This is lion",
+                    "content": "This is lion",
+                    "alt_text": "This is lion",
+                    "element_id": "860b6bf5-809e-4d57-8fe3-e43e019dd61a",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Brush_2": null,
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": {
+                    "name": "This is life",
+                    "content": "This is life",
+                    "alt_text": "This is life",
+                    "element_id": "ce041153-ff93-4e48-814b-a7b65bec3400",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                },
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.646952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.143,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "5cb491ed-0fdf-414c-bc94-8dd88b8120ac",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_3",
+            "respondent_id": 1,
+            "task_index": 19,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 0,
+                "Lion_3": 0,
+                "Brush_1": 1,
+                "Brush_2": 0,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 0,
+                "Animal_3": 1
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": null,
+                "Lion_3": null,
+                "Brush_1": {
+                    "name": "This is lion",
+                    "content": "This is lion",
+                    "alt_text": "This is lion",
+                    "element_id": "860b6bf5-809e-4d57-8fe3-e43e019dd61a",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Brush_2": null,
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": null,
+                "Animal_3": {
+                    "name": "Life is like wind",
+                    "content": "Life is like wind",
+                    "alt_text": "Life is like wind",
+                    "element_id": "50ffce41-a698-4317-bc53-781a3db8e612",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                }
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.632952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.157,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "5c1d3b9c-af4d-4b40-9560-6164d03a875d",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_4",
+            "respondent_id": 1,
+            "task_index": 20,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 0,
+                "Lion_3": 1,
+                "Brush_1": 0,
+                "Brush_2": 0,
+                "Brush_3": 0,
+                "Animal_1": 1,
+                "Animal_2": 0,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": null,
+                "Lion_3": {
+                    "name": "Nice comment",
+                    "content": "Nice comment",
+                    "alt_text": "Nice comment",
+                    "element_id": "2a1144eb-174d-4095-a3b8-d840b3f52526",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Brush_1": null,
+                "Brush_2": null,
+                "Brush_3": null,
+                "Animal_1": {
+                    "name": "This is DOg",
+                    "content": "This is DOg",
+                    "alt_text": "This is DOg",
+                    "element_id": "6980fa5c-e0d8-4558-96f3-746e88a6e631",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                },
+                "Animal_2": null,
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.659952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.13,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "010accce-38d6-4bc1-93a6-a2c9152f3522",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_5",
+            "respondent_id": 1,
+            "task_index": 21,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 1,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 0,
+                "Brush_3": 1,
+                "Animal_1": 0,
+                "Animal_2": 0,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": {
+                    "name": "Your life is your way",
+                    "content": "Your life is your way",
+                    "alt_text": "Your life is your way",
+                    "element_id": "61cbcca1-f6e4-400f-8811-e8be5d002c7e",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": null,
+                "Brush_3": {
+                    "name": "This is cat",
+                    "content": "This is cat",
+                    "alt_text": "This is cat",
+                    "element_id": "14bf6a78-82d0-4230-bcf1-88e42ecd4639",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Animal_1": null,
+                "Animal_2": null,
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.654952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.135,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "0e31ee68-7f9f-4a91-afeb-c6ef48abd42c",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_6",
+            "respondent_id": 1,
+            "task_index": 22,
+            "elements_shown_in_task": {
+                "Lion_1": 1,
+                "Lion_2": 0,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 0,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 1,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": {
+                    "name": "Life can be in danger",
+                    "content": "Life can be in danger",
+                    "alt_text": "Life can be in danger",
+                    "element_id": "75cc7663-b44c-44ee-89c5-1b0ece0dc3db",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Lion_2": null,
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": null,
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": {
+                    "name": "This is life",
+                    "content": "This is life",
+                    "alt_text": "This is life",
+                    "element_id": "ce041153-ff93-4e48-814b-a7b65bec3400",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                },
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.689952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.1,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "7c1aef7c-3d01-48a9-9512-1d6ffa9ccf5e",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_7",
+            "respondent_id": 1,
+            "task_index": 23,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 1,
+                "Lion_3": 0,
+                "Brush_1": 1,
+                "Brush_2": 0,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 0,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": {
+                    "name": "Your life is your way",
+                    "content": "Your life is your way",
+                    "alt_text": "Your life is your way",
+                    "element_id": "61cbcca1-f6e4-400f-8811-e8be5d002c7e",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Lion_3": null,
+                "Brush_1": {
+                    "name": "This is lion",
+                    "content": "This is lion",
+                    "alt_text": "This is lion",
+                    "element_id": "860b6bf5-809e-4d57-8fe3-e43e019dd61a",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Brush_2": null,
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": null,
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.657952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.132,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "3492ffbe-3277-4754-84e7-13813e232e2c",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_8",
+            "respondent_id": 1,
+            "task_index": 24,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 0,
+                "Lion_3": 1,
+                "Brush_1": 1,
+                "Brush_2": 0,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 0,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": null,
+                "Lion_3": {
+                    "name": "Nice comment",
+                    "content": "Nice comment",
+                    "alt_text": "Nice comment",
+                    "element_id": "2a1144eb-174d-4095-a3b8-d840b3f52526",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Brush_1": {
+                    "name": "This is lion",
+                    "content": "This is lion",
+                    "alt_text": "This is lion",
+                    "element_id": "860b6bf5-809e-4d57-8fe3-e43e019dd61a",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Brush_2": null,
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": null,
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.654952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.135,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "71f96385-79db-4ee3-9913-da7774937ab7",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_9",
+            "respondent_id": 1,
+            "task_index": 25,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 0,
+                "Lion_3": 1,
+                "Brush_1": 0,
+                "Brush_2": 0,
+                "Brush_3": 1,
+                "Animal_1": 1,
+                "Animal_2": 0,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": null,
+                "Lion_3": {
+                    "name": "Nice comment",
+                    "content": "Nice comment",
+                    "alt_text": "Nice comment",
+                    "element_id": "2a1144eb-174d-4095-a3b8-d840b3f52526",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Brush_1": null,
+                "Brush_2": null,
+                "Brush_3": {
+                    "name": "This is cat",
+                    "content": "This is cat",
+                    "alt_text": "This is cat",
+                    "element_id": "14bf6a78-82d0-4230-bcf1-88e42ecd4639",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Animal_1": {
+                    "name": "This is DOg",
+                    "content": "This is DOg",
+                    "alt_text": "This is DOg",
+                    "element_id": "6980fa5c-e0d8-4558-96f3-746e88a6e631",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                },
+                "Animal_2": null,
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.635952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.154,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "d267084e-4479-48f6-8e21-6df80cfb3bba",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_10",
+            "respondent_id": 1,
+            "task_index": 26,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 0,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 0,
+                "Brush_3": 1,
+                "Animal_1": 0,
+                "Animal_2": 1,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": null,
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": null,
+                "Brush_3": {
+                    "name": "This is cat",
+                    "content": "This is cat",
+                    "alt_text": "This is cat",
+                    "element_id": "14bf6a78-82d0-4230-bcf1-88e42ecd4639",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Animal_1": null,
+                "Animal_2": {
+                    "name": "This is life",
+                    "content": "This is life",
+                    "alt_text": "This is life",
+                    "element_id": "ce041153-ff93-4e48-814b-a7b65bec3400",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                },
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.671952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.118,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "bda2a7b4-ddc6-436d-bb49-5ba3fcfaa2e8",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_11",
+            "respondent_id": 1,
+            "task_index": 27,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 0,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 1,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 1,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": null,
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": {
+                    "name": "This is Tiger",
+                    "content": "This is Tiger",
+                    "alt_text": "This is Tiger",
+                    "element_id": "4b3c2f3e-2b9c-418d-817c-dc5a06475b9f",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": {
+                    "name": "This is life",
+                    "content": "This is life",
+                    "alt_text": "This is life",
+                    "element_id": "ce041153-ff93-4e48-814b-a7b65bec3400",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                },
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.651952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.138,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "c3cd521a-9517-40bc-94ae-871c8919da99",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_12",
+            "respondent_id": 1,
+            "task_index": 28,
+            "elements_shown_in_task": {
+                "Lion_1": 1,
+                "Lion_2": 0,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 0,
+                "Brush_3": 0,
+                "Animal_1": 1,
+                "Animal_2": 0,
+                "Animal_3": 0
+            },
+            "elements_shown_content": {
+                "Lion_1": {
+                    "name": "Life can be in danger",
+                    "content": "Life can be in danger",
+                    "alt_text": "Life can be in danger",
+                    "element_id": "75cc7663-b44c-44ee-89c5-1b0ece0dc3db",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Lion_2": null,
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": null,
+                "Brush_3": null,
+                "Animal_1": {
+                    "name": "This is DOg",
+                    "content": "This is DOg",
+                    "alt_text": "This is DOg",
+                    "element_id": "6980fa5c-e0d8-4558-96f3-746e88a6e631",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                },
+                "Animal_2": null,
+                "Animal_3": null
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.702952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.087,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "c6be9b12-196d-4887-b315-35ff7a3e06db",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_13",
+            "respondent_id": 1,
+            "task_index": 29,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 1,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 0,
+                "Brush_3": 1,
+                "Animal_1": 0,
+                "Animal_2": 0,
+                "Animal_3": 1
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": {
+                    "name": "Your life is your way",
+                    "content": "Your life is your way",
+                    "alt_text": "Your life is your way",
+                    "element_id": "61cbcca1-f6e4-400f-8811-e8be5d002c7e",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": null,
+                "Brush_3": {
+                    "name": "This is cat",
+                    "content": "This is cat",
+                    "alt_text": "This is cat",
+                    "element_id": "14bf6a78-82d0-4230-bcf1-88e42ecd4639",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Animal_1": null,
+                "Animal_2": null,
+                "Animal_3": {
+                    "name": "Life is like wind",
+                    "content": "Life is like wind",
+                    "alt_text": "Life is like wind",
+                    "element_id": "50ffce41-a698-4317-bc53-781a3db8e612",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                }
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:32.679952Z",
+            "task_completion_time": "2026-02-13T18:09:32.789952Z",
+            "task_duration_seconds": 0.11,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:32.789952Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "543bdb79-e9e5-4c2a-b862-c81b77285699",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_14",
+            "respondent_id": 1,
+            "task_index": 30,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 0,
+                "Lion_3": 1,
+                "Brush_1": 0,
+                "Brush_2": 1,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 0,
+                "Animal_3": 1
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": null,
+                "Lion_3": {
+                    "name": "Nice comment",
+                    "content": "Nice comment",
+                    "alt_text": "Nice comment",
+                    "element_id": "2a1144eb-174d-4095-a3b8-d840b3f52526",
+                    "element_type": "text",
+                    "category_name": "Lion"
+                },
+                "Brush_1": null,
+                "Brush_2": {
+                    "name": "This is Tiger",
+                    "content": "This is Tiger",
+                    "alt_text": "This is Tiger",
+                    "element_id": "4b3c2f3e-2b9c-418d-817c-dc5a06475b9f",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": null,
+                "Animal_3": {
+                    "name": "Life is like wind",
+                    "content": "Life is like wind",
+                    "alt_text": "Life is like wind",
+                    "element_id": "50ffce41-a698-4317-bc53-781a3db8e612",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                }
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:34.806987Z",
+            "task_completion_time": "2026-02-13T18:09:34.956987Z",
+            "task_duration_seconds": 0.15,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:34.956987Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "9f686719-edb4-40b4-ad89-1272363c0b24",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "task_id": "1_15",
+            "respondent_id": 1,
+            "task_index": 31,
+            "elements_shown_in_task": {
+                "Lion_1": 0,
+                "Lion_2": 0,
+                "Lion_3": 0,
+                "Brush_1": 0,
+                "Brush_2": 1,
+                "Brush_3": 0,
+                "Animal_1": 0,
+                "Animal_2": 0,
+                "Animal_3": 1
+            },
+            "elements_shown_content": {
+                "Lion_1": null,
+                "Lion_2": null,
+                "Lion_3": null,
+                "Brush_1": null,
+                "Brush_2": {
+                    "name": "This is Tiger",
+                    "content": "This is Tiger",
+                    "alt_text": "This is Tiger",
+                    "element_id": "4b3c2f3e-2b9c-418d-817c-dc5a06475b9f",
+                    "element_type": "text",
+                    "category_name": "Brush"
+                },
+                "Brush_3": null,
+                "Animal_1": null,
+                "Animal_2": null,
+                "Animal_3": {
+                    "name": "Life is like wind",
+                    "content": "Life is like wind",
+                    "alt_text": "Life is like wind",
+                    "element_id": "50ffce41-a698-4317-bc53-781a3db8e612",
+                    "element_type": "text",
+                    "category_name": "Animal"
+                }
+            },
+            "task_type": "text",
+            "task_context": null,
+            "task_start_time": "2026-02-13T18:09:34.828987Z",
+            "task_completion_time": "2026-02-13T18:09:34.956987Z",
+            "task_duration_seconds": 0.128,
+            "rating_given": 5,
+            "rating_timestamp": "2026-02-13T18:09:34.956987Z",
+            "elements_shown": null,
+            "layers_shown_in_task": null,
+            "id": "eac04d16-2e0d-43e5-a581-94daa6456d7b",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        }
+    ],
+    "classification_answers": [
+        {
+            "question_id": "8c1cbc00-8",
+            "question_text": "Do you like deo",
+            "answer": "No",
+            "answer_timestamp": "2026-02-13T18:09:12.861000Z",
+            "time_spent_seconds": 1.0,
+            "id": "991dc6a8-8fc5-4ef9-be83-649f7663190d",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "question_id": "d37a7e33-3",
+            "question_text": "Which fragrance do you prefer",
+            "answer": "Woody",
+            "answer_timestamp": "2026-02-13T18:09:13.924000Z",
+            "time_spent_seconds": 3.0,
+            "id": "2a5201ce-0e63-409f-930e-16b3ce1b32df",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        },
+        {
+            "question_id": "14f3ec50-e",
+            "question_text": "Which bottle do you prefer",
+            "answer": "Plastic",
+            "answer_timestamp": "2026-02-13T18:09:14.896000Z",
+            "time_spent_seconds": 4.0,
+            "id": "3e9e9862-22be-41d9-8add-ca6116d4265a",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a"
+        }
+    ],
+    "element_interactions": [
+        {
+            "element_id": "5",
+            "view_time_seconds": 0.0,
+            "hover_count": 1,
+            "click_count": 1,
+            "first_view_time": "2026-02-13T18:09:19.481000Z",
+            "last_view_time": "2026-02-13T18:09:23.343000Z",
+            "id": "771fd96e-c024-4ff5-92e5-5d94f238c175",
+            "study_response_id": "ab837497-9435-439b-9ffe-4d0364152f5a",
+            "task_session_id": null
+        }
+    ],
+    "task_sessions": [],
+    "study_layers": [],
+    "background_image_url": null
+}

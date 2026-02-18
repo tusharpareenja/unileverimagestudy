@@ -61,6 +61,14 @@ async def health_check():
 
 @app.on_event("startup")
 async def on_startup():
+    # Ensure progress and info logs (e.g. synthetic respondent job) appear in terminal
+    logging.basicConfig(level=logging.INFO)
+    app_logger = logging.getLogger("app")
+    app_logger.setLevel(logging.INFO)
+    if not app_logger.handlers:
+        h = logging.StreamHandler()
+        h.setLevel(logging.INFO)
+        app_logger.addHandler(h)
     print("Starting application startup...")
     # Initialize Cloudinary once
     init_cloudinary()
