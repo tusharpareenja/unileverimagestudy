@@ -166,49 +166,62 @@ class BackgroundTaskService:
             else:
                 raise ValueError(f"Unsupported study type: {study_type}")
             
-            # Save results (this commits inside)
-            await self._save_results(job, payload, result, db)
-            
-            # Auto-launch study
-            await self._launch_study(job, payload, db)
-            
-            # Finalize job
-            # Refresh to be safe
-            job = db.query(Job).filter(Job.job_id == job_id).first()
-            job.status = JobStatus.COMPLETED
-            job.completed_at = datetime.utcnow()
-            job.progress = 100.0
-            job.message = "Task generation completed successfully"
-            job.progress = 100.0
-            job.message = "Task generation completed successfully"
-            # User requested to keep result null and not store any data
-            job.result = None
-            
-            db.commit()
-            logger.info(f"Job {job_id} completed successfully")
+            # Use a fresh DB session for save phase (original session may be stale after long-running generation)
+            db_fresh = SessionLocal()
+            try:
+                await self._save_results(job, payload, result, db_fresh)
+                await self._launch_study(job, payload, db_fresh)
+                job_fresh = db_fresh.query(Job).filter(Job.job_id == job_id).first()
+                if job_fresh:
+                    job_fresh.status = JobStatus.COMPLETED
+                    job_fresh.completed_at = datetime.utcnow()
+                    job_fresh.progress = 100.0
+                    job_fresh.message = "Task generation completed successfully"
+                    job_fresh.result = None
+                    db_fresh.commit()
+                logger.info(f"Job {job_id} completed successfully")
+            finally:
+                db_fresh.close()
             
         except RuntimeError as e:
-            db.rollback()
-            # Handle specific preflight errors
-            job = db.query(Job).filter(Job.job_id == job_id).first()
-            job.status = JobStatus.FAILED
-            job.completed_at = datetime.utcnow()
-            job.error = str(e)
-            job.message = f"Study configuration error: {str(e)}"
-            db.commit()
-            logger.error(f"Job {job_id} failed due to study configuration: {e}")
-            
+            # Use fresh session in case original db connection is stale
+            db_err = SessionLocal()
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            try:
+                job_err = db_err.query(Job).filter(Job.job_id == job_id).first()
+                if job_err:
+                    job_err.status = JobStatus.FAILED
+                    job_err.completed_at = datetime.utcnow()
+                    job_err.error = str(e)
+                    job_err.message = f"Study configuration error: {str(e)}"
+                    db_err.commit()
+                logger.error(f"Job {job_id} failed due to study configuration: {e}")
+            finally:
+                db_err.close()
+
         except Exception as e:
-            db.rollback()
-            job = db.query(Job).filter(Job.job_id == job_id).first()
-            job.status = JobStatus.FAILED
-            job.completed_at = datetime.utcnow()
-            job.error = str(e)
-            job.message = f"Task generation failed: {str(e)}"
-            db.commit()
-            logger.error(f"Job {job_id} failed: {e}")
-            import traceback
-            logger.error(f"Job {job_id} traceback: {traceback.format_exc()}")
+            # Use fresh session in case original db connection is stale (e.g. after long run)
+            db_err = SessionLocal()
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            try:
+                job_err = db_err.query(Job).filter(Job.job_id == job_id).first()
+                if job_err:
+                    job_err.status = JobStatus.FAILED
+                    job_err.completed_at = datetime.utcnow()
+                    job_err.error = str(e)
+                    job_err.message = f"Task generation failed: {str(e)}"
+                    db_err.commit()
+                logger.error(f"Job {job_id} failed: {e}")
+                import traceback
+                logger.error(f"Job {job_id} traceback: {traceback.format_exc()}")
+            finally:
+                db_err.close()
             
         finally:
             if job_id in self.running_tasks:
