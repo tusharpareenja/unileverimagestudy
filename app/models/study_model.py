@@ -62,6 +62,11 @@ class Study(Base):
     # Shuffling config
     toggle_shuffle = Column(Boolean, nullable=False, server_default=expression.false(), default=False)
 
+    # Optional product keys (name + percentage per key), e.g. [{"name": "Gourmand", "percentage": 50}, ...]
+    product_keys = Column(JSONB, nullable=True)
+    # Optional product ID (e.g. for station/product linking)
+    product_id = Column(String(100), nullable=True)
+
     # Relations
     creator = relationship("User", back_populates="studies", lazy="selectin", passive_deletes=True)
     project = relationship("Project", back_populates="studies", lazy="selectin", passive_deletes=True)

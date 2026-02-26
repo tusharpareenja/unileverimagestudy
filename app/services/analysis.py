@@ -850,6 +850,24 @@ class StudyAnalysisService:
                 seen.add(c)
         return out
 
+    def get_t_overall_scores(self, df: pd.DataFrame, study_data: Dict[str, Any]) -> Dict[str, int]:
+        """
+        Return T Overall score per element for use in project-level export.
+        Uses same logic as generate_report: resolve element cols, run panel regressions (TOP), mean per element.
+        Returns dict mapping element column name -> integer score. Empty dict if no elements or df empty.
+        """
+        if df is None or df.empty:
+            return {}
+        element_cols = self._resolve_element_cols(study_data, df)
+        if not element_cols:
+            return {}
+        for col in element_cols:
+            if col not in df.columns:
+                return {}
+        coef_table_T = self._run_panel_regressions(df, element_cols, "TOP")
+        element_means_T = coef_table_T[element_cols].mean(axis=0).round().astype(int)
+        return dict(zip(element_cols, element_means_T.tolist()))
+
     def _filter_df_by_filters(
         self,
         df: pd.DataFrame,

@@ -306,6 +306,8 @@ def create_study(
         phase_order=payload.phase_order,
         toggle_shuffle=payload.toggle_shuffle,
         last_step=payload.last_step or 1,
+        product_keys=[k.model_dump() for k in payload.product_keys] if getattr(payload, 'product_keys', None) else None,
+        product_id=getattr(payload, 'product_id', None),
     )
     db.add(study)
     # UUID is already assigned above; avoid early flush to reduce DB round-trips
@@ -455,7 +457,9 @@ def create_study_minimal(
     background: str,
     language: str = 'en',
     last_step: int = 1,
-    project_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None,
+    product_keys: Optional[List[Dict[str, Any]]] = None,
+    product_id: Optional[str] = None,
 ) -> UUID:
     """
     Ultra-fast study creation with only essential fields.
@@ -496,6 +500,8 @@ def create_study_minimal(
         share_url=_build_share_url(settings.BASE_URL, str(study_id)),
         toggle_shuffle=False,
         last_step=last_step,
+        product_keys=product_keys,
+        product_id=product_id,
     )
 
     db.execute(stmt)
@@ -585,6 +591,12 @@ def copy_study(db: Session, study_id: UUID, user_id: UUID, project_id: Optional[
         abandoned_responses=0,
         last_step=6,
         jobid=None,
+        # Copy product keys with names only; use percentage=0 so response schema validates
+        product_keys=(
+            [{"name": k.get("name"), "percentage": 0} for k in (source.product_keys or []) if isinstance(k, dict) and k.get("name")]
+            if source.product_keys else None
+        ),
+        product_id=None,
     )
     db.add(new_study)
     db.flush()
@@ -686,6 +698,64 @@ def copy_study(db: Session, study_id: UUID, user_id: UUID, project_id: Optional[
     return new_study
 
 
+def build_study_data_for_analysis(study: Study) -> Dict[str, Any]:
+    """
+    Build the study_data dict expected by StudyAnalysisService (categories, elements, classification_questions).
+    Handles layer vs grid/text/hybrid study types. Study must have categories, elements, layers, classification_questions loaded.
+    """
+    study_data: Dict[str, Any] = {
+        "title": study.title,
+        "study_type": study.study_type,
+        "background": getattr(study, "background_image_url", None) or "",
+        "language": study.language,
+        "launched_at": study.created_at.isoformat() if study.created_at else "",
+        "categories": [],
+        "elements": [],
+        "classification_questions": [],
+    }
+    if str(study.study_type) == "layer":
+        sorted_layers = sorted(study.layers or [], key=lambda x: x.order)
+        for layer in sorted_layers:
+            cat_id = str(layer.layer_id)
+            study_data["categories"].append({"id": cat_id, "name": layer.name, "order": layer.order})
+            for img in sorted(layer.images or [], key=lambda x: x.order):
+                study_data["elements"].append({
+                    "id": str(img.image_id),
+                    "name": img.name,
+                    "content": img.url,
+                    "category_id": cat_id,
+                    "category": {"name": layer.name, "order": layer.order},
+                })
+    else:
+        elements_by_cat = {}
+        for el in study.elements or []:
+            cid = getattr(el, "category_id", None)
+            if cid not in elements_by_cat:
+                elements_by_cat[cid] = []
+            elements_by_cat[cid].append(el)
+        for cat in study.categories or []:
+            study_data["categories"].append({
+                "id": str(cat.id),
+                "name": cat.name,
+                "order": cat.order,
+            })
+            for el in elements_by_cat.get(cat.id, []):
+                study_data["elements"].append({
+                    "id": str(el.id),
+                    "name": el.name,
+                    "content": el.content,
+                    "category_id": str(cat.id),
+                    "category": {"name": cat.name, "order": cat.order},
+                })
+    for q in study.classification_questions or []:
+        study_data["classification_questions"].append({
+            "question_id": q.question_id,
+            "question_text": q.question_text,
+            "answer_options": q.answer_options,
+        })
+    return study_data
+
+
 def get_study_exists(db: Session, study_id: UUID, owner_id: UUID) -> bool:
     """Lightweight check if study exists and is owned by user."""
     stmt = select(Study.id).where(Study.id == study_id, Study.creator_id == owner_id)
@@ -762,6 +832,8 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
             Study.share_token,
             Study.orientation_text,
             Study.language,
+            Study.product_keys,
+            Study.product_id,
         ).where(Study.id == study_id)
     ).first()
     if not row:
@@ -804,6 +876,8 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
         status=row.status,
         orientation_text=row.orientation_text,
         language=row.language,
+        product_keys=row.product_keys,
+        product_id=row.product_id,
     )
 
 def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str, Any]:
@@ -1136,6 +1210,12 @@ def update_study(
     if payload.project_id is not None:
         study.project_id = payload.project_id
 
+    if payload.product_keys is not None:
+        study.product_keys = [k.model_dump() for k in payload.product_keys]
+
+    if payload.product_id is not None:
+        study.product_id = payload.product_id
+
     # Replace children collections if provided
     if payload.elements is not None:
         # Only valid for grid, text, and hybrid
@@ -1373,6 +1453,12 @@ def update_study_fast(
     if payload.phase_order is not None:
         study.phase_order = payload.phase_order
 
+    if payload.product_keys is not None:
+        study.product_keys = [k.model_dump() for k in payload.product_keys]
+
+    if payload.product_id is not None:
+        study.product_id = payload.product_id
+
     # For fast updates, we only handle simple scalar fields
     # Complex operations (elements, layers, classification_questions) fall back to full loading
     if payload.elements is not None or payload.study_layers is not None:
@@ -1437,6 +1523,12 @@ def update_and_launch_study_fast(
     
     if payload.phase_order is not None:
         study.phase_order = payload.phase_order
+
+    if payload.product_keys is not None:
+        study.product_keys = [k.model_dump() for k in payload.product_keys]
+
+    if payload.product_id is not None:
+        study.product_id = payload.product_id
 
     # Handle complex updates that require full loading
     if payload.elements is not None or payload.study_layers is not None or payload.classification_questions is not None:

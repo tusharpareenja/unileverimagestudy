@@ -1,9 +1,29 @@
 # app/schemas/project_schema.py
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field
+
+
+class ValidateProductKey(BaseModel):
+    """Key name and percentage for uniqueness check."""
+    name: str = Field(..., max_length=200)
+    percentage: float = Field(..., ge=0, le=100)
+
+
+class ValidateProductRequest(BaseModel):
+    """Request body for validating product_id and key combination uniqueness within a project."""
+    product_id: Optional[str] = Field(None, max_length=100)
+    product_keys: Optional[List[ValidateProductKey]] = None
+    study_id: Optional[UUID] = Field(None, description="Exclude this study from the check (e.g. when editing the same study)")
+
+
+class ValidateProductResponse(BaseModel):
+    """Response: valid if neither product_id nor key combination exists in any study in the project."""
+    valid: bool
+    product_id_taken: bool = False
+    key_combination_taken: bool = False
 
 
 class ProjectCreate(BaseModel):

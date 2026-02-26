@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, HTTPException, status, Body
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Body, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -232,6 +232,8 @@ def _ensure_study_exists(payload: GenerateTasksRequest, db: Session, current_use
                 elements=payload.elements,
                 study_layers=payload.study_layers,
                 classification_questions=payload.classification_questions,
+                product_keys=getattr(payload, 'product_keys', None),
+                product_id=getattr(payload, 'product_id', None),
             ),
             base_url_for_share=settings.BASE_URL,
         )
@@ -279,6 +281,7 @@ def create_study_minimal_endpoint(
     The study is created in 'draft' status with default values that can be updated later.
     Use PUT /studies/{study_id} to add remaining details like main_question, elements, etc.
     """
+    product_keys_list = [k.model_dump() for k in payload.product_keys] if getattr(payload, 'product_keys', None) else None
     study_id = study_service.create_study_minimal(
         db=db,
         creator_id=current_user.id,
@@ -287,6 +290,8 @@ def create_study_minimal_endpoint(
         language=payload.language,
         last_step=payload.last_step or 1,
         project_id=getattr(payload, 'project_id', None),
+        product_keys=product_keys_list,
+        product_id=getattr(payload, 'product_id', None),
     )
     return StudyCreateMinimalResponse(id=study_id)
 
@@ -354,7 +359,18 @@ def list_studies_endpoint(
     per_page: int = Query(10, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    response: Response = None,
 ):
+    """
+    List studies for the current user with live response counts.
+    Response includes total_responses, completed_responses, completion_rate, etc.
+    Clients should replace any cached studies list (e.g. in local storage) with this response
+    so cached data does not show stale zeros.
+    """
+    # Prevent caching so clients always get fresh counts (avoids stale zeros in cached/local storage)
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
     rows, _total = study_service.list_studies(
         db=db,
         owner_id=current_user.id,

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.core.dependencies import get_current_active_user
+from app.core.domain import is_unilever_domain
 from app.db.session import get_db
 from app.models.user_model import User
 from app.models.study_model import Study, StudyMember
@@ -937,11 +938,12 @@ async def export_study_analysis(
 
     if not is_authorized:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
+    unilever_format = is_unilever_domain(current_user.email or "")
+
     # 1. Get DataFrame
     response_service = StudyResponseService(db)
-    df = response_service.get_study_dataframe(study_id)
-    print(df)
+    df = response_service.get_study_dataframe(study_id, unilever_format=unilever_format)
     
         
     # 2. Get Study Data (JSON)
@@ -1100,11 +1102,13 @@ async def export_study_analysis_json(
 
     if not is_authorized:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
+    unilever_format = is_unilever_domain(current_user.email or "")
+
     # 1. Get DataFrame
     response_service = StudyResponseService(db)
-    df = response_service.get_study_dataframe(study_id)
-    
+    df = response_service.get_study_dataframe(study_id, unilever_format=unilever_format)
+
     # 2. Build study_data dict from the ORM object
     study_data = {
         "title": study_obj.title,
@@ -1173,20 +1177,44 @@ async def export_study_analysis_json(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to generate JSON analysis report: {str(e)}")
     
-    # Sanitize NaN/Inf values that are not JSON compliant
+    # Sanitize NaN/Inf and numpy types so response is JSON-serializable
     import math
+    import numpy as np
+
+    def _json_scalar(val):
+        """Convert numpy/float to JSON-serializable scalar; keys must be str/int."""
+        if val is None:
+            return None
+        if isinstance(val, (np.integer,)):
+            return int(val)
+        if isinstance(val, (np.floating,)):
+            f = float(val)
+            return None if (math.isnan(f) or math.isinf(f)) else f
+        if isinstance(val, (np.bool_,)):
+            return bool(val)
+        if isinstance(val, float):
+            return None if (math.isnan(val) or math.isinf(val)) else val
+        return val
+
     def sanitize_for_json(obj):
+        if obj is None:
+            return None
         if isinstance(obj, dict):
-            return {k: sanitize_for_json(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
+            out = {}
+            for k, v in obj.items():
+                safe_k = _json_scalar(k) if not isinstance(k, (str, type(None))) else k
+                if safe_k is None and k is not None:
+                    safe_k = str(k)
+                out[safe_k] = sanitize_for_json(v)
+            return out
+        if isinstance(obj, list):
             return [sanitize_for_json(item) for item in obj]
-        elif isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
-            return obj
-        else:
-            return obj
-    
+        if isinstance(obj, (np.integer, np.floating, np.bool_)):
+            return _json_scalar(obj)
+        if isinstance(obj, float):
+            return _json_scalar(obj)
+        return obj
+
     return sanitize_for_json(json_report)
 
 
@@ -1282,8 +1310,9 @@ async def filter_study_regression_report(
     if not is_authorized:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    unilever_format = is_unilever_domain(current_user.email or "")
     response_service = StudyResponseService(db)
-    df = response_service.get_study_dataframe(study_id)
+    df = response_service.get_study_dataframe(study_id, unilever_format=unilever_format)
 
     study_data = {
         "title": study_obj.title,
@@ -1444,17 +1473,40 @@ async def filter_study_regression_report(
             # Don't fail the request if save fails
 
     import math
+    import numpy as np
+
+    def _json_scalar(val):
+        if val is None:
+            return None
+        if isinstance(val, (np.integer,)):
+            return int(val)
+        if isinstance(val, (np.floating,)):
+            f = float(val)
+            return None if (math.isnan(f) or math.isinf(f)) else f
+        if isinstance(val, (np.bool_,)):
+            return bool(val)
+        if isinstance(val, float):
+            return None if (math.isnan(val) or math.isinf(val)) else val
+        return val
+
     def sanitize_for_json(obj):
+        if obj is None:
+            return None
         if isinstance(obj, dict):
-            return {k: sanitize_for_json(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
+            out = {}
+            for k, v in obj.items():
+                safe_k = _json_scalar(k) if not isinstance(k, (str, type(None))) else k
+                if safe_k is None and k is not None:
+                    safe_k = str(k)
+                out[safe_k] = sanitize_for_json(v)
+            return out
+        if isinstance(obj, list):
             return [sanitize_for_json(item) for item in obj]
-        elif isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
-            return obj
-        else:
-            return obj
+        if isinstance(obj, (np.integer, np.floating, np.bool_)):
+            return _json_scalar(obj)
+        if isinstance(obj, float):
+            return _json_scalar(obj)
+        return obj
 
     return sanitize_for_json(report)
 
