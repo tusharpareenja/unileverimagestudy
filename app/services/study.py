@@ -2023,7 +2023,8 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
     # Ultra-fast raw SQL query - only essential fields
     query = text("""
         SELECT id, title, status, study_type, created_at, background, 
-               main_question, orientation_text, rating_scale, iped_parameters, language, toggle_shuffle
+               main_question, orientation_text, rating_scale, iped_parameters, language, toggle_shuffle,
+               product_id, product_keys
         FROM studies 
         WHERE id = :study_id
     """)
@@ -2086,7 +2087,7 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         count_result = db.execute(layer_image_count_query, {"study_id": study_id}).first()
         element_count = count_result.count if count_result else 0
     
-    return {
+    out = {
         "id": result.id,
         "title": result.title,
         "status": result.status,
@@ -2102,3 +2103,9 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         "element_count": element_count,
         "toggle_shuffle": result.toggle_shuffle
     }
+    # Include product_id and product_keys only when present
+    if result.product_id is not None and (result.product_id or "").strip() != "":
+        out["product_id"] = result.product_id
+    if result.product_keys is not None and len(result.product_keys) > 0:
+        out["product_keys"] = result.product_keys
+    return out

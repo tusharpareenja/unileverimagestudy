@@ -677,7 +677,7 @@ def get_study_preview_endpoint(
     return out
 
 
-@router.get("/{study_id}/basic", response_model=StudyBasicDetails)
+@router.get("/{study_id}/basic", response_model=StudyBasicDetails, response_model_exclude_none=True)
 def get_study_basic_details_endpoint(
     study_id: UUID,
     db: Session = Depends(get_db),
