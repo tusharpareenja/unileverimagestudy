@@ -313,6 +313,29 @@ def validate_product_uniqueness(
     )
 
 
+def validate_product_by_study(
+    db: Session,
+    user_id: UUID,
+    payload: ValidateProductRequest,
+) -> ValidateProductResponse:
+    """
+    Validate product_id and key combination uniqueness within the study's project.
+    Derives project_id from study_id. If study has no project, returns valid=True (nothing to validate).
+    Single lightweight query; response in double-digit ms.
+    """
+    from app.services.study import check_study_access
+
+    check_study_access(db, payload.study_id, user_id)
+
+    row = db.execute(select(Study.project_id).where(Study.id == payload.study_id)).first()
+    project_id = row.project_id if row and row.project_id else None
+
+    if project_id is None:
+        return ValidateProductResponse(valid=True)
+
+    return validate_product_uniqueness(db, project_id, user_id, payload)
+
+
 def update_project(
     db: Session,
     project_id: UUID,

@@ -264,23 +264,19 @@ def get_project_studies_endpoint(
     return studies
 
 
-@router.post("/{project_id}/validate-product", response_model=ValidateProductResponse)
+@router.post("/validate-product", response_model=ValidateProductResponse)
 def validate_product_endpoint(
-    project_id: UUID,
     payload: ValidateProductRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Validate that product_id and key percentage combination are unique within the project.
-    Returns valid=false if any study in the project has the same product_id or the same
-    key names + percentage sequence (e.g. 25%,25%,50%,0% vs 25%,25%,0%,50% are different).
-    Pass study_id in the body to exclude that study (e.g. when editing the same study).
-    Optimized for double-digit millisecond response.
+    Validate that product_id and key combination are unique within the study's project.
+    Sends product_id, study_id, product_keys in body. Project is derived from study.
+    If study has no project, returns valid=True. Optimized for double-digit ms.
     """
-    return project_service.validate_product_uniqueness(
+    return project_service.validate_product_by_study(
         db=db,
-        project_id=project_id,
         user_id=current_user.id,
         payload=payload,
     )
@@ -678,9 +674,11 @@ def export_project_zip_endpoint(
                 except (TypeError, ValueError):
                     pass
 
-            # Raw df: add product_id as first column (release df reference after copy)
+            # Raw df: add product_id as first column; drop duplicate "Product ID" if present
             pid = product_id_val or "unknown"
             raw_df = df.copy()
+            if "Product ID" in raw_df.columns:
+                raw_df = raw_df.drop(columns=["Product ID"])
             raw_df.insert(0, "product_id", pid)
         except Exception:
             # Robust: return safe fallbacks so worker never fails the export
@@ -705,7 +703,7 @@ def export_project_zip_endpoint(
             ws2 = wb.create_sheet("Product Data")
             ws2.append(product_header)
             ws3 = wb.create_sheet("Range Sheet")
-            ws3.append(["Dependent Variable", "Min", "Max", "Mean", "Std"])
+            ws3.append(["Dependent Variable", "Low", "High", "Average"])
             xl_buf = io.BytesIO()
             wb.save(xl_buf)
             xl_buf.seek(0)
@@ -779,11 +777,14 @@ def export_project_zip_endpoint(
 
         # Mega-sheet: Raw Data, Product Data, Range Sheet (raw_chunks built during executor loop)
         raw_combined = pd.concat(raw_chunks, join="outer", ignore_index=True) if raw_chunks else pd.DataFrame(columns=["product_id"])
-        # Sort Raw Data by product_id (401, 402, ...); nulls/empty last
+        # Sort Raw Data by product_id (401, 402, ...); preserve panelist/row order within each product_id
         if not raw_combined.empty and "product_id" in raw_combined.columns:
-            sort_col = raw_combined["product_id"].fillna("").astype(str).str.strip()
-            sort_col = sort_col.replace("", "zzzz")
-            raw_combined = raw_combined.loc[sort_col.argsort()].reset_index(drop=True)
+            raw_combined["_sort_key"] = raw_combined["product_id"].fillna("").astype(str).str.strip()
+            raw_combined.loc[raw_combined["_sort_key"] == "", "_sort_key"] = "zzzz"
+            raw_combined["_order"] = range(len(raw_combined))
+            raw_combined = raw_combined.sort_values(by=["_sort_key", "_order"], kind="mergesort").drop(
+                columns=["_sort_key", "_order"]
+            ).reset_index(drop=True)
 
         from openpyxl import Workbook
         from openpyxl.utils.dataframe import dataframe_to_rows
@@ -805,10 +806,11 @@ def export_project_zip_endpoint(
             ws_product.append(cells)
 
         ws_range = wb.create_sheet("Range Sheet")
-        ws_range.append(["Dependent Variable", "Min", "Max", "Mean", "Std"])
+        ws_range.append(["Dependent Variable", "Low", "High", "Average"])
         product_rows = [r[4] for r in results]
-        numeric_cols = [c for c in product_header if c != "product_id"]
-        for col in numeric_cols:
+        # Only classification questions and task elements; exclude product_id, keys, Rating, ResponseTime
+        range_cols = class_q_names + element_cols_ordered
+        for col in range_cols:
             vals = []
             for row in product_rows:
                 v = row.get(col, "")
@@ -819,9 +821,9 @@ def export_project_zip_endpoint(
                 except (TypeError, ValueError):
                     continue
             if vals:
-                ws_range.append([col, round(min(vals), 6), round(max(vals), 6), round(sum(vals) / len(vals), 6), round(pd.Series(vals).std(), 6) if len(vals) > 1 else 0])
+                ws_range.append([col, round(min(vals), 6), round(max(vals), 6), round(sum(vals) / len(vals), 6)])
             else:
-                ws_range.append([col, "", "", "", ""])
+                ws_range.append([col, "", "", ""])
 
         xl_buf = io.BytesIO()
         wb.save(xl_buf)

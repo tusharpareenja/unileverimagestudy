@@ -13,10 +13,10 @@ class ValidateProductKey(BaseModel):
 
 
 class ValidateProductRequest(BaseModel):
-    """Request body for validating product_id and key combination uniqueness within a project."""
+    """Request body: product_id, study_id (required), product_keys. Project is derived from study."""
+    study_id: UUID = Field(..., description="Study ID; project is derived from the study")
     product_id: Optional[str] = Field(None, max_length=100)
     product_keys: Optional[List[ValidateProductKey]] = None
-    study_id: Optional[UUID] = Field(None, description="Exclude this study from the check (e.g. when editing the same study)")
 
 
 class ValidateProductResponse(BaseModel):
