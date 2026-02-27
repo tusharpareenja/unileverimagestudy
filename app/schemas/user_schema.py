@@ -83,6 +83,21 @@ class TokenRefreshResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class ValidateTokenRequest(BaseModel):
+    """Schema for token validation request"""
+    access_token: str = Field(..., description="JWT access token")
+    refresh_token: Optional[str] = Field(None, description="Optional refresh token to get new access token if expired")
+
+
+class ValidateTokenResponse(BaseModel):
+    """Schema for token validation response - fast, no DB for sub-10ms"""
+    valid: bool
+    access_token: Optional[str] = None
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+    error: Optional[str] = None
+
+
 class UserLoginResponse(BaseModel):
     """Schema for successful login response"""
     user: UserResponse
