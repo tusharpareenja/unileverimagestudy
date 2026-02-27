@@ -2020,11 +2020,10 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
     """
     from sqlalchemy import text
     
-    # Ultra-fast raw SQL query - only essential fields
+    # Ultra-fast raw SQL query - only essential fields (product_id/product_keys fetched via ORM below)
     query = text("""
         SELECT id, title, status, study_type, created_at, background, 
-               main_question, orientation_text, rating_scale, iped_parameters, language, toggle_shuffle,
-               product_id, product_keys
+               main_question, orientation_text, rating_scale, iped_parameters, language, toggle_shuffle
         FROM studies 
         WHERE id = :study_id
     """)
@@ -2103,9 +2102,14 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         "element_count": element_count,
         "toggle_shuffle": result.toggle_shuffle
     }
-    # Include product_id and product_keys only when present
-    if result.product_id is not None and (result.product_id or "").strip() != "":
-        out["product_id"] = result.product_id
-    if result.product_keys is not None and len(result.product_keys) > 0:
-        out["product_keys"] = result.product_keys
+    # Fetch product_id and product_keys via ORM (reliable across local/hosted; raw SQL Row can differ)
+    product_row = db.execute(
+        select(Study.product_id, Study.product_keys).where(Study.id == study_id)
+    ).first()
+    if product_row:
+        pid, pkeys = product_row
+        if pid is not None and (pid or "").strip() != "":
+            out["product_id"] = pid
+        if pkeys is not None and len(pkeys) > 0:
+            out["product_keys"] = pkeys
     return out
