@@ -22,6 +22,7 @@ from app.schemas.project_schema import (
     ProjectCreate, ProjectUpdate, ProjectOut, ProjectListItem,
     ProjectMemberInvite, ProjectMemberOut, ProjectMemberUpdate,
     ValidateProductRequest, ValidateProductResponse,
+    AssignStudyRequest, AssignStudyResponse,
 )
 from app.services import project_service
 from app.services.project_member_service import project_member_service
@@ -277,6 +278,29 @@ def validate_product_endpoint(
     """
     return project_service.validate_product_by_study(
         db=db,
+        user_id=current_user.id,
+        payload=payload,
+    )
+
+
+@router.post("/{project_id}/assign-study", response_model=AssignStudyResponse)
+def assign_study_to_project_endpoint(
+    project_id: UUID,
+    payload: AssignStudyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Assign a standalone study to a project. Ultra-fast (~10ms).
+
+    - Study must not already be in any project
+    - Study viewer cannot assign; editor and admin can
+    - Project viewer cannot assign; editor and admin can
+    - Project creator becomes study admin; study creator demoted per project logic
+    """
+    return project_service.assign_study_to_project(
+        db=db,
+        project_id=project_id,
         user_id=current_user.id,
         payload=payload,
     )

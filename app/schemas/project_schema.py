@@ -26,6 +26,16 @@ class ValidateProductResponse(BaseModel):
     key_combination_taken: bool = False
 
 
+class AssignStudyRequest(BaseModel):
+    """Request to assign a standalone study to a project."""
+    study_id: UUID = Field(..., description="Study ID to assign")
+
+
+class AssignStudyResponse(BaseModel):
+    """Response for assign-study."""
+    message: str = "Study assigned to project successfully"
+
+
 class ProjectCreate(BaseModel):
     """Schema for creating a new project"""
     name: str = Field(..., min_length=1, max_length=255, description="Project name")
