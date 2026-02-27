@@ -459,8 +459,9 @@ def assign_study_to_project(
     )
 
     # Demote study creator if not project creator: set their StudyMember role to project role or viewer
+    # When study creator IS a project member: sync already added them - do NOT add again (would duplicate)
+    # When study creator is NOT a project member: add them as viewer so they keep access but can't edit
     if study_creator_id != project_creator_id:
-        creator_role = "viewer"
         pm_creator = db.execute(
             select(ProjectMember.role, ProjectMember.invited_email).where(
                 ProjectMember.project_id == project_id,
@@ -468,33 +469,35 @@ def assign_study_to_project(
             )
         ).first()
         if pm_creator:
-            creator_role = pm_creator.role
-
-        user_row = db.execute(
-            select(User.email).where(User.id == study_creator_id)
-        ).first()
-        creator_email = user_row.email if user_row else (pm_creator.invited_email if pm_creator else "")
-
-        existing = db.scalars(
-            select(StudyMember).where(
-                StudyMember.study_id == study_id,
-                StudyMember.user_id == study_creator_id,
-            )
-        ).first()
-
-        if existing:
-            existing.role = creator_role
+            # Study creator is a project member - sync already added them with project role. Skip.
+            pass
         else:
-            from uuid import uuid4
-            db.add(
-                StudyMember(
-                    id=uuid4(),
-                    study_id=study_id,
-                    user_id=study_creator_id,
-                    role=creator_role,
-                    invited_email=creator_email,
+            # Study creator is NOT in project - add as viewer (demoted)
+            user_row = db.execute(
+                select(User.email).where(User.id == study_creator_id)
+            ).first()
+            creator_email = user_row.email if user_row else ""
+
+            existing = db.scalars(
+                select(StudyMember).where(
+                    StudyMember.study_id == study_id,
+                    StudyMember.user_id == study_creator_id,
                 )
-            )
+            ).first()
+
+            if existing:
+                existing.role = "viewer"
+            else:
+                from uuid import uuid4
+                db.add(
+                    StudyMember(
+                        id=uuid4(),
+                        study_id=study_id,
+                        user_id=study_creator_id,
+                        role="viewer",
+                        invited_email=creator_email,
+                    )
+                )
 
     db.commit()
     return AssignStudyResponse(message="Study assigned to project successfully")
