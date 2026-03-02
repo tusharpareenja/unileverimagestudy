@@ -25,6 +25,37 @@ from app.schemas.response_schema import (
 MAX_CONCURRENT_AI = 10
 
 
+def get_max_panelist_combinations(db: Session, study_id: UUID) -> Optional[int]:
+    """
+    Return max number of respondents allowed (based on classification combinations with tasks).
+    Returns None if study has no tasks or panelists.
+    """
+    from app.models.study_model import Study
+
+    study = db.get(Study, study_id)
+    if not study:
+        return None
+    study_data = build_study_data_for_synthetic(study)
+    tasks = study_data.get("tasks") or {}
+    if not isinstance(tasks, dict) or len(tasks) == 0:
+        return None
+    panelists = generate_all_panelist_combinations(study_data)
+    if not panelists:
+        return None
+    available_panelist_numbers = set()
+    for key in tasks:
+        try:
+            if str(key).isdigit():
+                available_panelist_numbers.add(int(key))
+        except (ValueError, TypeError):
+            continue
+    if available_panelist_numbers:
+        panelists_with_tasks = [p for p in panelists if p.get("panelist_number") in available_panelist_numbers]
+    else:
+        panelists_with_tasks = panelists
+    return len(panelists_with_tasks) if panelists_with_tasks else None
+
+
 def run_simulation(
     db: Session,
     study_id: UUID,
@@ -34,6 +65,7 @@ def run_simulation(
     model: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     max_panelist_workers: Optional[int] = None,
+    is_special_creator: bool = False,
 ) -> Dict[str, Any]:
     """
     Run AI respondent simulation for a study: generate panelists, rate vignettes
@@ -59,6 +91,7 @@ def run_simulation(
         if not study:
             return {"success": False, "respondents_simulated": 0, "message": "Study not found", "error": "Study not found"}
         study_data = build_study_data_for_synthetic(study)
+    study_data["is_special_creator"] = is_special_creator
     
     tasks = study_data.get("tasks") or {}
     if not isinstance(tasks, dict) or len(tasks) == 0:
@@ -104,7 +137,16 @@ def run_simulation(
     
     if not panelists_with_tasks:
         return {"success": False, "respondents_simulated": 0, "message": "No panelists with tasks", "error": "No panelists with tasks"}
-    
+
+    max_combinations = len(panelists_with_tasks)
+    if N > max_combinations:
+        return {
+            "success": False,
+            "respondents_simulated": 0,
+            "message": f"AI cannot process more than {max_combinations} respondents. Classification combinations allow at most {max_combinations}.",
+            "error": f"max_respondents ({N}) exceeds max combinations ({max_combinations})",
+        }
+
     # Standalone logic: run only panelists that have tasks, up to N (no cycling)
     panelists_to_run = panelists_with_tasks[:N]
     total = len(panelists_to_run)

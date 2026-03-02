@@ -140,7 +140,7 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
             Dictionary with rating (1-5) and reasoning for the entire vignette
         """
         if not self.client:
-            return self._generate_fallback_vignette_rating(task, persona_prompt)
+            return self._generate_fallback_vignette_rating(task, persona_prompt, study_context)
         
         # Extract elements shown in this vignette
         elements_shown_content = task.get('elements_shown_content', {})
@@ -155,9 +155,11 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
                     shown_elements.append(element_data)
         
         if not shown_elements:
-            # No elements shown, return neutral rating
+            # No elements shown, return neutral rating (or polar if special creator)
+            polar = bool(study_context.get("is_special_creator"))
+            rating = random.choice([1, 5]) if polar else 3
             return {
-                'rating': 3,
+                'rating': rating,
                 'reasoning': 'No elements shown in this vignette',
                 'method': 'fallback'
             }
@@ -214,6 +216,12 @@ IMPORTANT: This stimulus set contains IMAGES. Please carefully analyze each imag
         else:
             image_instruction = ""
         
+        polar = bool(study_context.get("is_special_creator"))
+        rating_instruction = (
+            '"rating": <1 or 5 only - give either the lowest (1) or highest (5) rating, no middle values>,'
+            if polar
+            else '"rating": <number between 1 and 5>,'
+        )
         # Add text prompt
         text_prompt = f"""{persona_prompt}
 
@@ -223,7 +231,7 @@ STIMULUS SET (evaluate as ONE combined proposition):
 
 Respond ONLY with a JSON object in this exact format:
 {{
-    "rating": <number between 1 and 5>,
+    {rating_instruction}
     "reasoning": "<brief explanation of why you gave this rating based on your role, the factors shaping your perspective, and how the stimulus set resonates with you>"
 }}
 """
@@ -245,9 +253,9 @@ Respond ONLY with a JSON object in this exact format:
             
             result = json.loads(response.choices[0].message.content)
             rating = int(result.get('rating', 3))
-            # Ensure rating is in valid range
             rating = max(1, min(5, rating))
-            
+            if polar:
+                rating = 1 if rating <= 3 else 5
             return {
                 'rating': rating,
                 'reasoning': result.get('reasoning', ''),
@@ -255,28 +263,26 @@ Respond ONLY with a JSON object in this exact format:
             }
         except Exception as e:
             print(f"Error calling AI API: {e}. Using fallback method.")
-            return self._generate_fallback_vignette_rating(task, persona_prompt)
+            return self._generate_fallback_vignette_rating(task, persona_prompt, study_context)
     
-    def _generate_fallback_vignette_rating(self, task: Dict[str, Any], persona_prompt: str) -> Dict[str, Any]:
+    def _generate_fallback_vignette_rating(self, task: Dict[str, Any], persona_prompt: str, study_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Generate a fallback rating for a vignette when AI is not available.
         
         Args:
             task: Task dictionary
             persona_prompt: Persona description (not used in fallback, but kept for consistency)
+            study_context: Study data; if is_special_creator, use only 1 or 5
         
         Returns:
             Dictionary with rating and reasoning
         """
-        # Base rating around 3 (neutral)
-        rating = 3
-        
-        # Add some randomness
-        rating += random.randint(-1, 1)
-        
-        # Ensure valid range
-        rating = max(1, min(5, rating))
-        
+        polar = bool((study_context or {}).get("is_special_creator"))
+        if polar:
+            rating = random.choice([1, 5])
+        else:
+            rating = 3 + random.randint(-1, 1)
+            rating = max(1, min(5, rating))
         return {
             'rating': rating,
             'reasoning': 'Fallback heuristic rating (AI not available)',

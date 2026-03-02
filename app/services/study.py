@@ -2113,3 +2113,22 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         if pkeys is not None and len(pkeys) > 0:
             out["product_keys"] = pkeys
     return out
+
+
+def get_study_basic_details_public_v2(db: Session, study_id: UUID) -> Optional[Dict[str, Any]]:
+    """
+    Same as get_study_basic_details_public but also includes total_responses
+    (how many opted in/started the study: complete + abandoned + in progress).
+    """
+    from sqlalchemy import text
+    out = get_study_basic_details_public(db=db, study_id=study_id)
+    if not out:
+        return None
+    total_responses_query = text("""
+        SELECT COUNT(*)::int AS total
+        FROM study_responses
+        WHERE study_id = :study_id
+    """)
+    rc = db.execute(total_responses_query, {"study_id": study_id}).first()
+    out["total_responses"] = rc.total if rc else 0
+    return out

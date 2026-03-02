@@ -299,6 +299,14 @@ class StudyBasicDetails(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+class StudyBasicDetailsV2(StudyBasicDetails):
+    """Basic study details + total_responses (how many opted in/started the study)"""
+    total_responses: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class StudyOut(BaseModel):
     id: UUID
     title: str
@@ -406,6 +414,12 @@ class GenerateTasksResult(BaseModel):
     last_step: Optional[int] = None
     tasks: Dict[str, List[Dict[str, Any]]]
     metadata: Dict[str, Any]
+
+
+class SimulateAIRespondentsRequest(BaseModel):
+    """Optional body for simulate-ai-respondents. Body fields override query params."""
+    max_respondents: Optional[int] = Field(None, ge=1, description="Number of respondents to simulate (validated against max combinations)")
+    is_special_creator: Optional[bool] = Field(None, description="If true, AI rates only 1 or 5 (polar/extreme ratings)")
 
 
 # Rebuild models to resolve forward references
