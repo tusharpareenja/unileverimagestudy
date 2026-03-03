@@ -241,7 +241,53 @@ async def get_session(
     except Exception:
         # Non-fatal enrichment
         pass
-    
+
+    # Enrich layer study completed_tasks with transform, z_index, alt_text, layer_name (for synthetic or minimal content)
+    try:
+        if response_dict.get("completed_tasks") and response_dict.get("study_id"):
+            from app.models.study_model import StudyLayer
+            from sqlalchemy.orm import selectinload
+            layers = db.execute(
+                select(StudyLayer)
+                .options(selectinload(StudyLayer.images))
+                .where(StudyLayer.study_id == response.study_id)
+                .order_by(StudyLayer.order)
+            ).scalars().all()
+            if layers:
+                default_transform = {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}
+                layer_meta: Dict[str, Dict[str, Any]] = {}
+                name_to_alt: Dict[str, str] = {}
+                for L in layers:
+                    layer_meta[L.name] = {
+                        "z_index": L.z_index,
+                        "transform": L.transform if L.transform else default_transform,
+                    }
+                    for img in (L.images or []):
+                        name_to_alt[img.name or ""] = (img.alt_text or "")
+                for ct in response_dict.get("completed_tasks", []):
+                    esc = ct.get("elements_shown_content")
+                    if not isinstance(esc, dict):
+                        continue
+                    for key, val in esc.items():
+                        if not isinstance(val, dict):
+                            continue
+                        # Parse "LayerName_Index" from key
+                        layer_name = key.rsplit("_", 1)[0] if "_" in key else None
+                        if layer_name and layer_name in layer_meta:
+                            meta = layer_meta[layer_name]
+                            if val.get("transform") is None:
+                                val["transform"] = meta["transform"]
+                            if val.get("z_index") is None:
+                                val["z_index"] = meta["z_index"]
+                            if val.get("layer_name") is None:
+                                val["layer_name"] = layer_name
+                            if val.get("alt_text") is None:
+                                img_name = val.get("name")
+                                val["alt_text"] = name_to_alt.get(img_name or "", "") or ""
+
+    except Exception:
+        pass
+
     # Map classification answer codes to human-readable labels using study configuration
     try:
         if response and getattr(response, "study_id", None):
@@ -308,6 +354,8 @@ async def get_session(
                 except Exception:
                     mapped = raw
                 ans["answer"] = mapped
+            # Carry over enriched completed_tasks (transform, z_index, etc.) from response_dict
+            resp_out["completed_tasks"] = response_dict.get("completed_tasks", resp_out.get("completed_tasks"))
             return resp_out
     except Exception:
         # Fallback to raw response if mapping fails

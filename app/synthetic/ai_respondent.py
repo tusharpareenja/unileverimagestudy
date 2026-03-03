@@ -169,8 +169,9 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
         image_urls = []
         
         for element in shown_elements:
-            category = element.get('category_name', 'Unknown')
-            content = element.get('content', element.get('name', 'Unknown'))
+            # Layer studies use layer_name/url; grid/text use category_name/content
+            category = element.get('category_name') or element.get('layer_name', 'Unknown')
+            content = element.get('content') or element.get('url') or element.get('name', 'Unknown')
             element_type = element.get('element_type', 'text')
             
             # Check if content is an image URL
@@ -339,8 +340,8 @@ def generate_panelist_response_from_json(
             if value == 1 and key in elements_shown_content:
                 element_data = elements_shown_content[key]
                 if element_data and isinstance(element_data, dict):
-                    category = element_data.get('category_name', 'Unknown')
-                    content = element_data.get('content', element_data.get('name', 'Unknown'))
+                    category = element_data.get('category_name') or element_data.get('layer_name', 'Unknown')
+                    content = element_data.get('content') or element_data.get('url') or element_data.get('name', 'Unknown')
                     vignette_parts.append(f"{category}: {content}")
         vignette_content = "\n".join(vignette_parts)
         
@@ -348,19 +349,22 @@ def generate_panelist_response_from_json(
         elements_shown_content = task.get('elements_shown_content', {})
         elements_shown = task.get('elements_shown', {})
         
-        # Extract shown elements
+        # Extract shown elements (layer studies use url/layer_name; grid/text use content/category_name)
         shown_elements = []
         for key, value in elements_shown.items():
             if value == 1 and key in elements_shown_content:
                 element_data = elements_shown_content[key]
                 if element_data and isinstance(element_data, dict):
+                    content = element_data.get('content') or element_data.get('url')
+                    category_name = element_data.get('category_name') or element_data.get('layer_name')
+                    element_type = element_data.get('element_type') or ('image' if element_data.get('url') else 'text')
                     shown_elements.append({
                         'key': key,
                         'element_id': element_data.get('element_id'),
                         'name': element_data.get('name'),
-                        'content': element_data.get('content'),
-                        'category_name': element_data.get('category_name'),
-                        'element_type': element_data.get('element_type', 'text')
+                        'content': content,
+                        'category_name': category_name,
+                        'element_type': element_type
                     })
         
         return {
