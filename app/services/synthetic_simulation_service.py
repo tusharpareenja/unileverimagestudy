@@ -115,11 +115,6 @@ def run_simulation(
     api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
     model_name = model or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
     
-    # Generate panelists (all combinations)
-    panelists = generate_all_panelist_combinations(study_data)
-    if not panelists:
-        return {"success": False, "respondents_simulated": 0, "message": "No panelists generated (check classification_questions and answer_options)", "error": "No panelists"}
-    
     # Standalone logic: only run panelists that have tasks (task keys = available panelist numbers)
     available_panelist_numbers = set()
     for key in tasks:
@@ -128,6 +123,13 @@ def run_simulation(
                 available_panelist_numbers.add(int(key))
         except (ValueError, TypeError):
             continue
+    
+    # Limit panelist generation to the highest panelist number we need (avoids full cartesian product)
+    max_to_generate = max(available_panelist_numbers) if available_panelist_numbers else None
+    
+    panelists = generate_all_panelist_combinations(study_data, max_panelists=max_to_generate)
+    if not panelists:
+        return {"success": False, "respondents_simulated": 0, "message": "No panelists generated (check classification_questions and answer_options)", "error": "No panelists"}
     
     if available_panelist_numbers:
         panelists_with_tasks = [p for p in panelists if p.get("panelist_number") in available_panelist_numbers]
