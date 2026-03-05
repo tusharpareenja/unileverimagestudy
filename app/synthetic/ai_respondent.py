@@ -168,7 +168,8 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
         
         for element in shown_elements:
             category = element.get('category_name', 'Unknown')
-            content = element.get('content', element.get('name', 'Unknown'))
+            # Layer tasks use 'url'; grid/text use 'content'
+            content = element.get('content') or element.get('url') or element.get('name', 'Unknown')
             element_type = element.get('element_type', 'text')
             
             # Check if content is an image URL
@@ -334,7 +335,8 @@ def generate_panelist_response_from_json(
                 element_data = elements_shown_content[key]
                 if element_data and isinstance(element_data, dict):
                     category = element_data.get('category_name', 'Unknown')
-                    content = element_data.get('content', element_data.get('name', 'Unknown'))
+                    # Layer tasks use 'url'; grid/text use 'content'
+                    content = element_data.get('content') or element_data.get('url') or element_data.get('name', 'Unknown')
                     vignette_parts.append(f"{category}: {content}")
         vignette_content = "\n".join(vignette_parts)
         
@@ -342,17 +344,18 @@ def generate_panelist_response_from_json(
         elements_shown_content = task.get('elements_shown_content', {})
         elements_shown = task.get('elements_shown', {})
         
-        # Extract shown elements
+        # Extract shown elements (layer tasks use 'url', grid/text use 'content')
         shown_elements = []
         for key, value in elements_shown.items():
             if value == 1 and key in elements_shown_content:
                 element_data = elements_shown_content[key]
                 if element_data and isinstance(element_data, dict):
+                    url_or_content = element_data.get('content') or element_data.get('url')
                     shown_elements.append({
                         'key': key,
                         'element_id': element_data.get('element_id'),
                         'name': element_data.get('name'),
-                        'content': element_data.get('content'),
+                        'content': url_or_content,
                         'category_name': element_data.get('category_name'),
                         'element_type': element_data.get('element_type', 'text')
                     })
