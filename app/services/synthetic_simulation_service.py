@@ -255,8 +255,39 @@ def run_simulation(
                 if progress_callback:
                     progress_callback(simulated, total, f"Respondent {idx + 1}/{total} failed: {e}")
     else:
-        # Parallel AI phase: run process_panelist_response in threads
+        # Parallel AI phase: run process_panelist_response in threads.
+        # Write to DB in index order as soon as each result is available (buffer approach),
+        # so progress updates start as soon as the first panelist completes, not after all N complete.
         results_by_idx: Dict[int, Tuple[Optional[Dict[str, Any]], Optional[str]]] = {}
+        next_idx_to_write = 0
+
+        def drain_writes():
+            """Write any consecutive completed results that are next in order."""
+            nonlocal simulated, next_idx_to_write, last_error
+            while next_idx_to_write < total and next_idx_to_write in results_by_idx:
+                idx = next_idx_to_write
+                panelist = panelists_to_run[idx]
+                response, err = results_by_idx[idx]
+                next_idx_to_write += 1
+                if err:
+                    last_error = err
+                    if progress_callback:
+                        progress_callback(simulated, total, f"Respondent {idx + 1}/{total} AI failed: {err}")
+                    continue
+                if response is None:
+                    continue
+                payload = _build_payload(response, panelist, idx)
+                try:
+                    submit_result = response_service.submit_synthetic_respondent(study_id, payload)
+                    simulated += 1
+                    session_id = submit_result.get("session_id", "")
+                    if progress_callback:
+                        progress_callback(simulated, total, f"Respondent {simulated}/{total} done — session_id: {session_id}")
+                except Exception as e:
+                    last_error = str(e)
+                    if progress_callback:
+                        progress_callback(simulated, total, f"Respondent {idx + 1}/{total} failed: {e}")
+
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(_run_one_panelist, (idx, panelist)): idx for idx, panelist in enumerate(panelists_to_run)}
             for future in as_completed(futures):
@@ -266,28 +297,8 @@ def run_simulation(
                 except Exception as e:
                     idx = futures[future]
                     results_by_idx[idx] = (None, str(e))
-        # Sequential DB phase: submit in index order
-        for idx in range(total):
-            panelist = panelists_to_run[idx]
-            response, err = results_by_idx.get(idx, (None, None))
-            if err:
-                last_error = err
-                if progress_callback:
-                    progress_callback(simulated, total, f"Respondent {idx + 1}/{total} AI failed: {err}")
-                continue
-            if response is None:
-                continue
-            payload = _build_payload(response, panelist, idx)
-            try:
-                submit_result = response_service.submit_synthetic_respondent(study_id, payload)
-                simulated += 1
-                session_id = submit_result.get("session_id", "")
-                if progress_callback:
-                    progress_callback(simulated, total, f"Respondent {simulated}/{total} done — session_id: {session_id}")
-            except Exception as e:
-                last_error = str(e)
-                if progress_callback:
-                    progress_callback(simulated, total, f"Respondent {idx + 1}/{total} failed: {e}")
+                drain_writes()
+        drain_writes()
 
     return {
         "success": True,

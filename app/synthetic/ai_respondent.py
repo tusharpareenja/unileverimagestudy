@@ -140,7 +140,7 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
             Dictionary with rating (1-5) and reasoning for the entire vignette
         """
         if not self.client:
-            return self._generate_fallback_vignette_rating(task, persona_prompt, study_context)
+            return self._generate_fallback_vignette_rating(task, persona_prompt)
         
         # Extract elements shown in this vignette
         elements_shown_content = task.get('elements_shown_content', {})
@@ -155,11 +155,9 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
                     shown_elements.append(element_data)
         
         if not shown_elements:
-            # No elements shown, return neutral rating (or polar if special creator)
-            polar = bool(study_context.get("is_special_creator"))
-            rating = random.choice([1, 5]) if polar else 3
+            # No elements shown, return neutral rating
             return {
-                'rating': rating,
+                'rating': 3,
                 'reasoning': 'No elements shown in this vignette',
                 'method': 'fallback'
             }
@@ -169,9 +167,8 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
         image_urls = []
         
         for element in shown_elements:
-            # Layer studies use layer_name/url; grid/text use category_name/content
-            category = element.get('category_name') or element.get('layer_name', 'Unknown')
-            content = element.get('content') or element.get('url') or element.get('name', 'Unknown')
+            category = element.get('category_name', 'Unknown')
+            content = element.get('content', element.get('name', 'Unknown'))
             element_type = element.get('element_type', 'text')
             
             # Check if content is an image URL
@@ -217,12 +214,6 @@ IMPORTANT: This stimulus set contains IMAGES. Please carefully analyze each imag
         else:
             image_instruction = ""
         
-        polar = bool(study_context.get("is_special_creator"))
-        rating_instruction = (
-            '"rating": <1 or 5 only - give either the lowest (1) or highest (5) rating, no middle values>,'
-            if polar
-            else '"rating": <number between 1 and 5>,'
-        )
         # Add text prompt
         text_prompt = f"""{persona_prompt}
 
@@ -232,7 +223,7 @@ STIMULUS SET (evaluate as ONE combined proposition):
 
 Respond ONLY with a JSON object in this exact format:
 {{
-    {rating_instruction}
+    "rating": <number between 1 and 5>,
     "reasoning": "<brief explanation of why you gave this rating based on your role, the factors shaping your perspective, and how the stimulus set resonates with you>"
 }}
 """
@@ -254,9 +245,9 @@ Respond ONLY with a JSON object in this exact format:
             
             result = json.loads(response.choices[0].message.content)
             rating = int(result.get('rating', 3))
+            # Ensure rating is in valid range
             rating = max(1, min(5, rating))
-            if polar:
-                rating = 1 if rating <= 3 else 5
+            
             return {
                 'rating': rating,
                 'reasoning': result.get('reasoning', ''),
@@ -264,26 +255,28 @@ Respond ONLY with a JSON object in this exact format:
             }
         except Exception as e:
             print(f"Error calling AI API: {e}. Using fallback method.")
-            return self._generate_fallback_vignette_rating(task, persona_prompt, study_context)
+            return self._generate_fallback_vignette_rating(task, persona_prompt)
     
-    def _generate_fallback_vignette_rating(self, task: Dict[str, Any], persona_prompt: str, study_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _generate_fallback_vignette_rating(self, task: Dict[str, Any], persona_prompt: str) -> Dict[str, Any]:
         """
         Generate a fallback rating for a vignette when AI is not available.
         
         Args:
             task: Task dictionary
             persona_prompt: Persona description (not used in fallback, but kept for consistency)
-            study_context: Study data; if is_special_creator, use only 1 or 5
         
         Returns:
             Dictionary with rating and reasoning
         """
-        polar = bool((study_context or {}).get("is_special_creator"))
-        if polar:
-            rating = random.choice([1, 5])
-        else:
-            rating = 3 + random.randint(-1, 1)
-            rating = max(1, min(5, rating))
+        # Base rating around 3 (neutral)
+        rating = 3
+        
+        # Add some randomness
+        rating += random.randint(-1, 1)
+        
+        # Ensure valid range
+        rating = max(1, min(5, rating))
+        
         return {
             'rating': rating,
             'reasoning': 'Fallback heuristic rating (AI not available)',
@@ -340,8 +333,8 @@ def generate_panelist_response_from_json(
             if value == 1 and key in elements_shown_content:
                 element_data = elements_shown_content[key]
                 if element_data and isinstance(element_data, dict):
-                    category = element_data.get('category_name') or element_data.get('layer_name', 'Unknown')
-                    content = element_data.get('content') or element_data.get('url') or element_data.get('name', 'Unknown')
+                    category = element_data.get('category_name', 'Unknown')
+                    content = element_data.get('content', element_data.get('name', 'Unknown'))
                     vignette_parts.append(f"{category}: {content}")
         vignette_content = "\n".join(vignette_parts)
         
@@ -349,22 +342,19 @@ def generate_panelist_response_from_json(
         elements_shown_content = task.get('elements_shown_content', {})
         elements_shown = task.get('elements_shown', {})
         
-        # Extract shown elements (layer studies use url/layer_name; grid/text use content/category_name)
+        # Extract shown elements
         shown_elements = []
         for key, value in elements_shown.items():
             if value == 1 and key in elements_shown_content:
                 element_data = elements_shown_content[key]
                 if element_data and isinstance(element_data, dict):
-                    content = element_data.get('content') or element_data.get('url')
-                    category_name = element_data.get('category_name') or element_data.get('layer_name')
-                    element_type = element_data.get('element_type') or ('image' if element_data.get('url') else 'text')
                     shown_elements.append({
                         'key': key,
                         'element_id': element_data.get('element_id'),
                         'name': element_data.get('name'),
-                        'content': content,
-                        'category_name': category_name,
-                        'element_type': element_type
+                        'content': element_data.get('content'),
+                        'category_name': element_data.get('category_name'),
+                        'element_type': element_data.get('element_type', 'text')
                     })
         
         return {
