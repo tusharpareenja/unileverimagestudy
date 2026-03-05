@@ -285,27 +285,32 @@ class BackgroundTaskService:
         except Exception as e:
             result = {"success": False, "message": str(e), "error": str(e)}
 
-        job = db.query(Job).filter(Job.job_id == job_id).first()
-        if job:
-            job.completed_at = datetime.utcnow()
-            job.progress = 100.0
-            # Preserve original payload so status endpoint still recognizes simulate_ai_respondents
-            run_result = self._make_json_serializable(result)
-            existing = (job.result or {}) if isinstance(job.result, dict) else {}
-            job.result = {"payload": existing.get("payload") or payload, "run_result": run_result}
-            if result.get("success"):
-                job.status = JobStatus.COMPLETED
-                job.message = result.get("message", "Simulation completed.")
-                job.error = None
-            else:
-                job.status = JobStatus.FAILED
-                job.message = result.get("message", "Simulation failed.")
-                job.error = result.get("error")
-            db.commit()
-            logger.info(
-                f"Job {job_id} simulate_ai_respondents finished: success={result.get('success')}, "
-                f"message={result.get('message', '')}"
-            )
+        # Use fresh session to avoid stale connection after long-running simulation
+        db_fresh = SessionLocal()
+        try:
+            job = db_fresh.query(Job).filter(Job.job_id == job_id).first()
+            if job:
+                job.completed_at = datetime.utcnow()
+                job.progress = 100.0
+                # Preserve original payload so status endpoint still recognizes simulate_ai_respondents
+                run_result = self._make_json_serializable(result)
+                existing = (job.result or {}) if isinstance(job.result, dict) else {}
+                job.result = {"payload": existing.get("payload") or payload, "run_result": run_result}
+                if result.get("success"):
+                    job.status = JobStatus.COMPLETED
+                    job.message = result.get("message", "Simulation completed.")
+                    job.error = None
+                else:
+                    job.status = JobStatus.FAILED
+                    job.message = result.get("message", "Simulation failed.")
+                    job.error = result.get("error")
+                db_fresh.commit()
+                logger.info(
+                    f"Job {job_id} simulate_ai_respondents finished: success={result.get('success')}, "
+                    f"message={result.get('message', '')}"
+                )
+        finally:
+            db_fresh.close()
     
     # --- Helper methods need to accept payload explicitly now since job is DB model ---
     

@@ -78,9 +78,9 @@ class StudyResponseService:
                 if isinstance(per_resp, list):
                     total_tasks_assigned = len(per_resp)
                 else:
-                    # If values are task dicts keyed by numeric strings, count keys
+                    # If values are task dicts keyed by numeric strings, count keys (exclude design_matrix)
                     # e.g., {"0": {...}, "1": {...}, ...}
-                    total_tasks_assigned = len(study.tasks)
+                    total_tasks_assigned = len([k for k in study.tasks if str(k).isdigit()])
         except Exception:
             total_tasks_assigned = 0
 
@@ -162,10 +162,10 @@ class StudyResponseService:
                 else:
                     return [tasks] if tasks else []
             else:
-                # Fallback: return tasks keyed by numeric strings (0, 1, 2, ...)
+                # Fallback: return tasks keyed by numeric strings (0, 1, 2, ...) - skip design_matrix
                 numeric_tasks = []
                 for key, value in study.tasks.items():
-                    if key.isdigit():
+                    if str(key).isdigit():
                         numeric_tasks.append(value)
                 return numeric_tasks
         
@@ -2259,10 +2259,10 @@ class StudyResponseService:
                 else:
                     return 1 if respondent_tasks else 0
             else:
-                # Fallback: count all numeric keys (0, 1, 2, ...)
+                # Fallback: count all numeric keys (0, 1, 2, ...), skip design_matrix
                 numeric_count = 0
                 for key, value in tasks.items():
-                    if key.isdigit() and value:
+                    if str(key).isdigit() and value:
                         numeric_count += 1
                 return numeric_count
         

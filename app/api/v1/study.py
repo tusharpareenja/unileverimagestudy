@@ -1727,7 +1727,7 @@ def get_task_generation_result(
         "status": job.status.value,
         "tasks": enriched_tasks,
         "metadata": {
-            "total_respondents": len(study.tasks) if study.tasks else 0,
+            "total_respondents": len([k for k in study.tasks if str(k).isdigit()]) if (study.tasks and isinstance(study.tasks, dict)) else (len(study.tasks) if study.tasks else 0),
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,
             "message": "Task generation completed successfully"
         },

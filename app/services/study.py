@@ -854,13 +854,14 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
         study = db.get(Study, study_id)
         if study and study.tasks:
             if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent to determine tasks per respondent
-                first_respondent_key = next(iter(study.tasks.keys()))
-                first_respondent_tasks = study.tasks[first_respondent_key]
-                if isinstance(first_respondent_tasks, list):
-                    tasks_per_respondent = len(first_respondent_tasks)
-                else:
-                    tasks_per_respondent = 1 if first_respondent_tasks else 0
+                # Get tasks for the first respondent (skip design_matrix key)
+                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
+                if first_respondent_key is not None:
+                    first_respondent_tasks = study.tasks[first_respondent_key]
+                    if isinstance(first_respondent_tasks, list):
+                        tasks_per_respondent = len(first_respondent_tasks)
+                    else:
+                        tasks_per_respondent = 1 if first_respondent_tasks else 0
             elif isinstance(study.tasks, list):
                 # If tasks is a flat list, we can't determine per-respondent count
                 tasks_per_respondent = 0
@@ -941,13 +942,14 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
         study = db.get(Study, study_id)
         if study and study.tasks:
             if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent to determine tasks per respondent
-                first_respondent_key = next(iter(study.tasks.keys()))
-                first_respondent_tasks = study.tasks[first_respondent_key]
-                if isinstance(first_respondent_tasks, list):
-                    tasks_per_respondent = len(first_respondent_tasks)
-                else:
-                    tasks_per_respondent = 1 if first_respondent_tasks else 0
+                # Get tasks for the first respondent (skip design_matrix key)
+                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
+                if first_respondent_key is not None:
+                    first_respondent_tasks = study.tasks[first_respondent_key]
+                    if isinstance(first_respondent_tasks, list):
+                        tasks_per_respondent = len(first_respondent_tasks)
+                    else:
+                        tasks_per_respondent = 1 if first_respondent_tasks else 0
             elif isinstance(study.tasks, list):
                 # If tasks is a flat list, we can't determine per-respondent count
                 tasks_per_respondent = 0
@@ -1010,13 +1012,14 @@ def get_study_public_preview(db: Session, study_id: UUID) -> Dict[str, Any]:
         study = db.get(Study, study_id)
         if study and study.tasks:
             if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent to determine tasks per respondent
-                first_respondent_key = next(iter(study.tasks.keys()))
-                first_respondent_tasks = study.tasks[first_respondent_key]
-                if isinstance(first_respondent_tasks, list):
-                    tasks_per_respondent = len(first_respondent_tasks)
-                else:
-                    tasks_per_respondent = 1 if first_respondent_tasks else 0
+                # Get tasks for the first respondent (skip design_matrix key)
+                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
+                if first_respondent_key is not None:
+                    first_respondent_tasks = study.tasks[first_respondent_key]
+                    if isinstance(first_respondent_tasks, list):
+                        tasks_per_respondent = len(first_respondent_tasks)
+                    else:
+                        tasks_per_respondent = 1 if first_respondent_tasks else 0
             elif isinstance(study.tasks, list):
                 # If tasks is a flat list, we can't determine per-respondent count
                 tasks_per_respondent = 0
@@ -1741,14 +1744,15 @@ def regenerate_tasks(
             computed = int(tpc or 0) * int(number_of_respondents or 0)
         except Exception:
             computed = 0
-        # Fallback: count from generated tasks if available
+        # Fallback: count from generated tasks
         if not computed and isinstance(study.tasks, dict):
             try:
-                computed = sum(len(v or []) for v in study.tasks.values())
+                computed = sum(len(v or []) for k, v in study.tasks.items() if str(k).isdigit())
             except Exception:
                 computed = 0
+        resp_count = len([k for k in study.tasks if isinstance(study.tasks, dict) and str(k).isdigit()]) if isinstance(study.tasks, dict) else 'n/a'
         logger.debug("Regenerate grid computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
-                     computed, tpc, number_of_respondents, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
+                     computed, tpc, number_of_respondents, resp_count)
         computed_total = computed
 
     elif study.study_type == 'layer':
@@ -1796,11 +1800,12 @@ def regenerate_tasks(
             computed = 0
         if not computed and isinstance(study.tasks, dict):
             try:
-                computed = sum(len(v or []) for v in study.tasks.values())
+                computed = sum(len(v or []) for k, v in study.tasks.items() if str(k).isdigit())
             except Exception:
                 computed = 0
+        resp_count = len([k for k in study.tasks if isinstance(study.tasks, dict) and str(k).isdigit()]) if isinstance(study.tasks, dict) else 'n/a'
         logger.debug("Regenerate layer computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
-                     computed, tpc, number_of_respondents, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
+                     computed, tpc, number_of_respondents, resp_count)
         computed_total = computed
 
     elif study.study_type == 'hybrid':
@@ -1911,7 +1916,7 @@ def regenerate_tasks(
 
         study.tasks = combined_tasks
         # Simple count for computed_total
-        computed_total = sum(len(v) for v in combined_tasks.values()) if combined_tasks else 0
+        computed_total = sum(len(v) for k, v in combined_tasks.items() if str(k).isdigit()) if combined_tasks else 0
 
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}. Must be 'grid', 'layer', 'text', or 'hybrid'.")
@@ -1949,23 +1954,31 @@ def validate_tasks(
     # Simplified validation without IPED parameters
     totals: Dict[str, Any] = {}
 
-    if study.study_type in ('grid', 'text'):
-        # Basic structural checks
+    if study.study_type in ('grid', 'text', 'hybrid'):
+        # Basic structural checks (skip design_matrix key)
         for respondent, task_list in study.tasks.items():
+            if not str(respondent).isdigit():
+                continue
+            if not isinstance(task_list, list):
+                continue
             for task in task_list:
                 elements_shown = task.get("elements_shown", {})
                 active_count = sum(1 for k, v in elements_shown.items() if not k.endswith('_content') and int(v or 0) == 1)
 
-        totals['respondents'] = len(study.tasks)
+        totals['respondents'] = len([k for k in study.tasks if str(k).isdigit()])
 
     elif study.study_type == 'layer':
-        # Check structure presence only (semantic validation of layer/image mapping can be extended)
+        # Check structure presence only (skip design_matrix key)
         for respondent, task_list in study.tasks.items():
+            if not str(respondent).isdigit():
+                continue
+            if not isinstance(task_list, list):
+                continue
             for task in task_list:
                 if "elements_shown" not in task and "elements_shown_content" not in task:
                     issues.append(f"Task {task.get('task_id')} missing elements_shown/_content.")
 
-        totals['respondents'] = len(study.tasks)
+        totals['respondents'] = len([k for k in study.tasks if str(k).isdigit()])
 
     else:
         issues.append(f"Unsupported study type {study.study_type}")
