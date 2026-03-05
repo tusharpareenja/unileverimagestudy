@@ -142,7 +142,7 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
         if not self.client:
             return self._generate_fallback_vignette_rating(task, persona_prompt)
         
-        # Extract elements shown in this vignette
+        # Extrac elements shown in this vignette
         elements_shown_content = task.get('elements_shown_content', {})
         elements_shown = task.get('elements_shown', {})
         
