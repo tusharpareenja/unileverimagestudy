@@ -420,6 +420,7 @@ class SimulateAIRespondentsRequest(BaseModel):
     """Optional body for simulate-ai-respondents. Body fields override query params."""
     max_respondents: Optional[int] = Field(None, ge=1, description="Number of respondents to simulate (validated against max combinations)")
     is_special_creator: Optional[bool] = Field(None, description="If true, AI rates only 1 or 5 (polar/extreme ratings)")
+    randomize: Optional[bool] = Field(None, description="If true, use fallback (random) ratings instead of ChatGPT API")
 
 
 # Rebuild models to resolve forward references

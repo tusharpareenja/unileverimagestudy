@@ -66,6 +66,7 @@ def run_simulation(
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     max_panelist_workers: Optional[int] = None,
     is_special_creator: bool = False,
+    randomize: bool = False,
 ) -> Dict[str, Any]:
     """
     Run AI respondent simulation for a study: generate panelists, rate vignettes
@@ -80,6 +81,7 @@ def run_simulation(
         model: Optional; uses OPENAI_MODEL env or gpt-4o-mini.
         progress_callback: Optional callback(done: int, total: int, message: str) for progress (e.g. background job).
         max_panelist_workers: If > 1, run that many panelists in parallel (AI only); DB writes stay sequential. Default 1.
+        randomize: If True, use fallback (random) ratings instead of ChatGPT API.
     
     Returns:
         Summary dict: success, respondents_simulated, message, error (if failed).
@@ -92,6 +94,7 @@ def run_simulation(
             return {"success": False, "respondents_simulated": 0, "message": "Study not found", "error": "Study not found"}
         study_data = build_study_data_for_synthetic(study)
     study_data["is_special_creator"] = is_special_creator
+    study_data["randomize"] = randomize
     
     tasks = study_data.get("tasks") or {}
     if not isinstance(tasks, dict) or len(tasks) == 0:

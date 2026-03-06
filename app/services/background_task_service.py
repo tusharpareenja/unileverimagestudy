@@ -275,6 +275,7 @@ class BackgroundTaskService:
                     progress_callback=progress,
                     max_panelist_workers=payload.get("max_panelist_workers"),
                     is_special_creator=payload.get("is_special_creator", False),
+                    randomize=payload.get("randomize", False),
                 )
             finally:
                 db_sim.close()

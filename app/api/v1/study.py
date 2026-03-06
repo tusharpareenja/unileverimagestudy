@@ -460,7 +460,7 @@ def simulate_ai_respondents_endpoint(
     """
     Simulate AI respondents for a study: generate panelists (gender, age, classification answers),
     run AI rating for each respondent's tasks in order, and persist via the same storage as human respondents.
-    Body (optional): max_respondents, is_special_creator. If is_special_creator=true, AI rates only 1 or 5.
+    Body (optional): max_respondents, is_special_creator, randomize. If is_special_creator=true, AI rates only 1 or 5. If randomize=true, use fallback (random) ratings instead of ChatGPT.
     """
     study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
     if not study.tasks or not isinstance(study.tasks, dict) or len(study.tasks) == 0:
@@ -468,9 +468,10 @@ def simulate_ai_respondents_endpoint(
     if not study.classification_questions or len(study.classification_questions) == 0:
         raise HTTPException(status_code=400, detail="Study has no classification questions.")
 
-    # Body overrides query for max_respondents and is_special_creator
+    # Body overrides query for max_respondents, is_special_creator, randomize
     body_max = body.max_respondents if body else None
     is_special_creator = body.is_special_creator if body and body.is_special_creator is not None else False
+    randomize = body.randomize if body and body.randomize is not None else False
 
     seg = study.audience_segmentation or {}
     N = body_max if body_max is not None and body_max >= 1 else (max_respondents if max_respondents is not None and max_respondents >= 1 else int(seg.get("number_of_respondents") or 0))
@@ -505,6 +506,7 @@ def simulate_ai_respondents_endpoint(
                 "max_respondents": N,
                 "max_panelist_workers": max_panelist_workers,
                 "is_special_creator": is_special_creator,
+                "randomize": randomize,
             },
         )
         def run_background_job():
@@ -544,6 +546,7 @@ def simulate_ai_respondents_endpoint(
         max_respondents=N,
         max_panelist_workers=max_panelist_workers,
         is_special_creator=is_special_creator,
+        randomize=randomize,
     )
     return result
 

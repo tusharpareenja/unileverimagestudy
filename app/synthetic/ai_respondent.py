@@ -139,7 +139,7 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
         Returns:
             Dictionary with rating (1-5) and reasoning for the entire vignette
         """
-        if not self.client:
+        if study_context.get("randomize") or not self.client:
             return self._generate_fallback_vignette_rating(task, persona_prompt)
         
         # Extrac elements shown in this vignette
