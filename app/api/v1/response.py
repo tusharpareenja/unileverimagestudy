@@ -439,7 +439,7 @@ async def list_responses(
     study_id: Optional[UUID] = Query(None, description="Filter by study ID"),
     is_completed: Optional[bool] = Query(None, description="Filter by completion status"),
     is_abandoned: Optional[bool] = Query(None, description="Filter by abandonment status"),
-    limit: int = Query(100, ge=1, le=1000, description="Number of responses to return"),
+    limit: int = Query(100, ge=1, le=10000, description="Number of responses to return"),
     offset: int = Query(0, ge=0, description="Number of responses to skip"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
