@@ -2414,6 +2414,8 @@ class StudyResponseService:
         ]
         if unilever_format:
             response_cols.append(StudyResponse.panelist_id)
+        if str(study.study_type) in ('grid', 'text', 'hybrid'):
+            response_cols.append(StudyResponse.respondent_id)
         responses_query = select(*response_cols).where(StudyResponse.study_id == study_id)
         responses_df = pd.read_sql(responses_query, self.db.bind)
 
@@ -2435,7 +2437,7 @@ class StudyResponseService:
             CompletedTask.elements_shown_content,
             CompletedTask.layers_shown_in_task,
         ]
-        if unilever_format:
+        if unilever_format or str(study.study_type) in ('hybrid', 'grid', 'text'):
             task_cols.append(CompletedTask.task_type)
         tasks_query = select(*task_cols).where(CompletedTask.study_response_id.in_(response_ids))
         tasks_df = pd.read_sql(tasks_query, self.db.bind)
@@ -2591,22 +2593,22 @@ class StudyResponseService:
             from collections import defaultdict
 
             # Fetch categories
+            cat_load = [StudyCategory.id, StudyCategory.name, StudyCategory.order]
             cats = self.db.execute(
                 select(StudyCategory)
                 .where(StudyCategory.study_id == study_id)
                 .order_by(StudyCategory.order)
                 .options(
-                    load_only(StudyCategory.id, StudyCategory.name, StudyCategory.order),
+                    load_only(*cat_load),
                     noload(StudyCategory.study),
                     noload(StudyCategory.elements)
                 )
             ).scalars().all()
 
-            # Fetch all elements
+            # Fetch all elements (order doesn't matter for name-based matching)
             all_elements = self.db.execute(
                 select(StudyElement)
                 .where(StudyElement.study_id == study_id)
-                .order_by(StudyElement.category_id, StudyElement.element_id)
                 .options(
                     load_only(StudyElement.category_id, StudyElement.name, StudyElement.element_id),
                     noload(StudyElement.study),
@@ -2619,60 +2621,109 @@ class StudyResponseService:
             for el in all_elements:
                 elems_by_cat[el.category_id].append(el)
 
-            # Grid definition list
-            grid_defs = []
+            # Build column headers: one per (category, element) for all categories
+            # col_header -> (cat_name, el_name) mapping for name-based lookup
+            col_headers = []
+            col_to_cat_el = {}
             for cat in cats:
                 elems = elems_by_cat.get(cat.id, [])
-                for idx, el in enumerate(elems, start=1):
-                    grid_defs.append((cat.name, el.name, idx))
+                for el in elems:
+                    col_header = f"{cat.name}-{el.name}".replace('_', '-').replace(' ', '-')
+                    col_headers.append(col_header)
+                    col_to_cat_el[col_header] = (cat.name, el.name)
 
-            # Expand task + content visibility
-            # Replace None values with {} before creating DataFrame
-            esi_list = [x if x is not None else {} for x in full_df['elements_shown_in_task'].tolist()]
-            esc_list = [x if x is not None else {} for x in full_df['elements_shown_content'].tolist()]
-            esi_df = pd.DataFrame(esi_list)
-            esc_df = pd.DataFrame(esc_list)
+            # Load Study.tasks as the source of truth (same data the session API uses).
+            # study.tasks may be None if loaded with defer(), so explicitly query if needed.
+            tasks_dict = getattr(study, 'tasks', None) or {}
+            if not tasks_dict and study_id:
+                try:
+                    row = self.db.execute(select(Study.tasks).where(Study.id == study_id)).first()
+                    if row and row[0] is not None:
+                        tasks_dict = row[0]
+                except Exception:
+                    pass
+            use_planned = isinstance(tasks_dict, dict) and len(tasks_dict) > 0 and 'respondent_id' in full_df.columns
 
-            def normalize_value(x):
-                if isinstance(x, bool):
-                    return int(x)
-                if isinstance(x, (int, float)) and not pd.isna(x):
-                    return 1 if x > 0 else 0
-                if isinstance(x, str):
-                    return 1 if x.lower() in ("1", "true", "yes", "visible") else 0
-                return 0
+            if use_planned:
+                # --- NAME-BASED MATCHING using Study.tasks (always correct) ---
+                # Pre-build per-row: set of (cat_name, el_name) that were shown (visible=1)
+                shown_names_by_row: list = []
+                for i in range(len(full_df)):
+                    row = full_df.iloc[i]
+                    rid = row.get('respondent_id')
+                    tidx = int(row.get('task_index', 0))
+                    tasks_list = tasks_dict.get(str(rid)) or tasks_dict.get(str(max(0, int(rid or 0) - 1))) or []
+                    task_def = (tasks_list[tidx] if isinstance(tasks_list, list) and 0 <= tidx < len(tasks_list) else {}) or {}
 
-            for cat_name, el_name, idx in grid_defs:
-                col_header = f"{cat_name}-{el_name}".replace('_', '-').replace(' ', '-')
+                    es = task_def.get('elements_shown', {})
+                    esc = task_def.get('elements_shown_content', {})
 
-                candidates = [
-                    f"{cat_name}_{idx}",
-                    f"{cat_name.replace(' ', '_')}_{idx}",
-                    f"{cat_name.lower()}_{idx}",
-                ]
+                    shown_set = set()
+                    for key, visible in (es.items() if isinstance(es, dict) else []):
+                        if int(visible) != 1:
+                            continue
+                        content = esc.get(key) if isinstance(esc, dict) else None
+                        if content and isinstance(content, dict):
+                            cat_name = content.get('category_name') or (key.rsplit('_', 1)[0] if '_' in key else '')
+                            el_name = content.get('name')
+                            if cat_name and el_name:
+                                shown_set.add((cat_name, el_name))
+                    shown_names_by_row.append(shown_set)
 
-                valid_cols = [c for c in candidates if c in esi_df.columns]
+                # Set columns using pre-built name sets
+                for col_header in col_headers:
+                    cat_name, el_name = col_to_cat_el[col_header]
+                    full_df[col_header] = pd.Series(
+                        [1 if (cat_name, el_name) in shown_names_by_row[i] else 0 for i in range(len(full_df))],
+                        index=full_df.index,
+                        dtype=int
+                    )
+                    dynamic_cols.append(col_header)
 
-                # Base column = all hidden
-                full_df[col_header] = 0
+            else:
+                # --- FALLBACK: index-based matching (when Study.tasks is unavailable) ---
+                grid_defs = []
+                for cat in cats:
+                    elems = elems_by_cat.get(cat.id, [])
+                    for idx, el in enumerate(elems, start=1):
+                        grid_defs.append((cat.name, el.name, idx))
 
-                # From "shown in task"
-                for c in valid_cols:
-                    full_df[col_header] |= esi_df[c].apply(normalize_value)
+                esi_list = [x if x is not None else {} for x in full_df['elements_shown_in_task'].tolist()]
+                esc_list = [x if x is not None else {} for x in full_df['elements_shown_content'].tolist()]
+                esi_df = pd.DataFrame(esi_list)
+                esc_df = pd.DataFrame(esc_list)
 
-                # Fallback from content visibility map (ESC)
-                header_key = f"{cat_name}_{el_name}"
-                header_key_alt = header_key.replace(" ", "_")
+                def normalize_value(x):
+                    if isinstance(x, bool):
+                        return int(x)
+                    if isinstance(x, (int, float)) and not pd.isna(x):
+                        return 1 if x > 0 else 0
+                    if isinstance(x, str):
+                        return 1 if x.lower() in ("1", "true", "yes", "visible") else 0
+                    return 0
 
-                if header_key in esc_df.columns:
-                    full_df[col_header] |= esc_df[header_key].notna().astype(int)
-                elif header_key_alt in esc_df.columns:
-                    full_df[col_header] |= esc_df[header_key_alt].notna().astype(int)
+                for cat_name, el_name, idx in grid_defs:
+                    col_header = f"{cat_name}-{el_name}".replace('_', '-').replace(' ', '-')
+                    candidates = [
+                        f"{cat_name}_{idx}",
+                        f"{cat_name.replace(' ', '_')}_{idx}",
+                        f"{cat_name.lower()}_{idx}",
+                    ]
+                    valid_cols = [c for c in candidates if c in esi_df.columns]
 
-                # 🔥 Ensure final numeric type — fix boolean override forever
-                full_df[col_header] = full_df[col_header].astype(int)
+                    full_df[col_header] = 0
+                    for c in valid_cols:
+                        full_df[col_header] |= esi_df[c].apply(normalize_value)
 
-                dynamic_cols.append(col_header)
+                    header_key = f"{cat_name}_{el_name}"
+                    header_key_alt = header_key.replace(" ", "_")
+                    if header_key in esc_df.columns:
+                        full_df[col_header] |= esc_df[header_key].notna().astype(int)
+                    elif header_key_alt in esc_df.columns:
+                        full_df[col_header] |= esc_df[header_key_alt].notna().astype(int)
+
+                    full_df[col_header] = full_df[col_header].astype(int)
+                    dynamic_cols.append(col_header)
 
 
 
