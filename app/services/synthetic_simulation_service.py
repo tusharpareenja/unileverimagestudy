@@ -39,9 +39,18 @@ def get_max_panelist_combinations(db: Session, study_id: UUID) -> Optional[int]:
     tasks = study_data.get("tasks") or {}
     if not isinstance(tasks, dict) or len(tasks) == 0:
         return None
-    panelists = generate_all_panelist_combinations(study_data)
-    if not panelists:
+    classification_questions = study_data.get("classification_questions") or []
+    if not classification_questions:
         return None
+
+    total_combinations = 1
+    for question in classification_questions:
+        answer_options = question.get("answer_options") or []
+        option_count = len(answer_options)
+        if option_count <= 0:
+            return None
+        total_combinations *= option_count
+
     available_panelist_numbers = set()
     for key in tasks:
         try:
@@ -50,10 +59,8 @@ def get_max_panelist_combinations(db: Session, study_id: UUID) -> Optional[int]:
         except (ValueError, TypeError):
             continue
     if available_panelist_numbers:
-        panelists_with_tasks = [p for p in panelists if p.get("panelist_number") in available_panelist_numbers]
-    else:
-        panelists_with_tasks = panelists
-    return len(panelists_with_tasks) if panelists_with_tasks else None
+        return sum(1 for number in available_panelist_numbers if 1 <= number <= total_combinations)
+    return total_combinations
 
 
 def run_simulation(
