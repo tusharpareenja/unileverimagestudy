@@ -1035,9 +1035,7 @@ async def export_study_analysis(
     # Populate lists
     # Populate lists based on study type
     # print(study_obj.data)
-    print(study_obj.__dict__)
-    aa=open('study.json','w')
-    aa.write(str(study_obj.__dict__))    
+    # print(study_obj.__dict__)
     if str(study_obj.study_type) == 'layer':
         # Map Layers -> Categories, Images -> Elements
         # Ensure layers are loaded. Accessing them should trigger lazy load if session is active.
