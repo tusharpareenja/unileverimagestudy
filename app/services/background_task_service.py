@@ -377,18 +377,15 @@ class BackgroundTaskService:
         
         loop = asyncio.get_event_loop()
         try:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: generate_grid_tasks_v2(
-                        categories_data=categories_data,
-                        number_of_respondents=payload.get('audience_segmentation', {}).get('number_of_respondents', 0),
-                        exposure_tolerance_cv=payload.get('exposure_tolerance_cv', 1.0),
-                        seed=payload.get('seed'),
-                        progress_callback=on_progress
-                    )
-                ),
-                timeout=settings.TASK_GENERATION_TIMEOUT
+            result = await loop.run_in_executor(
+                None,
+                lambda: generate_grid_tasks_v2(
+                    categories_data=categories_data,
+                    number_of_respondents=payload.get('audience_segmentation', {}).get('number_of_respondents', 0),
+                    exposure_tolerance_cv=payload.get('exposure_tolerance_cv', 1.0),
+                    seed=payload.get('seed'),
+                    progress_callback=on_progress
+                )
             )
         except RuntimeError as e:
             if "Preflight failed" in str(e) or "consider more elements" in str(e):
@@ -530,23 +527,20 @@ class BackgroundTaskService:
         loop = asyncio.get_event_loop()
         from app.services.task_generation_core import generate_layer_tasks_v2
         try:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: generate_layer_tasks_v2(
-                        layers_data=[{
-                            "name": l.name, 
-                            "z_index": getattr(l, 'z_index', 0),
-                            "order": getattr(l, 'order', 0),
-                            "images": [{"name": i.name, "url": i.url} for i in l.images]
-                        } for l in layers],
-                        number_of_respondents=payload.get('audience_segmentation', {}).get('number_of_respondents', 0),
-                        exposure_tolerance_pct=payload.get('exposure_tolerance_pct', 2.0),
-                        seed=payload.get('seed'),
-                        progress_callback=on_progress
-                    )
-                ),
-                timeout=settings.TASK_GENERATION_TIMEOUT
+            result = await loop.run_in_executor(
+                None,
+                lambda: generate_layer_tasks_v2(
+                    layers_data=[{
+                        "name": l.name, 
+                        "z_index": getattr(l, 'z_index', 0),
+                        "order": getattr(l, 'order', 0),
+                        "images": [{"name": i.name, "url": i.url} for i in l.images]
+                    } for l in layers],
+                    number_of_respondents=payload.get('audience_segmentation', {}).get('number_of_respondents', 0),
+                    exposure_tolerance_pct=payload.get('exposure_tolerance_pct', 2.0),
+                    seed=payload.get('seed'),
+                    progress_callback=on_progress
+                )
             )
         except RuntimeError as e:
             if "Preflight failed" in str(e) or "consider more elements" in str(e):
