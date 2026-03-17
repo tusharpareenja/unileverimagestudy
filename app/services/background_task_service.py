@@ -274,6 +274,8 @@ class BackgroundTaskService:
                     max_respondents=payload.get("max_respondents"),
                     progress_callback=progress,
                     max_panelist_workers=payload.get("max_panelist_workers"),
+                    is_special_creator=payload.get("is_special_creator", False),
+                    randomize=payload.get("randomize", False),
                 )
             finally:
                 db_sim.close()
@@ -284,24 +286,32 @@ class BackgroundTaskService:
         except Exception as e:
             result = {"success": False, "message": str(e), "error": str(e)}
 
-        job = db.query(Job).filter(Job.job_id == job_id).first()
-        if job:
-            job.completed_at = datetime.utcnow()
-            job.progress = 100.0
-            job.result = self._make_json_serializable(result)
-            if result.get("success"):
-                job.status = JobStatus.COMPLETED
-                job.message = result.get("message", "Simulation completed.")
-                job.error = None
-            else:
-                job.status = JobStatus.FAILED
-                job.message = result.get("message", "Simulation failed.")
-                job.error = result.get("error")
-            db.commit()
-            logger.info(
-                f"Job {job_id} simulate_ai_respondents finished: success={result.get('success')}, "
-                f"message={result.get('message', '')}"
-            )
+        # Use fresh session to avoid stale connection after long-running simulation
+        db_fresh = SessionLocal()
+        try:
+            job = db_fresh.query(Job).filter(Job.job_id == job_id).first()
+            if job:
+                job.completed_at = datetime.utcnow()
+                job.progress = 100.0
+                # Preserve original payload so status endpoint still recognizes simulate_ai_respondents
+                run_result = self._make_json_serializable(result)
+                existing = (job.result or {}) if isinstance(job.result, dict) else {}
+                job.result = {"payload": existing.get("payload") or payload, "run_result": run_result}
+                if result.get("success"):
+                    job.status = JobStatus.COMPLETED
+                    job.message = result.get("message", "Simulation completed.")
+                    job.error = None
+                else:
+                    job.status = JobStatus.FAILED
+                    job.message = result.get("message", "Simulation failed.")
+                    job.error = result.get("error")
+                db_fresh.commit()
+                logger.info(
+                    f"Job {job_id} simulate_ai_respondents finished: success={result.get('success')}, "
+                    f"message={result.get('message', '')}"
+                )
+        finally:
+            db_fresh.close()
     
     # --- Helper methods need to accept payload explicitly now since job is DB model ---
     
@@ -367,18 +377,15 @@ class BackgroundTaskService:
         
         loop = asyncio.get_event_loop()
         try:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: generate_grid_tasks_v2(
-                        categories_data=categories_data,
-                        number_of_respondents=payload.get('audience_segmentation', {}).get('number_of_respondents', 0),
-                        exposure_tolerance_cv=payload.get('exposure_tolerance_cv', 1.0),
-                        seed=payload.get('seed'),
-                        progress_callback=on_progress
-                    )
-                ),
-                timeout=settings.TASK_GENERATION_TIMEOUT
+            result = await loop.run_in_executor(
+                None,
+                lambda: generate_grid_tasks_v2(
+                    categories_data=categories_data,
+                    number_of_respondents=payload.get('audience_segmentation', {}).get('number_of_respondents', 0),
+                    exposure_tolerance_cv=payload.get('exposure_tolerance_cv', 1.0),
+                    seed=payload.get('seed'),
+                    progress_callback=on_progress
+                )
             )
         except RuntimeError as e:
             if "Preflight failed" in str(e) or "consider more elements" in str(e):
@@ -520,23 +527,20 @@ class BackgroundTaskService:
         loop = asyncio.get_event_loop()
         from app.services.task_generation_core import generate_layer_tasks_v2
         try:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: generate_layer_tasks_v2(
-                        layers_data=[{
-                            "name": l.name, 
-                            "z_index": getattr(l, 'z_index', 0),
-                            "order": getattr(l, 'order', 0),
-                            "images": [{"name": i.name, "url": i.url} for i in l.images]
-                        } for l in layers],
-                        number_of_respondents=payload.get('audience_segmentation', {}).get('number_of_respondents', 0),
-                        exposure_tolerance_pct=payload.get('exposure_tolerance_pct', 2.0),
-                        seed=payload.get('seed'),
-                        progress_callback=on_progress
-                    )
-                ),
-                timeout=settings.TASK_GENERATION_TIMEOUT
+            result = await loop.run_in_executor(
+                None,
+                lambda: generate_layer_tasks_v2(
+                    layers_data=[{
+                        "name": l.name, 
+                        "z_index": getattr(l, 'z_index', 0),
+                        "order": getattr(l, 'order', 0),
+                        "images": [{"name": i.name, "url": i.url} for i in l.images]
+                    } for l in layers],
+                    number_of_respondents=payload.get('audience_segmentation', {}).get('number_of_respondents', 0),
+                    exposure_tolerance_pct=payload.get('exposure_tolerance_pct', 2.0),
+                    seed=payload.get('seed'),
+                    progress_callback=on_progress
+                )
             )
         except RuntimeError as e:
             if "Preflight failed" in str(e) or "consider more elements" in str(e):

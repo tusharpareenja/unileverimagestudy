@@ -306,6 +306,8 @@ def create_study(
         phase_order=payload.phase_order,
         toggle_shuffle=payload.toggle_shuffle,
         last_step=payload.last_step or 1,
+        product_keys=[k.model_dump() for k in payload.product_keys] if getattr(payload, 'product_keys', None) else None,
+        product_id=getattr(payload, 'product_id', None),
     )
     db.add(study)
     # UUID is already assigned above; avoid early flush to reduce DB round-trips
@@ -455,7 +457,9 @@ def create_study_minimal(
     background: str,
     language: str = 'en',
     last_step: int = 1,
-    project_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None,
+    product_keys: Optional[List[Dict[str, Any]]] = None,
+    product_id: Optional[str] = None,
 ) -> UUID:
     """
     Ultra-fast study creation with only essential fields.
@@ -496,6 +500,8 @@ def create_study_minimal(
         share_url=_build_share_url(settings.BASE_URL, str(study_id)),
         toggle_shuffle=False,
         last_step=last_step,
+        product_keys=product_keys,
+        product_id=product_id,
     )
 
     db.execute(stmt)
@@ -585,6 +591,12 @@ def copy_study(db: Session, study_id: UUID, user_id: UUID, project_id: Optional[
         abandoned_responses=0,
         last_step=6,
         jobid=None,
+        # Copy product keys with names only; use percentage=0 so response schema validates
+        product_keys=(
+            [{"name": k.get("name"), "percentage": 0} for k in (source.product_keys or []) if isinstance(k, dict) and k.get("name")]
+            if source.product_keys else None
+        ),
+        product_id=None,
     )
     db.add(new_study)
     db.flush()
@@ -686,6 +698,64 @@ def copy_study(db: Session, study_id: UUID, user_id: UUID, project_id: Optional[
     return new_study
 
 
+def build_study_data_for_analysis(study: Study) -> Dict[str, Any]:
+    """
+    Build the study_data dict expected by StudyAnalysisService (categories, elements, classification_questions).
+    Handles layer vs grid/text/hybrid study types. Study must have categories, elements, layers, classification_questions loaded.
+    """
+    study_data: Dict[str, Any] = {
+        "title": study.title,
+        "study_type": study.study_type,
+        "background": getattr(study, "background_image_url", None) or "",
+        "language": study.language,
+        "launched_at": study.created_at.isoformat() if study.created_at else "",
+        "categories": [],
+        "elements": [],
+        "classification_questions": [],
+    }
+    if str(study.study_type) == "layer":
+        sorted_layers = sorted(study.layers or [], key=lambda x: x.order)
+        for layer in sorted_layers:
+            cat_id = str(layer.layer_id)
+            study_data["categories"].append({"id": cat_id, "name": layer.name, "order": layer.order})
+            for img in sorted(layer.images or [], key=lambda x: x.order):
+                study_data["elements"].append({
+                    "id": str(img.image_id),
+                    "name": img.name,
+                    "content": img.url,
+                    "category_id": cat_id,
+                    "category": {"name": layer.name, "order": layer.order},
+                })
+    else:
+        elements_by_cat = {}
+        for el in study.elements or []:
+            cid = getattr(el, "category_id", None)
+            if cid not in elements_by_cat:
+                elements_by_cat[cid] = []
+            elements_by_cat[cid].append(el)
+        for cat in study.categories or []:
+            study_data["categories"].append({
+                "id": str(cat.id),
+                "name": cat.name,
+                "order": cat.order,
+            })
+            for el in elements_by_cat.get(cat.id, []):
+                study_data["elements"].append({
+                    "id": str(el.id),
+                    "name": el.name,
+                    "content": el.content,
+                    "category_id": str(cat.id),
+                    "category": {"name": cat.name, "order": cat.order},
+                })
+    for q in study.classification_questions or []:
+        study_data["classification_questions"].append({
+            "question_id": q.question_id,
+            "question_text": q.question_text,
+            "answer_options": q.answer_options,
+        })
+    return study_data
+
+
 def get_study_exists(db: Session, study_id: UUID, owner_id: UUID) -> bool:
     """Lightweight check if study exists and is owned by user."""
     stmt = select(Study.id).where(Study.id == study_id, Study.creator_id == owner_id)
@@ -762,6 +832,8 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
             Study.share_token,
             Study.orientation_text,
             Study.language,
+            Study.product_keys,
+            Study.product_id,
         ).where(Study.id == study_id)
     ).first()
     if not row:
@@ -782,13 +854,14 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
         study = db.get(Study, study_id)
         if study and study.tasks:
             if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent to determine tasks per respondent
-                first_respondent_key = next(iter(study.tasks.keys()))
-                first_respondent_tasks = study.tasks[first_respondent_key]
-                if isinstance(first_respondent_tasks, list):
-                    tasks_per_respondent = len(first_respondent_tasks)
-                else:
-                    tasks_per_respondent = 1 if first_respondent_tasks else 0
+                # Get tasks for the first respondent (skip design_matrix key)
+                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
+                if first_respondent_key is not None:
+                    first_respondent_tasks = study.tasks[first_respondent_key]
+                    if isinstance(first_respondent_tasks, list):
+                        tasks_per_respondent = len(first_respondent_tasks)
+                    else:
+                        tasks_per_respondent = 1 if first_respondent_tasks else 0
             elif isinstance(study.tasks, list):
                 # If tasks is a flat list, we can't determine per-respondent count
                 tasks_per_respondent = 0
@@ -804,6 +877,8 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
         status=row.status,
         orientation_text=row.orientation_text,
         language=row.language,
+        product_keys=row.product_keys,
+        product_id=row.product_id,
     )
 
 def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str, Any]:
@@ -867,13 +942,14 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
         study = db.get(Study, study_id)
         if study and study.tasks:
             if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent to determine tasks per respondent
-                first_respondent_key = next(iter(study.tasks.keys()))
-                first_respondent_tasks = study.tasks[first_respondent_key]
-                if isinstance(first_respondent_tasks, list):
-                    tasks_per_respondent = len(first_respondent_tasks)
-                else:
-                    tasks_per_respondent = 1 if first_respondent_tasks else 0
+                # Get tasks for the first respondent (skip design_matrix key)
+                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
+                if first_respondent_key is not None:
+                    first_respondent_tasks = study.tasks[first_respondent_key]
+                    if isinstance(first_respondent_tasks, list):
+                        tasks_per_respondent = len(first_respondent_tasks)
+                    else:
+                        tasks_per_respondent = 1 if first_respondent_tasks else 0
             elif isinstance(study.tasks, list):
                 # If tasks is a flat list, we can't determine per-respondent count
                 tasks_per_respondent = 0
@@ -936,13 +1012,14 @@ def get_study_public_preview(db: Session, study_id: UUID) -> Dict[str, Any]:
         study = db.get(Study, study_id)
         if study and study.tasks:
             if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent to determine tasks per respondent
-                first_respondent_key = next(iter(study.tasks.keys()))
-                first_respondent_tasks = study.tasks[first_respondent_key]
-                if isinstance(first_respondent_tasks, list):
-                    tasks_per_respondent = len(first_respondent_tasks)
-                else:
-                    tasks_per_respondent = 1 if first_respondent_tasks else 0
+                # Get tasks for the first respondent (skip design_matrix key)
+                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
+                if first_respondent_key is not None:
+                    first_respondent_tasks = study.tasks[first_respondent_key]
+                    if isinstance(first_respondent_tasks, list):
+                        tasks_per_respondent = len(first_respondent_tasks)
+                    else:
+                        tasks_per_respondent = 1 if first_respondent_tasks else 0
             elif isinstance(study.tasks, list):
                 # If tasks is a flat list, we can't determine per-respondent count
                 tasks_per_respondent = 0
@@ -1135,6 +1212,12 @@ def update_study(
 
     if payload.project_id is not None:
         study.project_id = payload.project_id
+
+    if payload.product_keys is not None:
+        study.product_keys = [k.model_dump() for k in payload.product_keys]
+
+    if payload.product_id is not None:
+        study.product_id = payload.product_id
 
     # Replace children collections if provided
     if payload.elements is not None:
@@ -1373,6 +1456,12 @@ def update_study_fast(
     if payload.phase_order is not None:
         study.phase_order = payload.phase_order
 
+    if payload.product_keys is not None:
+        study.product_keys = [k.model_dump() for k in payload.product_keys]
+
+    if payload.product_id is not None:
+        study.product_id = payload.product_id
+
     # For fast updates, we only handle simple scalar fields
     # Complex operations (elements, layers, classification_questions) fall back to full loading
     if payload.elements is not None or payload.study_layers is not None:
@@ -1437,6 +1526,12 @@ def update_and_launch_study_fast(
     
     if payload.phase_order is not None:
         study.phase_order = payload.phase_order
+
+    if payload.product_keys is not None:
+        study.product_keys = [k.model_dump() for k in payload.product_keys]
+
+    if payload.product_id is not None:
+        study.product_id = payload.product_id
 
     # Handle complex updates that require full loading
     if payload.elements is not None or payload.study_layers is not None or payload.classification_questions is not None:
@@ -1649,14 +1744,15 @@ def regenerate_tasks(
             computed = int(tpc or 0) * int(number_of_respondents or 0)
         except Exception:
             computed = 0
-        # Fallback: count from generated tasks if available
+        # Fallback: count from generated tasks
         if not computed and isinstance(study.tasks, dict):
             try:
-                computed = sum(len(v or []) for v in study.tasks.values())
+                computed = sum(len(v or []) for k, v in study.tasks.items() if str(k).isdigit())
             except Exception:
                 computed = 0
+        resp_count = len([k for k in study.tasks if isinstance(study.tasks, dict) and str(k).isdigit()]) if isinstance(study.tasks, dict) else 'n/a'
         logger.debug("Regenerate grid computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
-                     computed, tpc, number_of_respondents, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
+                     computed, tpc, number_of_respondents, resp_count)
         computed_total = computed
 
     elif study.study_type == 'layer':
@@ -1704,11 +1800,12 @@ def regenerate_tasks(
             computed = 0
         if not computed and isinstance(study.tasks, dict):
             try:
-                computed = sum(len(v or []) for v in study.tasks.values())
+                computed = sum(len(v or []) for k, v in study.tasks.items() if str(k).isdigit())
             except Exception:
                 computed = 0
+        resp_count = len([k for k in study.tasks if isinstance(study.tasks, dict) and str(k).isdigit()]) if isinstance(study.tasks, dict) else 'n/a'
         logger.debug("Regenerate layer computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
-                     computed, tpc, number_of_respondents, len(study.tasks) if isinstance(study.tasks, dict) else 'n/a')
+                     computed, tpc, number_of_respondents, resp_count)
         computed_total = computed
 
     elif study.study_type == 'hybrid':
@@ -1819,7 +1916,7 @@ def regenerate_tasks(
 
         study.tasks = combined_tasks
         # Simple count for computed_total
-        computed_total = sum(len(v) for v in combined_tasks.values()) if combined_tasks else 0
+        computed_total = sum(len(v) for k, v in combined_tasks.items() if str(k).isdigit()) if combined_tasks else 0
 
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported study type: {study.study_type}. Must be 'grid', 'layer', 'text', or 'hybrid'.")
@@ -1857,23 +1954,31 @@ def validate_tasks(
     # Simplified validation without IPED parameters
     totals: Dict[str, Any] = {}
 
-    if study.study_type in ('grid', 'text'):
-        # Basic structural checks
+    if study.study_type in ('grid', 'text', 'hybrid'):
+        # Basic structural checks (skip design_matrix key)
         for respondent, task_list in study.tasks.items():
+            if not str(respondent).isdigit():
+                continue
+            if not isinstance(task_list, list):
+                continue
             for task in task_list:
                 elements_shown = task.get("elements_shown", {})
                 active_count = sum(1 for k, v in elements_shown.items() if not k.endswith('_content') and int(v or 0) == 1)
 
-        totals['respondents'] = len(study.tasks)
+        totals['respondents'] = len([k for k in study.tasks if str(k).isdigit()])
 
     elif study.study_type == 'layer':
-        # Check structure presence only (semantic validation of layer/image mapping can be extended)
+        # Check structure presence only (skip design_matrix key)
         for respondent, task_list in study.tasks.items():
+            if not str(respondent).isdigit():
+                continue
+            if not isinstance(task_list, list):
+                continue
             for task in task_list:
                 if "elements_shown" not in task and "elements_shown_content" not in task:
                     issues.append(f"Task {task.get('task_id')} missing elements_shown/_content.")
 
-        totals['respondents'] = len(study.tasks)
+        totals['respondents'] = len([k for k in study.tasks if str(k).isdigit()])
 
     else:
         issues.append(f"Unsupported study type {study.study_type}")
@@ -1928,7 +2033,7 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
     """
     from sqlalchemy import text
     
-    # Ultra-fast raw SQL query - only essential fields
+    # Ultra-fast raw SQL query - only essential fields (product_id/product_keys fetched via ORM below)
     query = text("""
         SELECT id, title, status, study_type, created_at, background, 
                main_question, orientation_text, rating_scale, iped_parameters, language, toggle_shuffle
@@ -1994,7 +2099,7 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         count_result = db.execute(layer_image_count_query, {"study_id": study_id}).first()
         element_count = count_result.count if count_result else 0
     
-    return {
+    out = {
         "id": result.id,
         "title": result.title,
         "status": result.status,
@@ -2010,3 +2115,33 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
         "element_count": element_count,
         "toggle_shuffle": result.toggle_shuffle
     }
+    # Fetch product_id and product_keys via ORM (reliable across local/hosted; raw SQL Row can differ)
+    product_row = db.execute(
+        select(Study.product_id, Study.product_keys).where(Study.id == study_id)
+    ).first()
+    if product_row:
+        pid, pkeys = product_row
+        if pid is not None and (pid or "").strip() != "":
+            out["product_id"] = pid
+        if pkeys is not None and len(pkeys) > 0:
+            out["product_keys"] = pkeys
+    return out
+
+
+def get_study_basic_details_public_v2(db: Session, study_id: UUID) -> Optional[Dict[str, Any]]:
+    """
+    Same as get_study_basic_details_public but also includes total_responses
+    (how many opted in/started the study: complete + abandoned + in progress).
+    """
+    from sqlalchemy import text
+    out = get_study_basic_details_public(db=db, study_id=study_id)
+    if not out:
+        return None
+    total_responses_query = text("""
+        SELECT COUNT(*)::int AS total
+        FROM study_responses
+        WHERE study_id = :study_id
+    """)
+    rc = db.execute(total_responses_query, {"study_id": study_id}).first()
+    out["total_responses"] = rc.total if rc else 0
+    return out

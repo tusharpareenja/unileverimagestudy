@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.core.dependencies import get_current_active_user
+from app.core.domain import is_unilever_domain
 from app.db.session import get_db
 from app.models.user_model import User
 from app.models.study_model import Study, StudyMember
@@ -240,7 +241,53 @@ async def get_session(
     except Exception:
         # Non-fatal enrichment
         pass
-    
+
+    # Enrich layer study completed_tasks with transform, z_index, alt_text, layer_name (for synthetic or minimal content)
+    try:
+        if response_dict.get("completed_tasks") and response_dict.get("study_id"):
+            from app.models.study_model import StudyLayer
+            from sqlalchemy.orm import selectinload
+            layers = db.execute(
+                select(StudyLayer)
+                .options(selectinload(StudyLayer.images))
+                .where(StudyLayer.study_id == response.study_id)
+                .order_by(StudyLayer.order)
+            ).scalars().all()
+            if layers:
+                default_transform = {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}
+                layer_meta: Dict[str, Dict[str, Any]] = {}
+                name_to_alt: Dict[str, str] = {}
+                for L in layers:
+                    layer_meta[L.name] = {
+                        "z_index": L.z_index,
+                        "transform": L.transform if L.transform else default_transform,
+                    }
+                    for img in (L.images or []):
+                        name_to_alt[img.name or ""] = (img.alt_text or "")
+                for ct in response_dict.get("completed_tasks", []):
+                    esc = ct.get("elements_shown_content")
+                    if not isinstance(esc, dict):
+                        continue
+                    for key, val in esc.items():
+                        if not isinstance(val, dict):
+                            continue
+                        # Parse "LayerName_Index" from key
+                        layer_name = key.rsplit("_", 1)[0] if "_" in key else None
+                        if layer_name and layer_name in layer_meta:
+                            meta = layer_meta[layer_name]
+                            if val.get("transform") is None:
+                                val["transform"] = meta["transform"]
+                            if val.get("z_index") is None:
+                                val["z_index"] = meta["z_index"]
+                            if val.get("layer_name") is None:
+                                val["layer_name"] = layer_name
+                            if val.get("alt_text") is None:
+                                img_name = val.get("name")
+                                val["alt_text"] = name_to_alt.get(img_name or "", "") or ""
+
+    except Exception:
+        pass
+
     # Map classification answer codes to human-readable labels using study configuration
     try:
         if response and getattr(response, "study_id", None):
@@ -307,6 +354,8 @@ async def get_session(
                 except Exception:
                     mapped = raw
                 ans["answer"] = mapped
+            # Carry over enriched completed_tasks (transform, z_index, etc.) from response_dict
+            resp_out["completed_tasks"] = response_dict.get("completed_tasks", resp_out.get("completed_tasks"))
             return resp_out
     except Exception:
         # Fallback to raw response if mapping fails
@@ -390,7 +439,7 @@ async def list_responses(
     study_id: Optional[UUID] = Query(None, description="Filter by study ID"),
     is_completed: Optional[bool] = Query(None, description="Filter by completion status"),
     is_abandoned: Optional[bool] = Query(None, description="Filter by abandonment status"),
-    limit: int = Query(100, ge=1, le=1000, description="Number of responses to return"),
+    limit: int = Query(100, ge=1, le=10000, description="Number of responses to return"),
     offset: int = Query(0, ge=0, description="Number of responses to skip"),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -937,11 +986,12 @@ async def export_study_analysis(
 
     if not is_authorized:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
+    unilever_format = is_unilever_domain(current_user.email or "")
+
     # 1. Get DataFrame
     response_service = StudyResponseService(db)
-    df = response_service.get_study_dataframe(study_id)
-    print(df)
+    df = response_service.get_study_dataframe(study_id, unilever_format=unilever_format)
     
         
     # 2. Get Study Data (JSON)
@@ -985,9 +1035,7 @@ async def export_study_analysis(
     # Populate lists
     # Populate lists based on study type
     # print(study_obj.data)
-    print(study_obj.__dict__)
-    aa=open('study.json','w')
-    aa.write(str(study_obj.__dict__))    
+    # print(study_obj.__dict__)
     if str(study_obj.study_type) == 'layer':
         # Map Layers -> Categories, Images -> Elements
         # Ensure layers are loaded. Accessing them should trigger lazy load if session is active.
@@ -1100,11 +1148,13 @@ async def export_study_analysis_json(
 
     if not is_authorized:
         raise HTTPException(status_code=403, detail="Access denied")
-    
+
+    unilever_format = is_unilever_domain(current_user.email or "")
+
     # 1. Get DataFrame
     response_service = StudyResponseService(db)
-    df = response_service.get_study_dataframe(study_id)
-    
+    df = response_service.get_study_dataframe(study_id, unilever_format=unilever_format)
+
     # 2. Build study_data dict from the ORM object
     study_data = {
         "title": study_obj.title,
@@ -1173,20 +1223,44 @@ async def export_study_analysis_json(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to generate JSON analysis report: {str(e)}")
     
-    # Sanitize NaN/Inf values that are not JSON compliant
+    # Sanitize NaN/Inf and numpy types so response is JSON-serializable
     import math
+    import numpy as np
+
+    def _json_scalar(val):
+        """Convert numpy/float to JSON-serializable scalar; keys must be str/int."""
+        if val is None:
+            return None
+        if isinstance(val, (np.integer,)):
+            return int(val)
+        if isinstance(val, (np.floating,)):
+            f = float(val)
+            return None if (math.isnan(f) or math.isinf(f)) else f
+        if isinstance(val, (np.bool_,)):
+            return bool(val)
+        if isinstance(val, float):
+            return None if (math.isnan(val) or math.isinf(val)) else val
+        return val
+
     def sanitize_for_json(obj):
+        if obj is None:
+            return None
         if isinstance(obj, dict):
-            return {k: sanitize_for_json(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
+            out = {}
+            for k, v in obj.items():
+                safe_k = _json_scalar(k) if not isinstance(k, (str, type(None))) else k
+                if safe_k is None and k is not None:
+                    safe_k = str(k)
+                out[safe_k] = sanitize_for_json(v)
+            return out
+        if isinstance(obj, list):
             return [sanitize_for_json(item) for item in obj]
-        elif isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
-            return obj
-        else:
-            return obj
-    
+        if isinstance(obj, (np.integer, np.floating, np.bool_)):
+            return _json_scalar(obj)
+        if isinstance(obj, float):
+            return _json_scalar(obj)
+        return obj
+
     return sanitize_for_json(json_report)
 
 
@@ -1282,8 +1356,9 @@ async def filter_study_regression_report(
     if not is_authorized:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    unilever_format = is_unilever_domain(current_user.email or "")
     response_service = StudyResponseService(db)
-    df = response_service.get_study_dataframe(study_id)
+    df = response_service.get_study_dataframe(study_id, unilever_format=unilever_format)
 
     study_data = {
         "title": study_obj.title,
@@ -1444,17 +1519,40 @@ async def filter_study_regression_report(
             # Don't fail the request if save fails
 
     import math
+    import numpy as np
+
+    def _json_scalar(val):
+        if val is None:
+            return None
+        if isinstance(val, (np.integer,)):
+            return int(val)
+        if isinstance(val, (np.floating,)):
+            f = float(val)
+            return None if (math.isnan(f) or math.isinf(f)) else f
+        if isinstance(val, (np.bool_,)):
+            return bool(val)
+        if isinstance(val, float):
+            return None if (math.isnan(val) or math.isinf(val)) else val
+        return val
+
     def sanitize_for_json(obj):
+        if obj is None:
+            return None
         if isinstance(obj, dict):
-            return {k: sanitize_for_json(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
+            out = {}
+            for k, v in obj.items():
+                safe_k = _json_scalar(k) if not isinstance(k, (str, type(None))) else k
+                if safe_k is None and k is not None:
+                    safe_k = str(k)
+                out[safe_k] = sanitize_for_json(v)
+            return out
+        if isinstance(obj, list):
             return [sanitize_for_json(item) for item in obj]
-        elif isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
-            return obj
-        else:
-            return obj
+        if isinstance(obj, (np.integer, np.floating, np.bool_)):
+            return _json_scalar(obj)
+        if isinstance(obj, float):
+            return _json_scalar(obj)
+        return obj
 
     return sanitize_for_json(report)
 

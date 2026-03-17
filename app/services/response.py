@@ -78,9 +78,9 @@ class StudyResponseService:
                 if isinstance(per_resp, list):
                     total_tasks_assigned = len(per_resp)
                 else:
-                    # If values are task dicts keyed by numeric strings, count keys
+                    # If values are task dicts keyed by numeric strings, count keys (exclude design_matrix)
                     # e.g., {"0": {...}, "1": {...}, ...}
-                    total_tasks_assigned = len(study.tasks)
+                    total_tasks_assigned = len([k for k in study.tasks if str(k).isdigit()])
         except Exception:
             total_tasks_assigned = 0
 
@@ -162,10 +162,10 @@ class StudyResponseService:
                 else:
                     return [tasks] if tasks else []
             else:
-                # Fallback: return tasks keyed by numeric strings (0, 1, 2, ...)
+                # Fallback: return tasks keyed by numeric strings (0, 1, 2, ...) - skip design_matrix
                 numeric_tasks = []
                 for key, value in study.tasks.items():
-                    if key.isdigit():
+                    if str(key).isdigit():
                         numeric_tasks.append(value)
                 return numeric_tasks
         
@@ -742,18 +742,25 @@ class StudyResponseService:
         if not response:
             return None
         
-        # Look up panelist by alphanumeric ID and creator email
-        # Since multiple creators can use the same ID, we must filter by the study's creator
+        # Look up panelist by ID within the study creator's domain (shared pool per company)
         from app.models.study_model import Study
         from app.models.user_model import User
-        
-        panelist = self.db.query(Panelist).join(
-            User, User.email == Panelist.creator_email
-        ).join(
-            Study, Study.creator_id == User.id
-        ).filter(
+
+        study = self.db.query(Study).filter(Study.id == response.study_id).first()
+        if not study:
+            return None
+        creator = self.db.query(User).filter(User.id == study.creator_id).first()
+        if not creator or not getattr(creator, "email", None):
+            return None
+        domain = (creator.email or "").strip()
+        if "@" in domain:
+            domain = domain.split("@")[-1].lower()
+        else:
+            domain = ""
+
+        panelist = self.db.query(Panelist).filter(
             Panelist.id == panelist_id,
-            Study.id == response.study_id
+            Panelist.creator_domain == domain
         ).first()
         
         if not panelist:
@@ -2252,10 +2259,10 @@ class StudyResponseService:
                 else:
                     return 1 if respondent_tasks else 0
             else:
-                # Fallback: count all numeric keys (0, 1, 2, ...)
+                # Fallback: count all numeric keys (0, 1, 2, ...), skip design_matrix
                 numeric_count = 0
                 for key, value in tasks.items():
-                    if key.isdigit() and value:
+                    if str(key).isdigit() and value:
                         numeric_count += 1
                 return numeric_count
         
@@ -2386,42 +2393,53 @@ class StudyResponseService:
             "total_tasks": int(result.total_tasks or 0)
         }
 
-    def get_study_dataframe(self, study_id: UUID) -> pd.DataFrame:
+    def get_study_dataframe(self, study_id: UUID, unilever_format: bool = False) -> pd.DataFrame:
         from sqlalchemy.orm import noload, load_only
 
         """
         High-performance CSV flattener using Pandas.
         Replicates the exact logic of generate_csv_rows_for_study_optimized but uses vectorized operations.
+        When unilever_format=True (caller is unilever.com), adds Panelist (panelist_id|session_id),
+        Product ID, product key columns, and Task type. No extra DB round-trips.
         """
         # 1. Fetch Data (Bulk)
         study = self.db.get(Study, study_id)
         if not study:
             raise HTTPException(status_code=404, detail="Study not found")
 
-        # Fetch responses as dicts
-        responses_query = select(
-            StudyResponse.id, 
-            StudyResponse.session_id, 
-            StudyResponse.personal_info
-        ).where(StudyResponse.study_id == study_id)
+        response_cols = [
+            StudyResponse.id,
+            StudyResponse.session_id,
+            StudyResponse.personal_info,
+        ]
+        if unilever_format:
+            response_cols.append(StudyResponse.panelist_id)
+        if str(study.study_type) in ('grid', 'text', 'hybrid'):
+            response_cols.append(StudyResponse.respondent_id)
+        responses_query = select(*response_cols).where(StudyResponse.study_id == study_id)
         responses_df = pd.read_sql(responses_query, self.db.bind)
-        print("response from db :- ", responses_df)
+
         if responses_df.empty:
-            # Return empty DataFrame with expected columns
+            if unilever_format:
+                key_names = [k.get("name") for k in (study.product_keys or []) if k and k.get("name")]
+                cols = ["Panelist", "Product ID", "Age", "Gender"] + key_names + ["Task", "Task type", "Rating", "ResponseTime"]
+                return pd.DataFrame(columns=cols)
             return pd.DataFrame(columns=["Panelist", "Gender", "Age", "Task", "Rating", "ResponseTime"])
 
         response_ids = responses_df['id'].tolist()
 
-        # Fetch tasks
-        tasks_query = select(
+        task_cols = [
             CompletedTask.study_response_id,
             CompletedTask.task_index,
             CompletedTask.rating_given,
             CompletedTask.task_duration_seconds,
             CompletedTask.elements_shown_in_task,
             CompletedTask.elements_shown_content,
-            CompletedTask.layers_shown_in_task
-        ).where(CompletedTask.study_response_id.in_(response_ids))
+            CompletedTask.layers_shown_in_task,
+        ]
+        if unilever_format or str(study.study_type) in ('hybrid', 'grid', 'text'):
+            task_cols.append(CompletedTask.task_type)
+        tasks_query = select(*task_cols).where(CompletedTask.study_response_id.in_(response_ids))
         tasks_df = pd.read_sql(tasks_query, self.db.bind)
 
         # Fetch answers
@@ -2454,7 +2472,10 @@ class StudyResponseService:
 
         question_id_to_col = {}
         question_id_to_options = {}
+        question_id_yes_no_cols = set()  # column names for questions with Yes/No options → export as 0/1
         next_q_num = 1
+        _yes_variants = frozenset(('yes', 'y'))
+        _no_variants = frozenset(('no', 'n'))
         for q in questions:
             col_name = q.question_text or f"QQ{next_q_num}"
             question_id_to_col[q.question_id] = col_name
@@ -2471,6 +2492,18 @@ class StudyResponseService:
                                     options_map[str(opt[key])] = text
             if options_map:
                 question_id_to_options[q.question_id] = options_map
+            # Detect Yes/No (or Y/N) questions for 0/1 mapping in raw export
+            if isinstance(q.answer_options, list) and len(q.answer_options) == 2:
+                texts = []
+                for opt in q.answer_options:
+                    if isinstance(opt, dict):
+                        t = (opt.get("text") or opt.get("label") or opt.get("name") or "").strip().lower()
+                        if t:
+                            texts.append(t)
+                if len(texts) == 2:
+                    s0, s1 = texts[0], texts[1]
+                    if (s0 in _yes_variants and s1 in _no_variants) or (s0 in _no_variants and s1 in _yes_variants):
+                        question_id_yes_no_cols.add(col_name)
 
         # Pivot answers: one row per response, columns are question_ids
         if not answers_df.empty:
@@ -2560,22 +2593,22 @@ class StudyResponseService:
             from collections import defaultdict
 
             # Fetch categories
+            cat_load = [StudyCategory.id, StudyCategory.name, StudyCategory.order]
             cats = self.db.execute(
                 select(StudyCategory)
                 .where(StudyCategory.study_id == study_id)
                 .order_by(StudyCategory.order)
                 .options(
-                    load_only(StudyCategory.id, StudyCategory.name, StudyCategory.order),
+                    load_only(*cat_load),
                     noload(StudyCategory.study),
                     noload(StudyCategory.elements)
                 )
             ).scalars().all()
 
-            # Fetch all elements
+            # Fetch all elements (order doesn't matter for name-based matching)
             all_elements = self.db.execute(
                 select(StudyElement)
                 .where(StudyElement.study_id == study_id)
-                .order_by(StudyElement.category_id, StudyElement.element_id)
                 .options(
                     load_only(StudyElement.category_id, StudyElement.name, StudyElement.element_id),
                     noload(StudyElement.study),
@@ -2588,60 +2621,109 @@ class StudyResponseService:
             for el in all_elements:
                 elems_by_cat[el.category_id].append(el)
 
-            # Grid definition list
-            grid_defs = []
+            # Build column headers: one per (category, element) for all categories
+            # col_header -> (cat_name, el_name) mapping for name-based lookup
+            col_headers = []
+            col_to_cat_el = {}
             for cat in cats:
                 elems = elems_by_cat.get(cat.id, [])
-                for idx, el in enumerate(elems, start=1):
-                    grid_defs.append((cat.name, el.name, idx))
+                for el in elems:
+                    col_header = f"{cat.name}-{el.name}".replace('_', '-').replace(' ', '-')
+                    col_headers.append(col_header)
+                    col_to_cat_el[col_header] = (cat.name, el.name)
 
-            # Expand task + content visibility
-            # Replace None values with {} before creating DataFrame
-            esi_list = [x if x is not None else {} for x in full_df['elements_shown_in_task'].tolist()]
-            esc_list = [x if x is not None else {} for x in full_df['elements_shown_content'].tolist()]
-            esi_df = pd.DataFrame(esi_list)
-            esc_df = pd.DataFrame(esc_list)
+            # Load Study.tasks as the source of truth (same data the session API uses).
+            # study.tasks may be None if loaded with defer(), so explicitly query if needed.
+            tasks_dict = getattr(study, 'tasks', None) or {}
+            if not tasks_dict and study_id:
+                try:
+                    row = self.db.execute(select(Study.tasks).where(Study.id == study_id)).first()
+                    if row and row[0] is not None:
+                        tasks_dict = row[0]
+                except Exception:
+                    pass
+            use_planned = isinstance(tasks_dict, dict) and len(tasks_dict) > 0 and 'respondent_id' in full_df.columns
 
-            def normalize_value(x):
-                if isinstance(x, bool):
-                    return int(x)
-                if isinstance(x, (int, float)) and not pd.isna(x):
-                    return 1 if x > 0 else 0
-                if isinstance(x, str):
-                    return 1 if x.lower() in ("1", "true", "yes", "visible") else 0
-                return 0
+            if use_planned:
+                # --- NAME-BASED MATCHING using Study.tasks (always correct) ---
+                # Pre-build per-row: set of (cat_name, el_name) that were shown (visible=1)
+                shown_names_by_row: list = []
+                for i in range(len(full_df)):
+                    row = full_df.iloc[i]
+                    rid = row.get('respondent_id')
+                    tidx = int(row.get('task_index', 0))
+                    tasks_list = tasks_dict.get(str(rid)) or tasks_dict.get(str(max(0, int(rid or 0) - 1))) or []
+                    task_def = (tasks_list[tidx] if isinstance(tasks_list, list) and 0 <= tidx < len(tasks_list) else {}) or {}
 
-            for cat_name, el_name, idx in grid_defs:
-                col_header = f"{cat_name}-{el_name}".replace('_', '-').replace(' ', '-')
+                    es = task_def.get('elements_shown', {})
+                    esc = task_def.get('elements_shown_content', {})
 
-                candidates = [
-                    f"{cat_name}_{idx}",
-                    f"{cat_name.replace(' ', '_')}_{idx}",
-                    f"{cat_name.lower()}_{idx}",
-                ]
+                    shown_set = set()
+                    for key, visible in (es.items() if isinstance(es, dict) else []):
+                        if int(visible) != 1:
+                            continue
+                        content = esc.get(key) if isinstance(esc, dict) else None
+                        if content and isinstance(content, dict):
+                            cat_name = content.get('category_name') or (key.rsplit('_', 1)[0] if '_' in key else '')
+                            el_name = content.get('name')
+                            if cat_name and el_name:
+                                shown_set.add((cat_name, el_name))
+                    shown_names_by_row.append(shown_set)
 
-                valid_cols = [c for c in candidates if c in esi_df.columns]
+                # Set columns using pre-built name sets
+                for col_header in col_headers:
+                    cat_name, el_name = col_to_cat_el[col_header]
+                    full_df[col_header] = pd.Series(
+                        [1 if (cat_name, el_name) in shown_names_by_row[i] else 0 for i in range(len(full_df))],
+                        index=full_df.index,
+                        dtype=int
+                    )
+                    dynamic_cols.append(col_header)
 
-                # Base column = all hidden
-                full_df[col_header] = 0
+            else:
+                # --- FALLBACK: index-based matching (when Study.tasks is unavailable) ---
+                grid_defs = []
+                for cat in cats:
+                    elems = elems_by_cat.get(cat.id, [])
+                    for idx, el in enumerate(elems, start=1):
+                        grid_defs.append((cat.name, el.name, idx))
 
-                # From "shown in task"
-                for c in valid_cols:
-                    full_df[col_header] |= esi_df[c].apply(normalize_value)
+                esi_list = [x if x is not None else {} for x in full_df['elements_shown_in_task'].tolist()]
+                esc_list = [x if x is not None else {} for x in full_df['elements_shown_content'].tolist()]
+                esi_df = pd.DataFrame(esi_list)
+                esc_df = pd.DataFrame(esc_list)
 
-                # Fallback from content visibility map (ESC)
-                header_key = f"{cat_name}_{el_name}"
-                header_key_alt = header_key.replace(" ", "_")
+                def normalize_value(x):
+                    if isinstance(x, bool):
+                        return int(x)
+                    if isinstance(x, (int, float)) and not pd.isna(x):
+                        return 1 if x > 0 else 0
+                    if isinstance(x, str):
+                        return 1 if x.lower() in ("1", "true", "yes", "visible") else 0
+                    return 0
 
-                if header_key in esc_df.columns:
-                    full_df[col_header] |= esc_df[header_key].notna().astype(int)
-                elif header_key_alt in esc_df.columns:
-                    full_df[col_header] |= esc_df[header_key_alt].notna().astype(int)
+                for cat_name, el_name, idx in grid_defs:
+                    col_header = f"{cat_name}-{el_name}".replace('_', '-').replace(' ', '-')
+                    candidates = [
+                        f"{cat_name}_{idx}",
+                        f"{cat_name.replace(' ', '_')}_{idx}",
+                        f"{cat_name.lower()}_{idx}",
+                    ]
+                    valid_cols = [c for c in candidates if c in esi_df.columns]
 
-                # 🔥 Ensure final numeric type — fix boolean override forever
-                full_df[col_header] = full_df[col_header].astype(int)
+                    full_df[col_header] = 0
+                    for c in valid_cols:
+                        full_df[col_header] |= esi_df[c].apply(normalize_value)
 
-                dynamic_cols.append(col_header)
+                    header_key = f"{cat_name}_{el_name}"
+                    header_key_alt = header_key.replace(" ", "_")
+                    if header_key in esc_df.columns:
+                        full_df[col_header] |= esc_df[header_key].notna().astype(int)
+                    elif header_key_alt in esc_df.columns:
+                        full_df[col_header] |= esc_df[header_key_alt].notna().astype(int)
+
+                    full_df[col_header] = full_df[col_header].astype(int)
+                    dynamic_cols.append(col_header)
 
 
 
@@ -2714,22 +2796,76 @@ class StudyResponseService:
                 # Apply function to each row using apply on axis=1
                 full_df[col_header] = full_df.apply(get_layer_visibility, axis=1)
 
-        # 5. Assemble Final DataFrame
-        # Columns: Panelist, [Questions], Gender, Age, Task, [Dynamic], Rating, ResponseTime
+        # 5. Unilever-only columns (no extra queries; study already loaded)
+        if unilever_format:
+            # Panelist: panelist_id if present, else session_id
+            panelist_ok = full_df['panelist_id'].notna() & (full_df['panelist_id'].astype(str).str.strip() != '')
+            full_df['_panelist'] = full_df['panelist_id'].where(panelist_ok, full_df['session_id'])
+            # Product ID (study-level, same for all rows)
+            full_df['Product ID'] = study.product_id if getattr(study, 'product_id', None) else ''
+            # Product keys: one column per key, value = percentage
+            product_keys = getattr(study, 'product_keys', None) or []
+            for k in product_keys:
+                if isinstance(k, dict) and k.get('name'):
+                    full_df[k['name']] = k.get('percentage') if k.get('percentage') is not None else ''
+            # Task type: grid -> Image, text -> Text, layer/hybrid grid -> Pict, hybrid text -> Text
+            st = str(study.study_type)
+            if st == 'grid':
+                full_df['Task type'] = 'Image'
+            elif st == 'text':
+                full_df['Task type'] = 'Text'
+            elif st == 'layer':
+                full_df['Task type'] = 'Pict'
+            elif st == 'hybrid':
+                def _task_type_label(tt):
+                    if pd.isna(tt) or tt is None:
+                        return ''
+                    t = str(tt).strip().lower()
+                    return 'Pict' if t == 'grid' else ('Text' if t == 'text' else '')
+                full_df['Task type'] = full_df['task_type'].map(_task_type_label)
+            else:
+                full_df['Task type'] = ''
+
+        # 6. Assemble Final DataFrame
+        # Columns: Panelist, [Product ID], [keys], [Questions], Gender, Age, Task, [Task type], [Dynamic], Rating, ResponseTime
 
         # Join answers
         # answers_pivot index is study_response_id
         full_df = full_df.merge(answers_pivot, left_on='study_response_id', right_index=True, how='left')
 
-        # DEFINE final_cols FIRST
-        final_cols = ['session_id', 'Age', 'Gender'] + list(question_id_to_col.values()) + ['Task'] + dynamic_cols + ['rating_given', 'task_duration_seconds']
+        # Map Yes/No (and Y/N) classification answers to 0/1 in raw export
+        def _yes_no_to_01(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return v
+            s = str(v).strip().lower()
+            if s in ('yes', 'y'):
+                return 1
+            if s in ('no', 'n'):
+                return 0
+            return v
+        for col in question_id_yes_no_cols:
+            if col in full_df.columns:
+                full_df[col] = full_df[col].apply(_yes_no_to_01)
 
-        # Rename for export
-        export_rename = {
-            'session_id': 'Panelist',
-            'rating_given': 'Rating',
-            'task_duration_seconds': 'ResponseTime'
-        }
+        if unilever_format:
+            key_cols = [k['name'] for k in (getattr(study, 'product_keys', None) or []) if isinstance(k, dict) and k.get('name')]
+            final_cols = (
+                ['_panelist', 'Product ID', 'Age', 'Gender'] + key_cols +
+                list(question_id_to_col.values()) + ['Task', 'Task type'] +
+                dynamic_cols + ['rating_given', 'task_duration_seconds']
+            )
+            export_rename = {
+                '_panelist': 'Panelist',
+                'rating_given': 'Rating',
+                'task_duration_seconds': 'ResponseTime'
+            }
+        else:
+            final_cols = ['session_id', 'Age', 'Gender'] + list(question_id_to_col.values()) + ['Task'] + dynamic_cols + ['rating_given', 'task_duration_seconds']
+            export_rename = {
+                'session_id': 'Panelist',
+                'rating_given': 'Rating',
+                'task_duration_seconds': 'ResponseTime'
+            }
 
         # NOW ensure all columns exist - fill with 0 for dynamic columns (layers/grid), None for others
         for c in final_cols:

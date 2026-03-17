@@ -1775,8 +1775,10 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
         category_info[category_name] = [f"{category_name}_{j+1}" for j in range(len(category['elements']))]
 
     C = len(category_info)
-    # Over-generate respondents by 5x and later slice to requested count
-    N = number_of_respondents * 5
+    # Over-generate respondents by 2x with max cap of 1500
+    # If number_of_respondents >= 750, N will be capped at 1500
+    MAX_RESPONDENTS = 1500
+    N = min(number_of_respondents * 2, MAX_RESPONDENTS)
 
     # Study mode & per-row active cap
     mode = "grid"
@@ -1899,7 +1901,7 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
     tasks_structure: Dict[str, List[Dict[str, Any]]] = {}
     all_elements = [e for es in category_info.values() for e in es]
 
-    for respondent_id in range(number_of_respondents):
+    for respondent_id in range(N):
         respondent_tasks: List[Dict[str, Any]] = []
         start_idx = respondent_id * tasks_per_consumer
         end_idx = start_idx + tasks_per_consumer
@@ -1961,7 +1963,7 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
     end_time_str = time.strftime('%H:%M:%S', time.localtime(end_time))
     print(f"✅ Grid task generation completed at {end_time_str}")
     print(f"⏱️ Total duration: {total_duration:.2f} seconds")
-    print(f"📊 Performance: {number_of_respondents} respondents in {total_duration:.2f}s = {number_of_respondents/total_duration:.2f} respondents/second")
+    print(f"📊 Performance: {N} respondents in {total_duration:.2f}s = {N/total_duration:.2f} respondents/second")
 
     return {
         'tasks': tasks_structure,
@@ -1999,8 +2001,10 @@ def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
         category_info[layer_name] = elements
 
     C = len(category_info)
-    # Over-generate respondents by 5x and later slice to requested count
-    N = number_of_respondents * 5
+    # Over-generate respondents by 2x with max cap of 1500
+    # If number_of_respondents >= 750, N will be capped at 1500
+    MAX_RESPONDENTS = 1500
+    N = min(number_of_respondents * 2, MAX_RESPONDENTS)
 
     mode = "layout"
     max_active_per_row = C
@@ -2085,7 +2089,7 @@ def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
     tasks_structure: Dict[str, List[Dict[str, Any]]] = {}
     all_elements = [e for es in category_info.values() for e in es]
 
-    for respondent_id in range(number_of_respondents):
+    for respondent_id in range(N):
         respondent_tasks: List[Dict[str, Any]] = []
         start_idx = respondent_id * tasks_per_consumer
         end_idx = start_idx + tasks_per_consumer
@@ -2146,7 +2150,7 @@ def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
     end_time_str = time.strftime('%H:%M:%S', time.localtime(end_time))
     print(f"✅ Layer task generation completed at {end_time_str}")
     print(f"⏱️ Total duration: {total_duration:.2f} seconds")
-    print(f"📊 Performance: {number_of_respondents} respondents in {total_duration:.2f}s = {number_of_respondents/total_duration:.2f} respondents/second")
+    print(f"📊 Performance: {N} respondents in {total_duration:.2f}s = {N/total_duration:.2f} respondents/second")
 
     return {
         'tasks': tasks_structure,

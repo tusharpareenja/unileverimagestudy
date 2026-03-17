@@ -26,6 +26,7 @@ class PanelistCreate(PanelistBase):
 class PanelistResponse(PanelistBase):
     id: str
     creator_email: str
+    creator_domain: Optional[str] = None
 
     class Config:
         from_attributes = True

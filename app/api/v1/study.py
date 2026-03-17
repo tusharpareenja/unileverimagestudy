@@ -5,7 +5,8 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, HTTPException, status, Body
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Body, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -16,7 +17,7 @@ from app.models.study_model import Study, StudyMember
 from app.schemas.study_schema import (
     StudyCreate, StudyUpdate, StudyOut, StudyListItem, StudyLaunchOut,
     ChangeStatusPayload, RegenerateTasksResponse, ValidateTasksResponse, StudyStatus,
-    GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal, StudyBasicDetails,
+    GenerateTasksRequest, GenerateTasksResult, StudyPublicMinimal, StudyBasicDetails, StudyBasicDetailsV2, SimulateAIRespondentsRequest,
     StudyCreateMinimal, StudyCreateMinimalResponse, CopyStudyRequest
 )
 from app.services import study as study_service
@@ -232,6 +233,8 @@ def _ensure_study_exists(payload: GenerateTasksRequest, db: Session, current_use
                 elements=payload.elements,
                 study_layers=payload.study_layers,
                 classification_questions=payload.classification_questions,
+                product_keys=getattr(payload, 'product_keys', None),
+                product_id=getattr(payload, 'product_id', None),
             ),
             base_url_for_share=settings.BASE_URL,
         )
@@ -279,6 +282,7 @@ def create_study_minimal_endpoint(
     The study is created in 'draft' status with default values that can be updated later.
     Use PUT /studies/{study_id} to add remaining details like main_question, elements, etc.
     """
+    product_keys_list = [k.model_dump() for k in payload.product_keys] if getattr(payload, 'product_keys', None) else None
     study_id = study_service.create_study_minimal(
         db=db,
         creator_id=current_user.id,
@@ -287,6 +291,8 @@ def create_study_minimal_endpoint(
         language=payload.language,
         last_step=payload.last_step or 1,
         project_id=getattr(payload, 'project_id', None),
+        product_keys=product_keys_list,
+        product_id=getattr(payload, 'product_id', None),
     )
     return StudyCreateMinimalResponse(id=study_id)
 
@@ -354,7 +360,18 @@ def list_studies_endpoint(
     per_page: int = Query(10, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    response: Response = None,
 ):
+    """
+    List studies for the current user with live response counts.
+    Response includes total_responses, completed_responses, completion_rate, etc.
+    Clients should replace any cached studies list (e.g. in local storage) with this response
+    so cached data does not show stale zeros.
+    """
+    # Prevent caching so clients always get fresh counts (avoids stale zeros in cached/local storage)
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
     rows, _total = study_service.list_studies(
         db=db,
         owner_id=current_user.id,
@@ -433,6 +450,7 @@ def list_studies_endpoint(
 @router.post("/{study_id}/simulate-ai-respondents")
 def simulate_ai_respondents_endpoint(
     study_id: UUID,
+    body: Optional[SimulateAIRespondentsRequest] = Body(None),
     run_async: bool = Query(True, description="If True and respondent count exceeds threshold, run in background"),
     max_respondents: Optional[int] = Query(None, description="Cap on number of respondents to simulate (default from study)"),
     max_panelist_workers: int = Query(10, ge=1, le=50, description="Number of panelists to run in parallel (AI phase); same as standalone main.py max_workers=10"),
@@ -442,6 +460,7 @@ def simulate_ai_respondents_endpoint(
     """
     Simulate AI respondents for a study: generate panelists (gender, age, classification answers),
     run AI rating for each respondent's tasks in order, and persist via the same storage as human respondents.
+    Body (optional): max_respondents, is_special_creator, randomize. If is_special_creator=true, AI rates only 1 or 5. If randomize=true, use fallback (random) ratings instead of ChatGPT.
     """
     study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
     if not study.tasks or not isinstance(study.tasks, dict) or len(study.tasks) == 0:
@@ -449,8 +468,13 @@ def simulate_ai_respondents_endpoint(
     if not study.classification_questions or len(study.classification_questions) == 0:
         raise HTTPException(status_code=400, detail="Study has no classification questions.")
 
+    # Body overrides query for max_respondents, is_special_creator, randomize
+    body_max = body.max_respondents if body else None
+    is_special_creator = body.is_special_creator if body and body.is_special_creator is not None else False
+    randomize = body.randomize if body and body.randomize is not None else False
+
     seg = study.audience_segmentation or {}
-    N = max_respondents if max_respondents is not None and max_respondents >= 1 else int(seg.get("number_of_respondents") or 0)
+    N = body_max if body_max is not None and body_max >= 1 else (max_respondents if max_respondents is not None and max_respondents >= 1 else int(seg.get("number_of_respondents") or 0))
     if N <= 0:
         try:
             task_keys = [k for k in study.tasks if str(k).isdigit()]
@@ -459,6 +483,14 @@ def simulate_ai_respondents_endpoint(
             N = 0
     if N <= 0:
         raise HTTPException(status_code=400, detail="Could not determine number of respondents (set audience_segmentation.number_of_respondents or ensure tasks have numeric keys).")
+
+    from app.services.synthetic_simulation_service import get_max_panelist_combinations
+    max_combinations = get_max_panelist_combinations(db, study_id)
+    if max_combinations is not None and N > max_combinations:
+        raise HTTPException(
+            status_code=400,
+            detail=f"AI cannot process more than {max_combinations} respondents. Classification combinations allow at most {max_combinations}.",
+        )
 
     if run_async and N > settings.MAX_RESPONDENTS_FOR_SYNC:
         import threading
@@ -469,7 +501,13 @@ def simulate_ai_respondents_endpoint(
         job_id = background_task_service.create_job(
             study_id=str(study_id),
             user_id=str(current_user.id),
-            payload={"job_type": "simulate_ai_respondents", "max_respondents": N, "max_panelist_workers": max_panelist_workers},
+            payload={
+                "job_type": "simulate_ai_respondents",
+                "max_respondents": N,
+                "max_panelist_workers": max_panelist_workers,
+                "is_special_creator": is_special_creator,
+                "randomize": randomize,
+            },
         )
         def run_background_job():
             import asyncio
@@ -496,6 +534,8 @@ def simulate_ai_respondents_endpoint(
             "message": "Simulation started in background.",
             "study_id": str(study_id),
             "respondents_requested": N,
+            "stream_url": f"/api/v1/studies/simulate-ai-respondents/stream/{job_id}",
+            "status_url": f"/api/v1/studies/simulate-ai-respondents/status/{job_id}",
         }
 
     from app.services.synthetic_simulation_service import run_simulation
@@ -503,8 +543,10 @@ def simulate_ai_respondents_endpoint(
         db=db,
         study_id=study_id,
         study_data=None,
-        max_respondents=max_respondents,
+        max_respondents=N,
         max_panelist_workers=max_panelist_workers,
+        is_special_creator=is_special_creator,
+        randomize=randomize,
     )
     return result
 
@@ -661,7 +703,7 @@ def get_study_preview_endpoint(
     return out
 
 
-@router.get("/{study_id}/basic", response_model=StudyBasicDetails)
+@router.get("/{study_id}/basic", response_model=StudyBasicDetails, response_model_exclude_none=True)
 def get_study_basic_details_endpoint(
     study_id: UUID,
     db: Session = Depends(get_db),
@@ -676,6 +718,21 @@ def get_study_basic_details_endpoint(
     - Classification questions
     """
     details = study_service.get_study_basic_details_public(db=db, study_id=study_id)
+    if not details:
+        raise HTTPException(status_code=404, detail="Study not found")
+    return details
+
+
+@router.get("/{study_id}/basic-2", response_model=StudyBasicDetailsV2, response_model_exclude_none=True)
+def get_study_basic_details_v2_endpoint(
+    study_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Same as basic but also includes total_responses (how many opted in/started the study).
+    No authentication required.
+    """
+    details = study_service.get_study_basic_details_public_v2(db=db, study_id=study_id)
     if not details:
         raise HTTPException(status_code=404, detail="Study not found")
     return details
@@ -1391,6 +1448,115 @@ def update_and_launch_study_endpoint(
     return study
 
 
+@router.get("/simulate-ai-respondents/status/{job_id}")
+def get_simulate_ai_respondents_status(
+    job_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Get simulate-ai-respondents job progress. Returns in milliseconds.
+    Safe for Azure - no long-lived connection. Poll every 2 seconds until status is completed/failed/cancelled.
+    Same response shape as the stream events.
+    """
+    from app.services.background_task_service import background_task_service
+
+    job = background_task_service.get_job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    result = job.result or {}
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=400, detail="Not a simulate-ai-respondents job")
+    inner_payload = result.get("payload") or {}
+    run_result = result.get("run_result") or {}
+    # Accept either payload.job_type (before/during run) or run_result.respondents_simulated (after completion)
+    is_simulate = (isinstance(inner_payload, dict) and inner_payload.get("job_type") == "simulate_ai_respondents") or (
+        "respondents_simulated" in run_result
+    )
+    if not is_simulate:
+        raise HTTPException(status_code=400, detail="Not a simulate-ai-respondents job")
+
+    respondents_requested = inner_payload.get("max_respondents") if isinstance(inner_payload, dict) else None
+
+    return {
+        "job_id": job.job_id,
+        "study_id": job.study_id,
+        "status": job.status.value,
+        "progress": float(job.progress or 0),
+        "message": job.message or "",
+        "respondents_requested": respondents_requested,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "error": job.error,
+        "result": job.result,
+    }
+
+
+@router.get("/simulate-ai-respondents/stream/{job_id}")
+async def stream_simulate_ai_respondents_progress(
+    job_id: str,
+    interval_seconds: float = Query(1.5, ge=0.5, le=10, description="Poll interval in seconds"),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Server-Sent Events (SSE) stream for simulate-ai-respondents job progress.
+    Emits events with progress, message (e.g. "1/200 respondent completed"), status.
+    Frontend can use EventSource to show real-time loader.
+    """
+    import asyncio
+    import json
+    from app.services.background_task_service import background_task_service
+    from app.db.session import SessionLocal
+    from app.models.job_model import Job
+
+    job = background_task_service.get_job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    result = job.result or {}
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=400, detail="Not a simulate-ai-respondents job")
+    inner_payload = result.get("payload") or {}
+    if not isinstance(inner_payload, dict) or inner_payload.get("job_type") != "simulate_ai_respondents":
+        raise HTTPException(status_code=400, detail="Not a simulate-ai-respondents job")
+
+    async def event_generator():
+        last_msg = None
+        while True:
+            db = SessionLocal()
+            try:
+                j = db.query(Job).filter_by(job_id=job_id).first()
+                if not j:
+                    break
+                status_val = j.status.value if hasattr(j.status, "value") else str(j.status)
+                msg = j.message or ""
+                prog = float(j.progress or 0)
+                if (msg, prog, status_val) != last_msg:
+                    data = {
+                        "job_id": job_id,
+                        "status": status_val,
+                        "progress": prog,
+                        "message": msg,
+                        "respondents_requested": inner_payload.get("max_respondents"),
+                    }
+                    yield f"data: {json.dumps(data)}\n\n"
+                    last_msg = (msg, prog, status_val)
+                if status_val in ("completed", "failed", "cancelled"):
+                    break
+            finally:
+                db.close()
+            await asyncio.sleep(interval_seconds)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/generate-tasks/status/{job_id}")
 def get_task_generation_status(
     job_id: str,
@@ -1564,7 +1730,7 @@ def get_task_generation_result(
         "status": job.status.value,
         "tasks": enriched_tasks,
         "metadata": {
-            "total_respondents": len(study.tasks) if study.tasks else 0,
+            "total_respondents": len([k for k in study.tasks if str(k).isdigit()]) if (study.tasks and isinstance(study.tasks, dict)) else (len(study.tasks) if study.tasks else 0),
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,
             "message": "Task generation completed successfully"
         },

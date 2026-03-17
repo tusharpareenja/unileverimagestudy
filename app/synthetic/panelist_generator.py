@@ -2,7 +2,7 @@ import json
 import os
 import itertools
 import random
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 
 def load_study_data(file_path: str) -> Dict[str, Any]:
@@ -79,11 +79,19 @@ def calculate_demographic_distribution(
     return distribution
 
 
-def generate_all_panelist_combinations(study_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def generate_all_panelist_combinations(
+    study_data: Dict[str, Any],
+    max_panelists: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """
-    Generate all possible panelist combinations based on classification questions.
+    Generate panelist combinations based on classification questions.
     Each panelist will have a unique combination of answers plus age and gender
     assigned based on audience segmentation.
+
+    Args:
+        study_data: Study configuration dict.
+        max_panelists: If set, generate only the first N panelists (for performance
+            when only a subset is needed). When None, generates all combinations.
     """
     classification_questions = study_data.get('classification_questions', [])
     
@@ -109,18 +117,25 @@ def generate_all_panelist_combinations(study_data: Dict[str, Any]) -> List[Dict[
     for options in answer_option_lists:
         total_combinations *= len(options)
     
+    # When limiting, only compute demographics for what we need
+    count_for_demographics = min(total_combinations, max_panelists) if max_panelists else total_combinations
+    
     audience_seg = study_data.get('audience_segmentation', {})
     gender_distribution = audience_seg.get('gender_distribution', {})
     age_distribution = audience_seg.get('age_distribution', {})
     
     demographic_distribution = calculate_demographic_distribution(
-        total_combinations,
+        count_for_demographics,
         gender_distribution,
         age_distribution
     )
     
+    product_iter = itertools.product(*answer_option_lists)
+    if max_panelists is not None and max_panelists >= 1:
+        product_iter = itertools.islice(product_iter, max_panelists)
+    
     panelists = []
-    for idx, combination in enumerate(itertools.product(*answer_option_lists), start=1):
+    for idx, combination in enumerate(product_iter, start=1):
         panelist = {
             'panelist_id': f"panelist_{idx:06d}",
             'panelist_number': idx,

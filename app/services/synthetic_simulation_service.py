@@ -25,6 +25,44 @@ from app.schemas.response_schema import (
 MAX_CONCURRENT_AI = 10
 
 
+def get_max_panelist_combinations(db: Session, study_id: UUID) -> Optional[int]:
+    """
+    Return max number of respondents allowed (based on classification combinations with tasks).
+    Returns None if study has no tasks or panelists.
+    """
+    from app.models.study_model import Study
+
+    study = db.get(Study, study_id)
+    if not study:
+        return None
+    study_data = build_study_data_for_synthetic(study)
+    tasks = study_data.get("tasks") or {}
+    if not isinstance(tasks, dict) or len(tasks) == 0:
+        return None
+    classification_questions = study_data.get("classification_questions") or []
+    if not classification_questions:
+        return None
+
+    total_combinations = 1
+    for question in classification_questions:
+        answer_options = question.get("answer_options") or []
+        option_count = len(answer_options)
+        if option_count <= 0:
+            return None
+        total_combinations *= option_count
+
+    available_panelist_numbers = set()
+    for key in tasks:
+        try:
+            if str(key).isdigit():
+                available_panelist_numbers.add(int(key))
+        except (ValueError, TypeError):
+            continue
+    if available_panelist_numbers:
+        return sum(1 for number in available_panelist_numbers if 1 <= number <= total_combinations)
+    return total_combinations
+
+
 def run_simulation(
     db: Session,
     study_id: UUID,
@@ -34,6 +72,8 @@ def run_simulation(
     model: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
     max_panelist_workers: Optional[int] = None,
+    is_special_creator: bool = False,
+    randomize: bool = False,
 ) -> Dict[str, Any]:
     """
     Run AI respondent simulation for a study: generate panelists, rate vignettes
@@ -48,6 +88,7 @@ def run_simulation(
         model: Optional; uses OPENAI_MODEL env or gpt-4o-mini.
         progress_callback: Optional callback(done: int, total: int, message: str) for progress (e.g. background job).
         max_panelist_workers: If > 1, run that many panelists in parallel (AI only); DB writes stay sequential. Default 1.
+        randomize: If True, use fallback (random) ratings instead of ChatGPT API.
     
     Returns:
         Summary dict: success, respondents_simulated, message, error (if failed).
@@ -59,6 +100,8 @@ def run_simulation(
         if not study:
             return {"success": False, "respondents_simulated": 0, "message": "Study not found", "error": "Study not found"}
         study_data = build_study_data_for_synthetic(study)
+    study_data["is_special_creator"] = is_special_creator
+    study_data["randomize"] = randomize
     
     tasks = study_data.get("tasks") or {}
     if not isinstance(tasks, dict) or len(tasks) == 0:
@@ -82,11 +125,6 @@ def run_simulation(
     api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
     model_name = model or os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
     
-    # Generate panelists (all combinations)
-    panelists = generate_all_panelist_combinations(study_data)
-    if not panelists:
-        return {"success": False, "respondents_simulated": 0, "message": "No panelists generated (check classification_questions and answer_options)", "error": "No panelists"}
-    
     # Standalone logic: only run panelists that have tasks (task keys = available panelist numbers)
     available_panelist_numbers = set()
     for key in tasks:
@@ -96,6 +134,13 @@ def run_simulation(
         except (ValueError, TypeError):
             continue
     
+    # Limit panelist generation to the highest panelist number we need (avoids full cartesian product)
+    max_to_generate = max(available_panelist_numbers) if available_panelist_numbers else None
+    
+    panelists = generate_all_panelist_combinations(study_data, max_panelists=max_to_generate)
+    if not panelists:
+        return {"success": False, "respondents_simulated": 0, "message": "No panelists generated (check classification_questions and answer_options)", "error": "No panelists"}
+    
     if available_panelist_numbers:
         panelists_with_tasks = [p for p in panelists if p.get("panelist_number") in available_panelist_numbers]
         panelists_with_tasks.sort(key=lambda p: p.get("panelist_number", 0))
@@ -104,7 +149,16 @@ def run_simulation(
     
     if not panelists_with_tasks:
         return {"success": False, "respondents_simulated": 0, "message": "No panelists with tasks", "error": "No panelists with tasks"}
-    
+
+    max_combinations = len(panelists_with_tasks)
+    if N > max_combinations:
+        return {
+            "success": False,
+            "respondents_simulated": 0,
+            "message": f"AI cannot process more than {max_combinations} respondents. Classification combinations allow at most {max_combinations}.",
+            "error": f"max_respondents ({N}) exceeds max combinations ({max_combinations})",
+        }
+
     # Standalone logic: run only panelists that have tasks, up to N (no cycling)
     panelists_to_run = panelists_with_tasks[:N]
     total = len(panelists_to_run)
@@ -211,8 +265,39 @@ def run_simulation(
                 if progress_callback:
                     progress_callback(simulated, total, f"Respondent {idx + 1}/{total} failed: {e}")
     else:
-        # Parallel AI phase: run process_panelist_response in threads
+        # Parallel AI phase: run process_panelist_response in threads.
+        # Write to DB in index order as soon as each result is available (buffer approach),
+        # so progress updates start as soon as the first panelist completes, not after all N complete.
         results_by_idx: Dict[int, Tuple[Optional[Dict[str, Any]], Optional[str]]] = {}
+        next_idx_to_write = 0
+
+        def drain_writes():
+            """Write any consecutive completed results that are next in order."""
+            nonlocal simulated, next_idx_to_write, last_error
+            while next_idx_to_write < total and next_idx_to_write in results_by_idx:
+                idx = next_idx_to_write
+                panelist = panelists_to_run[idx]
+                response, err = results_by_idx[idx]
+                next_idx_to_write += 1
+                if err:
+                    last_error = err
+                    if progress_callback:
+                        progress_callback(simulated, total, f"Respondent {idx + 1}/{total} AI failed: {err}")
+                    continue
+                if response is None:
+                    continue
+                payload = _build_payload(response, panelist, idx)
+                try:
+                    submit_result = response_service.submit_synthetic_respondent(study_id, payload)
+                    simulated += 1
+                    session_id = submit_result.get("session_id", "")
+                    if progress_callback:
+                        progress_callback(simulated, total, f"Respondent {simulated}/{total} done — session_id: {session_id}")
+                except Exception as e:
+                    last_error = str(e)
+                    if progress_callback:
+                        progress_callback(simulated, total, f"Respondent {idx + 1}/{total} failed: {e}")
+
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(_run_one_panelist, (idx, panelist)): idx for idx, panelist in enumerate(panelists_to_run)}
             for future in as_completed(futures):
@@ -222,28 +307,8 @@ def run_simulation(
                 except Exception as e:
                     idx = futures[future]
                     results_by_idx[idx] = (None, str(e))
-        # Sequential DB phase: submit in index order
-        for idx in range(total):
-            panelist = panelists_to_run[idx]
-            response, err = results_by_idx.get(idx, (None, None))
-            if err:
-                last_error = err
-                if progress_callback:
-                    progress_callback(simulated, total, f"Respondent {idx + 1}/{total} AI failed: {err}")
-                continue
-            if response is None:
-                continue
-            payload = _build_payload(response, panelist, idx)
-            try:
-                submit_result = response_service.submit_synthetic_respondent(study_id, payload)
-                simulated += 1
-                session_id = submit_result.get("session_id", "")
-                if progress_callback:
-                    progress_callback(simulated, total, f"Respondent {simulated}/{total} done — session_id: {session_id}")
-            except Exception as e:
-                last_error = str(e)
-                if progress_callback:
-                    progress_callback(simulated, total, f"Respondent {idx + 1}/{total} failed: {e}")
+                drain_writes()
+        drain_writes()
 
     return {
         "success": True,

@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.schemas.user_schema import (
     UserLogin, UserRegister, UserResponse, UserUpdate, 
     PasswordChange, Token, TokenRefresh, TokenRefreshResponse,
+    ValidateTokenRequest, ValidateTokenResponse,
     UserLoginResponse, ForgotPasswordRequest, ResetPasswordRequest, PasswordResetResponse,
     OAuthData, OAuthLoginResponse
 )
@@ -17,6 +18,7 @@ from app.services.user import (
     reset_password, get_user_by_reset_token, oauth_login
 )
 from app.core.dependencies import get_current_user, get_current_active_user
+from app.core.security import verify_token, refresh_access_token
 from app.models.user_model import User
 
 router = APIRouter()
@@ -104,6 +106,35 @@ async def refresh_tokens(token_data: TokenRefresh, db: Session = Depends(get_db)
         )
     
     return TokenRefreshResponse(**result)
+
+
+@router.post("/validate-token", response_model=ValidateTokenResponse)
+async def validate_token(request: ValidateTokenRequest):
+    """
+    Fast token validation (no DB) - validates access token, optionally refreshes if expired.
+    Returns in ~10ms.
+    """
+    payload = verify_token(request.access_token, "access")
+    if payload:
+        return ValidateTokenResponse(
+            valid=True,
+            user_id=payload.get("sub"),
+            email=payload.get("email"),
+        )
+    if request.refresh_token:
+        refreshed = refresh_access_token(request.refresh_token)
+        if refreshed:
+            sub = verify_token(refreshed["access_token"], "access")
+            return ValidateTokenResponse(
+                valid=True,
+                access_token=refreshed["access_token"],
+                user_id=sub.get("sub") if sub else None,
+                email=sub.get("email") if sub else None,
+            )
+    return ValidateTokenResponse(
+        valid=False,
+        error="Invalid or expired token",
+    )
 
 
 @router.get("/me", response_model=UserResponse)

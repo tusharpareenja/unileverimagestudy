@@ -139,10 +139,10 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
         Returns:
             Dictionary with rating (1-5) and reasoning for the entire vignette
         """
-        if not self.client:
-            return self._generate_fallback_vignette_rating(task, persona_prompt)
+        if study_context.get("randomize") or not self.client:
+            return self._generate_fallback_vignette_rating(task, persona_prompt, study_context)
         
-        # Extract elements shown in this vignette
+        # Extrac elements shown in this vignette
         elements_shown_content = task.get('elements_shown_content', {})
         elements_shown = task.get('elements_shown', {})
         
@@ -155,9 +155,10 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
                     shown_elements.append(element_data)
         
         if not shown_elements:
-            # No elements shown, return neutral rating
+            # No elements shown, return neutral rating (or 5 when special creator = polar only)
+            no_rating = 5 if study_context.get("is_special_creator") else 3
             return {
-                'rating': 3,
+                'rating': no_rating,
                 'reasoning': 'No elements shown in this vignette',
                 'method': 'fallback'
             }
@@ -168,7 +169,8 @@ Rate the entire SET as a WHOLE in response to the question on a scale of 1-5 whe
         
         for element in shown_elements:
             category = element.get('category_name', 'Unknown')
-            content = element.get('content', element.get('name', 'Unknown'))
+            # Layer tasks use 'url'; grid/text use 'content'
+            content = element.get('content') or element.get('url') or element.get('name', 'Unknown')
             element_type = element.get('element_type', 'text')
             
             # Check if content is an image URL
@@ -247,7 +249,10 @@ Respond ONLY with a JSON object in this exact format:
             rating = int(result.get('rating', 3))
             # Ensure rating is in valid range
             rating = max(1, min(5, rating))
-            
+            # Special creator: only 1 or 5 (polar) — map <3 → 1, >=3 → 5
+            if study_context.get("is_special_creator"):
+                rating = 1 if rating < 3 else 5
+
             return {
                 'rating': rating,
                 'reasoning': result.get('reasoning', ''),
@@ -255,27 +260,29 @@ Respond ONLY with a JSON object in this exact format:
             }
         except Exception as e:
             print(f"Error calling AI API: {e}. Using fallback method.")
-            return self._generate_fallback_vignette_rating(task, persona_prompt)
+            return self._generate_fallback_vignette_rating(task, persona_prompt, study_context)
     
-    def _generate_fallback_vignette_rating(self, task: Dict[str, Any], persona_prompt: str) -> Dict[str, Any]:
+    def _generate_fallback_vignette_rating(
+        self, task: Dict[str, Any], persona_prompt: str, study_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Generate a fallback rating for a vignette when AI is not available.
         
         Args:
             task: Task dictionary
             persona_prompt: Persona description (not used in fallback, but kept for consistency)
+            study_context: Optional study context; if is_special_creator is True, rating is 1 or 5 only.
         
         Returns:
             Dictionary with rating and reasoning
         """
-        # Base rating around 3 (neutral)
-        rating = 3
-        
-        # Add some randomness
-        rating += random.randint(-1, 1)
-        
-        # Ensure valid range
-        rating = max(1, min(5, rating))
+        if study_context and study_context.get("is_special_creator"):
+            rating = random.choice([1, 5])
+        else:
+            # Base rating around 3 (neutral)
+            rating = 3
+            rating += random.randint(-1, 1)
+            rating = max(1, min(5, rating))
         
         return {
             'rating': rating,
@@ -334,7 +341,8 @@ def generate_panelist_response_from_json(
                 element_data = elements_shown_content[key]
                 if element_data and isinstance(element_data, dict):
                     category = element_data.get('category_name', 'Unknown')
-                    content = element_data.get('content', element_data.get('name', 'Unknown'))
+                    # Layer tasks use 'url'; grid/text use 'content'
+                    content = element_data.get('content') or element_data.get('url') or element_data.get('name', 'Unknown')
                     vignette_parts.append(f"{category}: {content}")
         vignette_content = "\n".join(vignette_parts)
         
@@ -342,17 +350,18 @@ def generate_panelist_response_from_json(
         elements_shown_content = task.get('elements_shown_content', {})
         elements_shown = task.get('elements_shown', {})
         
-        # Extract shown elements
+        # Extract shown elements (layer tasks use 'url', grid/text use 'content')
         shown_elements = []
         for key, value in elements_shown.items():
             if value == 1 and key in elements_shown_content:
                 element_data = elements_shown_content[key]
                 if element_data and isinstance(element_data, dict):
+                    url_or_content = element_data.get('content') or element_data.get('url')
                     shown_elements.append({
                         'key': key,
                         'element_id': element_data.get('element_id'),
                         'name': element_data.get('name'),
-                        'content': element_data.get('content'),
+                        'content': url_or_content,
                         'category_name': element_data.get('category_name'),
                         'element_type': element_data.get('element_type', 'text')
                     })

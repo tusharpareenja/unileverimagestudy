@@ -1,9 +1,39 @@
 # app/schemas/project_schema.py
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field
+
+
+class ValidateProductKey(BaseModel):
+    """Key name and percentage for uniqueness check."""
+    name: str = Field(..., max_length=200)
+    percentage: float = Field(..., ge=0, le=100)
+
+
+class ValidateProductRequest(BaseModel):
+    """Request body: product_id, study_id (required), product_keys. Project is derived from study."""
+    study_id: UUID = Field(..., description="Study ID; project is derived from the study")
+    product_id: Optional[str] = Field(None, max_length=100)
+    product_keys: Optional[List[ValidateProductKey]] = None
+
+
+class ValidateProductResponse(BaseModel):
+    """Response: valid if neither product_id nor key combination exists in any study in the project."""
+    valid: bool
+    product_id_taken: bool = False
+    key_combination_taken: bool = False
+
+
+class AssignStudyRequest(BaseModel):
+    """Request to assign a standalone study to a project."""
+    study_id: UUID = Field(..., description="Study ID to assign")
+
+
+class AssignStudyResponse(BaseModel):
+    """Response for assign-study."""
+    message: str = "Study assigned to project successfully"
 
 
 class ProjectCreate(BaseModel):

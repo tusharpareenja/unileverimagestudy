@@ -113,6 +113,13 @@ class AnswerOption(BaseModel):
     text: str = Field(..., max_length=200)
     order: Optional[int] = None
 
+
+class ProductKey(BaseModel):
+    """Product key: name and optional percentage (0-100). Percentage may be omitted when reading (e.g. copied studies)."""
+    name: str = Field(..., max_length=200)
+    percentage: float = Field(0, ge=0, le=100)
+
+
 class StudyClassificationQuestionIn(BaseModel):
     question_id: str = Field(..., max_length=10)  # Q1, Q2, ...
     question_text: str = Field(..., max_length=500)
@@ -152,6 +159,8 @@ class StudyBase(BaseModel):
     # phase_order can be strict types OR just strings to support 'mix'
     phase_order: Optional[List[str]] = None
     toggle_shuffle: bool = False
+    product_keys: Optional[List[ProductKey]] = None
+    product_id: Optional[str] = Field(None, max_length=100)
 
     last_step: Optional[int] = Field(default=1, ge=1)
 
@@ -162,6 +171,8 @@ class StudyCreateMinimal(BaseModel):
     language: str = Field(default='en', max_length=10)
     last_step: Optional[int] = Field(default=1, ge=1)
     project_id: Optional[UUID] = Field(None, description="Optional project ID to affiliate this study with")
+    product_keys: Optional[List[ProductKey]] = None
+    product_id: Optional[str] = Field(None, max_length=100)
 
 class StudyCreate(StudyBase):
     # For grid studies, provide elements; for layer studies, provide study_layers
@@ -192,6 +203,8 @@ class StudyUpdate(BaseModel):
     classification_questions: Optional[List[StudyClassificationQuestionIn]] = None
     phase_order: Optional[List[str]] = None
     toggle_shuffle: Optional[bool] = None
+    product_keys: Optional[List[ProductKey]] = None
+    product_id: Optional[str] = Field(None, max_length=100)
 
     status: Optional[StudyStatus] = None
 
@@ -245,6 +258,8 @@ class StudyListItem(BaseModel):
     respondents_target: int | None = 0
     respondents_completed: int | None = 0
     user_role: Optional[str] = None  # current user's role for this study (admin/editor/viewer)
+    product_keys: Optional[List[ProductKey]] = None
+    product_id: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -258,6 +273,8 @@ class StudyPublicMinimal(BaseModel):
     orientation_text: str
     language: str
     creator_email: Optional[str] = None
+    product_keys: Optional[List[ProductKey]] = None
+    product_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=False)
 
@@ -277,8 +294,18 @@ class StudyBasicDetails(BaseModel):
     classification_questions: Optional[List[StudyClassificationQuestionOut]] = None
     element_count: Optional[int] = None  # Number of images (grid/layer) or statements (text)
     toggle_shuffle: bool = False
+    product_keys: Optional[List[ProductKey]] = None
+    product_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class StudyBasicDetailsV2(StudyBasicDetails):
+    """Basic study details + total_responses (how many opted in/started the study)"""
+    total_responses: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
 
 class StudyOut(BaseModel):
     id: UUID
@@ -295,7 +322,8 @@ class StudyOut(BaseModel):
     audience_segmentation: AudienceSegmentation
     phase_order: Optional[List[str]] = None
     toggle_shuffle: bool = False
-
+    product_keys: Optional[List[ProductKey]] = None
+    product_id: Optional[str] = None
 
     # Children
     categories: Optional[List[StudyCategoryOut]] = None
@@ -377,6 +405,8 @@ class GenerateTasksRequest(BaseModel):
     exposure_tolerance_pct: Optional[float] = None
     phase_order: Optional[List[str]] = None
     toggle_shuffle: Optional[bool] = None
+    product_keys: Optional[List[ProductKey]] = None
+    product_id: Optional[str] = None
 
     seed: Optional[int] = None
 
@@ -384,6 +414,13 @@ class GenerateTasksResult(BaseModel):
     last_step: Optional[int] = None
     tasks: Dict[str, List[Dict[str, Any]]]
     metadata: Dict[str, Any]
+
+
+class SimulateAIRespondentsRequest(BaseModel):
+    """Optional body for simulate-ai-respondents. Body fields override query params."""
+    max_respondents: Optional[int] = Field(None, ge=1, description="Number of respondents to simulate (validated against max combinations)")
+    is_special_creator: Optional[bool] = Field(None, description="If true, AI rates only 1 or 5 (polar/extreme ratings)")
+    randomize: Optional[bool] = Field(None, description="If true, use fallback (random) ratings instead of ChatGPT API")
 
 
 # Rebuild models to resolve forward references
