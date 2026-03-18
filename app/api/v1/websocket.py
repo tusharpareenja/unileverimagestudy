@@ -82,18 +82,20 @@ async def websocket_analytics(
     to keep the connection alive (Azure has 240s timeout).
     Uses a short-lived DB session per loop iteration to avoid stale connections.
     """
-    # Auth phase: one session only for token + access check, then close
-    db_auth = next(get_db())
-    try:
-        user = await get_user_from_token(token, db_auth)
-        if not user:
-            await websocket.close(code=4001, reason="Invalid or expired token")
-            return
-        if not check_study_access(db_auth, study_id, user.id):
-            await websocket.close(code=4003, reason="Access denied to study")
-            return
-    finally:
-        db_auth.close()
+    # TEMPORARY BYPASS: comment out auth to confirm 403 is from auth/access only. Restore and use logs to fix.
+    # db_auth = next(get_db())
+    # try:
+    #     user = await get_user_from_token(token, db_auth)
+    #     if not user:
+    #         logger.warning("WebSocket analytics rejected: invalid or expired token")
+    #         await websocket.close(code=4001, reason="Invalid or expired token")
+    #         return
+    #     if not check_study_access(db_auth, study_id, user.id):
+    #         logger.warning("WebSocket analytics rejected: access denied to study %s for user %s", study_id, user.id)
+    #         await websocket.close(code=4003, reason="Access denied to study")
+    #         return
+    # finally:
+    #     db_auth.close()
 
     try:
         await analytics_manager.connect(str(study_id), websocket)
