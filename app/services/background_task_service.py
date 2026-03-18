@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.job_model import Job, JobStatus
+from app.websocket.job_notifier import job_progress_notifier
 
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,13 @@ class BackgroundTaskService:
                     job_fresh.message = "Task generation completed successfully"
                     job_fresh.result = None
                     db_fresh.commit()
+                    
+                    # Notify WebSocket subscribers of completion
+                    job_progress_notifier.notify(job_id, {
+                        "type": "completed",
+                        "progress": 100.0,
+                        "message": "Task generation completed successfully"
+                    })
                 logger.info(f"Job {job_id} completed successfully")
             finally:
                 db_fresh.close()
@@ -198,6 +206,13 @@ class BackgroundTaskService:
                     job_err.error = str(e)
                     job_err.message = f"Study configuration error: {str(e)}"
                     db_err.commit()
+                    
+                    # Notify WebSocket subscribers of failure
+                    job_progress_notifier.notify(job_id, {
+                        "type": "failed",
+                        "error": str(e),
+                        "message": f"Study configuration error: {str(e)}"
+                    })
                 logger.error(f"Job {job_id} failed due to study configuration: {e}")
             finally:
                 db_err.close()
@@ -217,6 +232,13 @@ class BackgroundTaskService:
                     job_err.error = str(e)
                     job_err.message = f"Task generation failed: {str(e)}"
                     db_err.commit()
+                    
+                    # Notify WebSocket subscribers of failure
+                    job_progress_notifier.notify(job_id, {
+                        "type": "failed",
+                        "error": str(e),
+                        "message": f"Task generation failed: {str(e)}"
+                    })
                 logger.error(f"Job {job_id} failed: {e}")
                 import traceback
                 logger.error(f"Job {job_id} traceback: {traceback.format_exc()}")
@@ -259,6 +281,13 @@ class BackgroundTaskService:
                             j.progress = pct
                             j.message = msg
                             db_sim.commit()
+                            
+                            # Notify WebSocket subscribers
+                            job_progress_notifier.notify(job_id, {
+                                "type": "progress",
+                                "progress": pct,
+                                "message": msg
+                            })
                     except Exception as e:
                         try:
                             logger.warning("Progress callback error (non-fatal): %s", e)
@@ -301,10 +330,24 @@ class BackgroundTaskService:
                     job.status = JobStatus.COMPLETED
                     job.message = result.get("message", "Simulation completed.")
                     job.error = None
+                    
+                    # Notify WebSocket subscribers of completion
+                    job_progress_notifier.notify(job_id, {
+                        "type": "completed",
+                        "progress": 100.0,
+                        "message": job.message
+                    })
                 else:
                     job.status = JobStatus.FAILED
                     job.message = result.get("message", "Simulation failed.")
                     job.error = result.get("error")
+                    
+                    # Notify WebSocket subscribers of failure
+                    job_progress_notifier.notify(job_id, {
+                        "type": "failed",
+                        "error": job.error,
+                        "message": job.message
+                    })
                 db_fresh.commit()
                 logger.info(
                     f"Job {job_id} simulate_ai_respondents finished: success={result.get('success')}, "
@@ -360,14 +403,22 @@ class BackgroundTaskService:
             try:
                 frac = max(0.0, min(1.0, done / max(1, N)))
                 current_progress = p_start + ((p_end - p_start) * frac)
+                message = f"Building respondents{f' ({phase_type})' if phase_type else ''} {done}/{N}..."
                 
                 db_progress = SessionLocal()
                 try:
                     job_progress = db_progress.query(Job).filter(Job.job_id == job.job_id).first()
                     if job_progress and abs(job_progress.progress - current_progress) > 1.0:
                         job_progress.progress = current_progress
-                        job_progress.message = f"Building respondents{f' ({phase_type})' if phase_type else ''} {done}/{N}..."
+                        job_progress.message = message
                         db_progress.commit()
+                        
+                        # Notify WebSocket subscribers
+                        job_progress_notifier.notify(job.job_id, {
+                            "type": "progress",
+                            "progress": current_progress,
+                            "message": message
+                        })
                 except Exception:
                     db_progress.rollback()
                 finally:
@@ -503,20 +554,24 @@ class BackgroundTaskService:
                 # Calculate progress
                 frac = max(0.0, min(1.0, done / max(1, N)))
                 current_progress = p_start + ((p_end - p_start) * frac)
+                message = f"Building respondents {done}/{N}..."
                 
                 # Update DB with fresh session
-                # Throttling could be added here if needed, but for now we update
-                # safely using a new session for this thread
                 db_progress = SessionLocal()
                 try:
                     job_progress = db_progress.query(Job).filter(Job.job_id == job.job_id).first()
                     if job_progress:
-                        # Only update if progress changed significantly or it's been a while?
-                        # For simplicity, we update every time but we could check against current value.
-                        if abs(job_progress.progress - current_progress) > 1.0: # Update every 1%
+                        if abs(job_progress.progress - current_progress) > 1.0:
                             job_progress.progress = current_progress
-                            job_progress.message = f"Building respondents {done}/{N}..."
+                            job_progress.message = message
                             db_progress.commit()
+                            
+                            # Notify WebSocket subscribers
+                            job_progress_notifier.notify(job.job_id, {
+                                "type": "progress",
+                                "progress": current_progress,
+                                "message": message
+                            })
                 except Exception:
                     db_progress.rollback()
                 finally:

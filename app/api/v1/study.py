@@ -30,6 +30,22 @@ from app.core.config import settings
 router = APIRouter()
 
 
+def _user_has_study_access(db: Session, study_id: UUID, user_id: UUID) -> bool:
+    """Return True if user is creator or member of the study."""
+    row = db.execute(select(Study.creator_id).where(Study.id == study_id)).first()
+    if not row:
+        return False
+    if row[0] == user_id:
+        return True
+    member = db.scalar(
+        select(StudyMember).where(
+            StudyMember.study_id == study_id,
+            StudyMember.user_id == user_id
+        )
+    )
+    return member is not None
+
+
 def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents: int) -> Dict[str, Any]:
     """Generate a small preview of tasks for immediate display while background job runs"""
     # Generate tasks for just 1-3 respondents as a preview
@@ -1560,17 +1576,17 @@ async def stream_simulate_ai_respondents_progress(
 @router.get("/generate-tasks/status/{job_id}")
 def get_task_generation_status(
     job_id: str,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Get the status of a task generation job"""
+    """Get the status of a task generation job. Any study creator or member can view."""
     from app.services.background_task_service import background_task_service
     
     job = background_task_service.get_job_status(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # Check if user owns this job
-    if job.user_id != str(current_user.id):
+    if not _user_has_study_access(db, UUID(job.study_id), current_user.id):
         raise HTTPException(status_code=403, detail="Access denied")
     
     return {
@@ -1590,17 +1606,17 @@ def get_task_generation_status(
 @router.post("/generate-tasks/cancel/{job_id}")
 def cancel_task_generation(
     job_id: str,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Cancel a running task generation job"""
+    """Cancel a running task generation job. Any study creator or member can cancel."""
     from app.services.background_task_service import background_task_service
     
     job = background_task_service.get_job_status(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # Check if user owns this job
-    if job.user_id != str(current_user.id):
+    if not _user_has_study_access(db, UUID(job.study_id), current_user.id):
         raise HTTPException(status_code=403, detail="Access denied")
     
     success = background_task_service.cancel_job(job_id)
@@ -1648,8 +1664,7 @@ def get_task_generation_result(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    # Check if user owns this job
-    if job.user_id != str(current_user.id):
+    if not _user_has_study_access(db, UUID(job.study_id), current_user.id):
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Check if job is completed
@@ -1661,7 +1676,7 @@ def get_task_generation_result(
         )
     
     # Get the study with the generated tasks (includes layers and images)
-    study = study_service.get_study(db=db, study_id=job.study_id, owner_id=current_user.id)
+    study = study_service.get_study(db=db, study_id=UUID(job.study_id), owner_id=current_user.id)
 
     # Clear the jobid from the database now that we're retrieving the results
     study.jobid = None
