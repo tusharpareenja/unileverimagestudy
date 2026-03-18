@@ -1,10 +1,11 @@
-"""WebSocket endpoints for real-time streaming (analytics and task generation)."""
+"""WebSocket endpoints for real-time streaming (analytics, task generation, and simulation)."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 from uuid import UUID
+from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.orm import Session
@@ -82,20 +83,20 @@ async def websocket_analytics(
     to keep the connection alive (Azure has 240s timeout).
     Uses a short-lived DB session per loop iteration to avoid stale connections.
     """
-    # TEMPORARY BYPASS: comment out auth to confirm 403 is from auth/access only. Restore and use logs to fix.
-    # db_auth = next(get_db())
-    # try:
-    #     user = await get_user_from_token(token, db_auth)
-    #     if not user:
-    #         logger.warning("WebSocket analytics rejected: invalid or expired token")
-    #         await websocket.close(code=4001, reason="Invalid or expired token")
-    #         return
-    #     if not check_study_access(db_auth, study_id, user.id):
-    #         logger.warning("WebSocket analytics rejected: access denied to study %s for user %s", study_id, user.id)
-    #         await websocket.close(code=4003, reason="Access denied to study")
-    #         return
-    # finally:
-    #     db_auth.close()
+    # Auth phase: one session only for token + access check, then close
+    db_auth = next(get_db())
+    try:
+        user = await get_user_from_token(token, db_auth)
+        if not user:
+            logger.warning("WebSocket analytics rejected: invalid or expired token")
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+        if not check_study_access(db_auth, study_id, user.id):
+            logger.warning("WebSocket analytics rejected: access denied to study %s for user %s", study_id, user.id)
+            await websocket.close(code=4003, reason="Access denied to study")
+            return
+    finally:
+        db_auth.close()
 
     try:
         await analytics_manager.connect(str(study_id), websocket)
@@ -162,7 +163,7 @@ async def websocket_task_generation(
     
     Connect with: ws://host/api/v1/ws/task-generation/{job_id}?token={jwt_token}
     
-    Receives progress updates as they happen (event-driven via asyncio.Queue).
+    Receives progress updates as they happen via Redis pub/sub (works across Gunicorn workers).
     Messages: {"type": "progress|completed|failed", "progress": float, "message": str, "error"?: str}
     
     Connection closes automatically when job completes or fails.
@@ -225,10 +226,7 @@ async def websocket_task_generation(
     finally:
         db_auth.close()
 
-    # Subscribe to job progress notifications
-    queue = await job_progress_notifier.subscribe(job_id)
-
-    # Re-check job status after subscribe: job may have completed before we subscribed (race fix)
+    # Re-check job status before subscribing: job may have completed (race fix)
     db_recheck = next(get_db())
     try:
         job_recheck = db_recheck.query(Job).filter(Job.job_id == job_id).first()
@@ -241,7 +239,6 @@ async def websocket_task_generation(
                     "message": job_recheck.message or "Task generation completed"
                 })
                 await websocket.close()
-                await job_progress_notifier.unsubscribe(job_id, queue)
                 return
             if job_recheck.status == JobStatus.FAILED:
                 await websocket.accept()
@@ -251,7 +248,6 @@ async def websocket_task_generation(
                     "message": job_recheck.message or "Task generation failed"
                 })
                 await websocket.close()
-                await job_progress_notifier.unsubscribe(job_id, queue)
                 return
             if job_recheck.status == JobStatus.CANCELLED:
                 await websocket.accept()
@@ -261,7 +257,6 @@ async def websocket_task_generation(
                     "message": "Task generation was cancelled"
                 })
                 await websocket.close()
-                await job_progress_notifier.unsubscribe(job_id, queue)
                 return
     finally:
         db_recheck.close()
@@ -277,34 +272,49 @@ async def websocket_task_generation(
             "message": initial_message
         })
         
-        # Wait for updates with a 15-minute timeout (max job duration)
-        timeout_seconds = 15 * 60  # 15 minutes
-        ping_interval = 30  # Send ping every 30 seconds
+        # Subscribe to Redis pub/sub for progress updates (works across workers)
+        # Uses async generator that yields updates from any worker
+        ping_interval = 30
         last_ping = asyncio.get_event_loop().time()
+        start_time = asyncio.get_event_loop().time()
+        timeout_seconds = 15 * 60  # 15 minutes max
         
-        while True:
-            try:
-                # Wait for next update with timeout
+        async def ping_task():
+            """Send pings to keep connection alive."""
+            nonlocal last_ping
+            while True:
+                await asyncio.sleep(ping_interval)
                 try:
-                    update = await asyncio.wait_for(queue.get(), timeout=ping_interval)
-                except asyncio.TimeoutError:
-                    # No update received, send ping to keep connection alive
-                    current_time = asyncio.get_event_loop().time()
-                    if current_time - last_ping >= ping_interval:
-                        await websocket.send_json({"type": "ping"})
-                        last_ping = current_time
-                    
-                    # Check overall timeout
-                    elapsed = current_time - (asyncio.get_event_loop().time() - timeout_seconds)
-                    if elapsed <= 0:
-                        logger.warning(f"WebSocket timeout for job {job_id}")
-                        await websocket.send_json({
-                            "type": "failed",
-                            "error": "Connection timeout",
-                            "message": "Task generation is taking too long"
-                        })
-                        break
-                    continue
+                    await websocket.send_json({"type": "ping"})
+                    last_ping = asyncio.get_event_loop().time()
+                except Exception:
+                    break
+        
+        async def check_timeout():
+            """Check if we've exceeded the timeout."""
+            while True:
+                await asyncio.sleep(30)
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed >= timeout_seconds:
+                    return True
+            return False
+        
+        # Start ping task in background
+        ping_coro = asyncio.create_task(ping_task())
+        
+        try:
+            # Listen for updates via Redis pub/sub (or in-memory fallback)
+            async for update in job_progress_notifier.subscribe_redis(job_id):
+                # Check timeout
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed >= timeout_seconds:
+                    logger.warning(f"WebSocket timeout for job {job_id}")
+                    await websocket.send_json({
+                        "type": "failed",
+                        "error": "Connection timeout",
+                        "message": "Task generation is taking too long"
+                    })
+                    break
                 
                 # Send update to client
                 await websocket.send_json(update)
@@ -314,12 +324,14 @@ async def websocket_task_generation(
                     logger.info(f"Job {job_id} finished with status: {update.get('type')}")
                     break
                     
-            except WebSocketDisconnect:
-                logger.info(f"Client disconnected from job {job_id}")
-                break
-            except Exception as e:
-                logger.error(f"Error in task generation WebSocket loop: {e}")
-                break
+        except WebSocketDisconnect:
+            logger.info(f"Client disconnected from job {job_id}")
+        finally:
+            ping_coro.cancel()
+            try:
+                await ping_coro
+            except asyncio.CancelledError:
+                pass
                 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for job {job_id}")
@@ -329,6 +341,238 @@ async def websocket_task_generation(
             await websocket.close(code=1011, reason="Internal server error")
         except Exception:
             pass
+
+
+@router.websocket("/simulate-ai/{job_id}")
+async def websocket_simulate_ai(
+    websocket: WebSocket,
+    job_id: str,
+    token: str = Query(..., description="JWT access token"),
+):
+    """
+    WebSocket endpoint for real-time AI simulation progress.
+    
+    Connect with: ws://host/api/v1/ws/simulate-ai/{job_id}?token={jwt_token}
+    
+    Receives progress updates as they happen via Redis pub/sub (works across Gunicorn workers).
+    Messages: {"type": "progress|completed|failed", "progress": float, "message": str, "error"?: str}
+    
+    Also includes respondents_completed and respondents_requested for progress calculation.
+    Connection closes automatically when job completes or fails.
+    Timeout after 30 minutes to prevent orphaned connections (simulation can take longer).
+    """
+    # Auth phase: verify token and job ownership
+    db_auth = next(get_db())
+    initial_progress = 0.0
+    initial_message = "Simulating AI respondents..."
+    respondents_requested = 0
+    study_id_str: Optional[str] = None
+    
+    try:
+        user = await get_user_from_token(token, db_auth)
+        if not user:
+            logger.warning("WebSocket simulate-ai rejected: invalid or expired token")
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+        
+        # Check if job exists
+        job = db_auth.query(Job).filter(Job.job_id == job_id).first()
+        if not job:
+            logger.warning(f"WebSocket simulate-ai rejected: job {job_id} not found")
+            await websocket.close(code=4004, reason="Job not found")
+            return
+        
+        study_id_str = job.study_id
+        
+        # Allow any study creator or member to see job progress
+        if not check_study_access(db_auth, UUID(job.study_id), user.id):
+            logger.warning(f"WebSocket simulate-ai rejected: access denied for user {user.id} to study {job.study_id}")
+            await websocket.close(code=4003, reason="Access denied to study")
+            return
+        
+        # Extract respondents_requested from job result/payload if available
+        try:
+            job_result = job.result if isinstance(job.result, dict) else {}
+            payload = job_result.get("payload", {})
+            respondents_requested = payload.get("max_respondents", 0) or payload.get("respondents_requested", 0)
+        except Exception:
+            pass
+        
+        # Check if job is already completed or failed
+        if job.status == JobStatus.COMPLETED:
+            await websocket.accept()
+            await websocket.send_json({
+                "type": "completed",
+                "progress": 100.0,
+                "message": job.message or "AI simulation completed",
+                "respondents_completed": respondents_requested,
+                "respondents_requested": respondents_requested
+            })
+            await websocket.close()
+            return
+        
+        if job.status == JobStatus.FAILED:
+            await websocket.accept()
+            await websocket.send_json({
+                "type": "failed",
+                "error": job.error or "Unknown error",
+                "message": job.message or "AI simulation failed",
+                "respondents_completed": 0,
+                "respondents_requested": respondents_requested
+            })
+            await websocket.close()
+            return
+        
+        if job.status == JobStatus.CANCELLED:
+            await websocket.accept()
+            await websocket.send_json({
+                "type": "failed",
+                "error": "Job was cancelled",
+                "message": "AI simulation was cancelled",
+                "respondents_completed": 0,
+                "respondents_requested": respondents_requested
+            })
+            await websocket.close()
+            return
+        
+        # Get current progress to send initial state
+        initial_progress = job.progress or 0.0
+        initial_message = job.message or "Simulating AI respondents..."
+        
     finally:
-        # Unsubscribe from notifications
-        await job_progress_notifier.unsubscribe(job_id, queue)
+        db_auth.close()
+
+    # Re-check job status before subscribing (race condition fix)
+    db_recheck = next(get_db())
+    try:
+        job_recheck = db_recheck.query(Job).filter(Job.job_id == job_id).first()
+        if job_recheck:
+            # Re-extract respondents_requested in case it was updated
+            try:
+                job_result = job_recheck.result if isinstance(job_recheck.result, dict) else {}
+                payload = job_result.get("payload", {})
+                respondents_requested = payload.get("max_respondents", 0) or payload.get("respondents_requested", 0) or respondents_requested
+            except Exception:
+                pass
+            
+            if job_recheck.status == JobStatus.COMPLETED:
+                await websocket.accept()
+                await websocket.send_json({
+                    "type": "completed",
+                    "progress": 100.0,
+                    "message": job_recheck.message or "AI simulation completed",
+                    "respondents_completed": respondents_requested,
+                    "respondents_requested": respondents_requested
+                })
+                await websocket.close()
+                return
+            if job_recheck.status == JobStatus.FAILED:
+                await websocket.accept()
+                await websocket.send_json({
+                    "type": "failed",
+                    "error": job_recheck.error or "Unknown error",
+                    "message": job_recheck.message or "AI simulation failed",
+                    "respondents_completed": 0,
+                    "respondents_requested": respondents_requested
+                })
+                await websocket.close()
+                return
+            if job_recheck.status == JobStatus.CANCELLED:
+                await websocket.accept()
+                await websocket.send_json({
+                    "type": "failed",
+                    "error": "Job was cancelled",
+                    "message": "AI simulation was cancelled",
+                    "respondents_completed": 0,
+                    "respondents_requested": respondents_requested
+                })
+                await websocket.close()
+                return
+            
+            # Update initial progress from recheck
+            initial_progress = job_recheck.progress or initial_progress
+            initial_message = job_recheck.message or initial_message
+    finally:
+        db_recheck.close()
+
+    try:
+        await websocket.accept()
+        logger.info(f"WebSocket connected for AI simulation job {job_id}")
+        
+        # Calculate initial completed count
+        initial_completed = int((initial_progress / 100.0) * respondents_requested) if respondents_requested > 0 else 0
+        
+        # Send initial progress state
+        await websocket.send_json({
+            "type": "progress",
+            "progress": initial_progress,
+            "message": initial_message,
+            "respondents_completed": initial_completed,
+            "respondents_requested": respondents_requested
+        })
+        
+        # Subscribe to Redis pub/sub for progress updates (works across workers)
+        ping_interval = 30
+        start_time = asyncio.get_event_loop().time()
+        timeout_seconds = 30 * 60  # 30 minutes max (simulation can be slow)
+        
+        async def ping_task():
+            """Send pings to keep connection alive."""
+            while True:
+                await asyncio.sleep(ping_interval)
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
+        
+        # Start ping task in background
+        ping_coro = asyncio.create_task(ping_task())
+        
+        try:
+            # Listen for updates via Redis pub/sub (or in-memory fallback)
+            async for update in job_progress_notifier.subscribe_redis(job_id):
+                # Check timeout
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed >= timeout_seconds:
+                    logger.warning(f"WebSocket timeout for simulation job {job_id}")
+                    await websocket.send_json({
+                        "type": "failed",
+                        "error": "Connection timeout",
+                        "message": "AI simulation is taking too long",
+                        "respondents_completed": 0,
+                        "respondents_requested": respondents_requested
+                    })
+                    break
+                
+                # Calculate respondents_completed from progress if not in update
+                progress_val = update.get("progress", 0)
+                if "respondents_completed" not in update and respondents_requested > 0:
+                    update["respondents_completed"] = int((progress_val / 100.0) * respondents_requested)
+                if "respondents_requested" not in update:
+                    update["respondents_requested"] = respondents_requested
+                
+                # Send update to client
+                await websocket.send_json(update)
+                
+                # Close connection if job completed or failed
+                if update.get("type") in ("completed", "failed"):
+                    logger.info(f"Simulation job {job_id} finished with status: {update.get('type')}")
+                    break
+                    
+        except WebSocketDisconnect:
+            logger.info(f"Client disconnected from simulation job {job_id}")
+        finally:
+            ping_coro.cancel()
+            try:
+                await ping_coro
+            except asyncio.CancelledError:
+                pass
+                
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for simulation job {job_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for simulation job {job_id}: {e}")
+        try:
+            await websocket.close(code=1011, reason="Internal server error")
+        except Exception:
+            pass

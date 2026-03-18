@@ -92,4 +92,8 @@ async def on_startup():
 async def on_shutdown():
     # Stop background tasks
     from app.services.background_tasks import background_task_service
-    background_task_service.stop_abandonment_checker()  
+    background_task_service.stop_abandonment_checker()
+    
+    # Close Redis connections
+    from app.core.redis import close_redis_pools
+    await close_redis_pools()

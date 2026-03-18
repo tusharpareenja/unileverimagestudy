@@ -4,7 +4,9 @@ run AI rating per panelist, and persist via submit_synthetic_respondent.
 """
 from __future__ import annotations
 
+import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any, Optional, Callable, Tuple
 from uuid import UUID
@@ -21,8 +23,14 @@ from app.schemas.response_schema import (
     SyntheticElementShownItem,
 )
 
+logger = logging.getLogger(__name__)
+
 # Cap total concurrent OpenAI calls to match standalone single-panelist behavior (avoid 429).
 MAX_CONCURRENT_AI = 10
+
+# Retry settings for transient DB errors
+MAX_DB_RETRIES = 3
+DB_RETRY_DELAY_SECONDS = 1.0
 
 
 def get_max_panelist_combinations(db: Session, study_id: UUID) -> Optional[int]:
@@ -61,6 +69,67 @@ def get_max_panelist_combinations(db: Session, study_id: UUID) -> Optional[int]:
     if available_panelist_numbers:
         return sum(1 for number in available_panelist_numbers if 1 <= number <= total_combinations)
     return total_combinations
+
+
+def _submit_respondent_with_fresh_session(
+    study_id: UUID,
+    payload: SyntheticRespondentPayload,
+    idx: int,
+    total: int,
+) -> Dict[str, Any]:
+    """
+    Submit a synthetic respondent using a fresh DB session.
+    This avoids stale connection issues during long-running simulations.
+    Includes retry logic for transient DB errors.
+    """
+    from app.db.session import SessionLocal
+    
+    last_error = None
+    
+    for attempt in range(MAX_DB_RETRIES):
+        db_fresh = SessionLocal()
+        try:
+            response_service = StudyResponseService(db_fresh)
+            result = response_service.submit_synthetic_respondent(study_id, payload)
+            return result
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            
+            # Check if this is a retryable error (connection issues)
+            is_retryable = any(phrase in error_str for phrase in [
+                "ssl connection has been closed",
+                "connection refused",
+                "connection reset",
+                "server closed the connection",
+                "connection timed out",
+                "too many connections",
+                "connection pool",
+            ])
+            
+            if is_retryable and attempt < MAX_DB_RETRIES - 1:
+                logger.warning(
+                    f"Respondent {idx + 1}/{total} DB error (attempt {attempt + 1}/{MAX_DB_RETRIES}): {e}. Retrying..."
+                )
+                try:
+                    db_fresh.rollback()
+                except Exception:
+                    pass
+                time.sleep(DB_RETRY_DELAY_SECONDS * (attempt + 1))  # Exponential backoff
+                continue
+            else:
+                # Non-retryable error or max retries exceeded
+                raise
+        finally:
+            try:
+                db_fresh.close()
+            except Exception:
+                pass
+    
+    # Should not reach here, but just in case
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Failed to submit respondent {idx + 1} after {MAX_DB_RETRIES} attempts")
 
 
 def run_simulation(
@@ -244,7 +313,7 @@ def run_simulation(
             return (idx, None, str(e))
 
     if workers <= 1:
-        # Sequential: original loop
+        # Sequential: original loop with fresh DB session per respondent
         for idx, panelist in enumerate(panelists_to_run):
             pnum = panelist.get("panelist_number", idx + 1)
             if progress_callback:
@@ -255,24 +324,27 @@ def run_simulation(
                 continue
             payload = _build_payload(response, panelist, idx)
             try:
-                submit_result = response_service.submit_synthetic_respondent(study_id, payload)
+                # Use fresh session to avoid stale connection after long AI processing
+                submit_result = _submit_respondent_with_fresh_session(study_id, payload, idx, total)
                 simulated += 1
                 session_id = submit_result.get("session_id", "")
                 if progress_callback:
                     progress_callback(simulated, total, f"Respondent {simulated}/{total} done — session_id: {session_id}")
             except Exception as e:
                 last_error = str(e)
+                logger.error(f"Respondent {idx + 1}/{total} submission failed: {e}")
                 if progress_callback:
                     progress_callback(simulated, total, f"Respondent {idx + 1}/{total} failed: {e}")
     else:
         # Parallel AI phase: run process_panelist_response in threads.
         # Write to DB in index order as soon as each result is available (buffer approach),
         # so progress updates start as soon as the first panelist completes, not after all N complete.
+        # Each DB write uses a fresh session to avoid stale connections.
         results_by_idx: Dict[int, Tuple[Optional[Dict[str, Any]], Optional[str]]] = {}
         next_idx_to_write = 0
 
         def drain_writes():
-            """Write any consecutive completed results that are next in order."""
+            """Write any consecutive completed results that are next in order using fresh sessions."""
             nonlocal simulated, next_idx_to_write, last_error
             while next_idx_to_write < total and next_idx_to_write in results_by_idx:
                 idx = next_idx_to_write
@@ -288,13 +360,15 @@ def run_simulation(
                     continue
                 payload = _build_payload(response, panelist, idx)
                 try:
-                    submit_result = response_service.submit_synthetic_respondent(study_id, payload)
+                    # Use fresh session to avoid stale connection after long AI processing
+                    submit_result = _submit_respondent_with_fresh_session(study_id, payload, idx, total)
                     simulated += 1
                     session_id = submit_result.get("session_id", "")
                     if progress_callback:
                         progress_callback(simulated, total, f"Respondent {simulated}/{total} done — session_id: {session_id}")
                 except Exception as e:
                     last_error = str(e)
+                    logger.error(f"Respondent {idx + 1}/{total} submission failed: {e}")
                     if progress_callback:
                         progress_callback(simulated, total, f"Respondent {idx + 1}/{total} failed: {e}")
 
