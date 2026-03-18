@@ -12,7 +12,7 @@ class JobProgressNotifier:
     Event-driven job progress notification system using asyncio.Queue.
     
     Background jobs call notify() to push progress updates.
-    WebSocket handlers subscribe() to receive updates via a queue.
+    WebSocket handlers subscribe() to receive updates via a queue
     """
 
     def __init__(self):

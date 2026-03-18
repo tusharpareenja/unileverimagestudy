@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class AnalyticsConnectionManager:
     """
     Manages WebSocket connections for real-time analytics streaming.
-    Tracks connections per study_id for efficient broadcasting.
+    Tracks connections per study_id for efficient broadcasting
     """
 
     def __init__(self):
