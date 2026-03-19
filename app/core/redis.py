@@ -57,8 +57,9 @@ def get_sync_redis() -> sync_redis.Redis | None:
     
     redis_url = _get_redis_url()
     if not redis_url:
+        logger.debug("REDIS_URL not configured, Redis cache disabled")
         return None
-    
+
     if _sync_redis_client is None:
         try:
             _sync_redis_client = sync_redis.Redis.from_url(

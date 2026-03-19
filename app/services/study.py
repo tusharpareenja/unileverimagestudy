@@ -21,6 +21,14 @@ from app.schemas.study_schema import (
 from app.services.task_generation_adapter import generate_grid_tasks, generate_layer_tasks
 from app.services.cloudinary_service import upload_base64, delete_public_id
 from app.core.config import settings
+from app.core.cache import invalidate_study_cache
+from app.core.domain import (
+    is_unilever_domain,
+    FRAGRANCE_QUESTION_ID,
+    FRAGRANCE_QUESTION_TEXT,
+    FRAGRANCE_ANSWER_OPTIONS,
+    FRAGRANCE_ORDER,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -417,25 +425,55 @@ def create_study(
                 db.bulk_save_objects(new_images)
 
     # Handle classification questions (for both grid and layer studies)
-    if payload.classification_questions:
+    # For Unilever (special creator) studies, inject "Do you like this fragrance?" with order=0 so it appears first.
+    creator_email = ""
+    try:
+        from app.models.user_model import User as UserModel
+        row = db.execute(select(UserModel.email).where(UserModel.id == creator_id)).first()
+        if row:
+            creator_email = (row[0] or "") if hasattr(row, "__getitem__") else (getattr(row, "email", None) or "")
+    except Exception:
+        pass
+    is_special_creator = is_unilever_domain(creator_email)
+
+    if payload.classification_questions or is_special_creator:
         seen_question_ids = set()
         new_questions: List[StudyClassificationQuestion] = []
-        for question in payload.classification_questions:
-            if question.question_id in seen_question_ids:
-                raise HTTPException(status_code=409, detail=f"Duplicate question_id: {question.question_id}")
-            seen_question_ids.add(question.question_id)
-            answer_options_json = [option.model_dump() for option in question.answer_options] if question.answer_options else None
+
+        if is_special_creator:
             new_questions.append(StudyClassificationQuestion(
                 id=uuid4(),
                 study_id=study.id,
-                question_id=question.question_id,
-                question_text=question.question_text,
-                question_type=question.question_type,
-                is_required='Y' if question.is_required else 'N',
-                order=question.order,
-                answer_options=answer_options_json,
-                config=question.config
+                question_id=FRAGRANCE_QUESTION_ID,
+                question_text=FRAGRANCE_QUESTION_TEXT,
+                question_type="multiple_choice",
+                is_required="Y",
+                order=FRAGRANCE_ORDER,
+                answer_options=FRAGRANCE_ANSWER_OPTIONS,
+                config={"system": True},
             ))
+            seen_question_ids.add(FRAGRANCE_QUESTION_ID)
+
+        if payload.classification_questions:
+            for question in payload.classification_questions:
+                if question.question_id == FRAGRANCE_QUESTION_ID:
+                    continue
+                if question.question_id in seen_question_ids:
+                    raise HTTPException(status_code=409, detail=f"Duplicate question_id: {question.question_id}")
+                seen_question_ids.add(question.question_id)
+                order_offset = 1 if is_special_creator else 0
+                answer_options_json = [option.model_dump() for option in question.answer_options] if question.answer_options else None
+                new_questions.append(StudyClassificationQuestion(
+                    id=uuid4(),
+                    study_id=study.id,
+                    question_id=question.question_id,
+                    question_text=question.question_text,
+                    question_type=question.question_type,
+                    is_required='Y' if question.is_required else 'N',
+                    order=question.order + order_offset,
+                    answer_options=answer_options_json,
+                    config=question.config
+                ))
         if new_questions:
             db.bulk_save_objects(new_questions)
 
@@ -956,6 +994,7 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
     except Exception:
         tasks_per_respondent = 0
     
+    require_panelist = is_unilever_domain(row.creator_email or "")
     return {
         "id": str(row.id),
         "title": row.title,
@@ -966,6 +1005,8 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
         "orientation_text": row.orientation_text,
         "language": row.language,
         "creator_email": row.creator_email,
+        "require_panelist_selection": require_panelist,
+        "show_fragrance_question": require_panelist,
     }
 
 
@@ -1026,6 +1067,7 @@ def get_study_public_preview(db: Session, study_id: UUID) -> Dict[str, Any]:
     except Exception:
         tasks_per_respondent = 0
     
+    require_panelist = is_unilever_domain(row.creator_email or "")
     return {
         "id": str(row.id),
         "title": row.title,
@@ -1036,6 +1078,8 @@ def get_study_public_preview(db: Session, study_id: UUID) -> Dict[str, Any]:
         "orientation_text": row.orientation_text,
         "language": row.language,
         "creator_email": row.creator_email,
+        "require_panelist_selection": require_panelist,
+        "show_fragrance_question": require_panelist,
     }
 
 
@@ -1351,19 +1395,43 @@ def update_study(
         # Clear existing classification questions
         db.query(StudyClassificationQuestion).filter(StudyClassificationQuestion.study_id == study.id).delete()
         db.flush()
-        
-        # Add new classification questions
+
+        # For Unilever (special creator) studies, re-inject fragrance question with order=0
+        creator_email_update = ""
+        try:
+            from app.models.user_model import User as UserModel
+            creator_row = db.execute(select(UserModel.email).where(UserModel.id == study.creator_id)).first()
+            if creator_row:
+                creator_email_update = (creator_row[0] or "") if hasattr(creator_row, "__getitem__") else (getattr(creator_row, "email", None) or "")
+        except Exception:
+            pass
+        is_special_update = is_unilever_domain(creator_email_update)
+
         seen_question_ids = set()
+        if is_special_update:
+            db.add(StudyClassificationQuestion(
+                id=uuid4(),
+                study_id=study.id,
+                question_id=FRAGRANCE_QUESTION_ID,
+                question_text=FRAGRANCE_QUESTION_TEXT,
+                question_type="multiple_choice",
+                is_required="Y",
+                order=FRAGRANCE_ORDER,
+                answer_options=FRAGRANCE_ANSWER_OPTIONS,
+                config={"system": True},
+            ))
+            seen_question_ids.add(FRAGRANCE_QUESTION_ID)
+
         for question in payload.classification_questions:
+            if question.question_id == FRAGRANCE_QUESTION_ID:
+                continue
             if question.question_id in seen_question_ids:
                 raise HTTPException(status_code=409, detail=f"Duplicate question_id: {question.question_id}")
             seen_question_ids.add(question.question_id)
-            
-            # Convert answer options to JSONB format
+            order_offset = 1 if is_special_update else 0
             answer_options_json = None
             if question.answer_options:
                 answer_options_json = [option.model_dump() for option in question.answer_options]
-            
             db.add(StudyClassificationQuestion(
                 id=uuid4(),
                 study_id=study.id,
@@ -1371,13 +1439,14 @@ def update_study(
                 question_text=question.question_text,
                 question_type=question.question_type,
                 is_required='Y' if question.is_required else 'N',
-                order=question.order,
+                order=question.order + order_offset,
                 answer_options=answer_options_json,
                 config=question.config
             ))
 
     db.commit()
     db.refresh(study)
+    invalidate_study_cache(study_id)
     return study
 
 def update_study_fast(
@@ -1475,6 +1544,7 @@ def update_study_fast(
 
     db.commit()
     db.refresh(study)
+    invalidate_study_cache(study_id)
     return study
 
 def update_and_launch_study_fast(
@@ -1551,6 +1621,7 @@ def update_and_launch_study_fast(
     # Single commit for both update and launch
     db.commit()
     db.refresh(study)
+    invalidate_study_cache(study_id)
     return study
 
 def launch_study_ultra_fast(
@@ -1590,6 +1661,7 @@ def launch_study_ultra_fast(
     study.updated_at = result.updated_at
     
     db.commit()
+    invalidate_study_cache(study_id)
     return study
 
 def delete_study(db: Session, study_id: UUID, owner_id: UUID) -> None:
@@ -1601,6 +1673,7 @@ def delete_study(db: Session, study_id: UUID, owner_id: UUID) -> None:
         raise HTTPException(status_code=400, detail="Cannot delete active studies.")
     db.delete(study)
     db.commit()
+    invalidate_study_cache(study_id)
 
 
 def delete_draft_study(db: Session, study_id: UUID, owner_id: UUID) -> None:
@@ -1613,6 +1686,7 @@ def delete_draft_study(db: Session, study_id: UUID, owner_id: UUID) -> None:
         )
     db.delete(study)
     db.commit()
+    invalidate_study_cache(study_id)
 
 def change_status(
     db: Session,
@@ -1636,6 +1710,7 @@ def change_status(
     study.status = new_status
     db.commit()
     db.refresh(study)
+    invalidate_study_cache(study_id)
     return study
 
 def change_status_fast(
@@ -1661,6 +1736,7 @@ def change_status_fast(
     study.status = new_status
     db.commit()
     db.refresh(study)
+    invalidate_study_cache(study_id)
     return study
 
 # ---------- Tasks (Regenerate / Validate) ----------
@@ -1924,6 +2000,7 @@ def regenerate_tasks(
     # Optimized commit and response generation
     try:
         db.commit()
+        invalidate_study_cache(study_id)
         # Cache logging to avoid repeated string operations
         log_msg = f"Regenerate completed: study_id={study_id} total_tasks={computed_total}"
         logger.info(log_msg)
@@ -2073,7 +2150,10 @@ def get_study_basic_details_public(db: Session, study_id: UUID) -> Optional[Dict
             "answer_options": row.answer_options,
             "config": row.config
         })
-    
+    # For draft studies, do not expose the system fragrance question (Q0) in preview/editing
+    if result.status == "draft":
+        classification_questions = [q for q in classification_questions if q.get("question_id") != FRAGRANCE_QUESTION_ID]
+
     # Count elements based on study type
     element_count = 0
     study_type = result.study_type

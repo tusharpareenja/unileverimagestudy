@@ -26,6 +26,7 @@ from app.services.task_generation_adapter import generate_grid_tasks, generate_l
 from app.services.study_member_service import study_member_service
 from app.schemas.study_schema import StudyMemberInvite, StudyMemberOut, StudyMemberUpdate
 from app.core.config import settings
+from app.core.domain import FRAGRANCE_QUESTION_ID
 
 router = APIRouter()
 
@@ -388,6 +389,15 @@ def list_studies_endpoint(
     if response is not None:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         response.headers["Pragma"] = "no-cache"
+        
+    # Short 15-second Redis cache to "debounce" heavy dashboard loads
+    # while still feeling "live" to the user.
+    status_str = status_filter.value if status_filter else "all"
+    cache_key = f"user_studies_list:{current_user.id}:{status_str}:{page}:{per_page}"
+    cached_data = RedisCache.get(cache_key)
+    if cached_data:
+        return [StudyListItem.model_validate(d) for d in cached_data]
+
     rows, _total = study_service.list_studies(
         db=db,
         owner_id=current_user.id,
@@ -460,6 +470,13 @@ def list_studies_endpoint(
             "user_role": user_role,
         })
         enriched.append(StudyListItem(**item))
+
+    # Cache for 15 seconds to debounce dashboard loads (store JSON-serializable dicts)
+    RedisCache.set(
+        cache_key,
+        [x.model_dump(mode="json") for x in enriched],
+        ttl_seconds=15,
+    )
     return enriched
 
 
@@ -605,6 +622,13 @@ def get_study_endpoint(
             cq_list = []
         out['classification_questions'] = cq_list
 
+    # For draft studies, do not expose the system fragrance question (Q0) in edit/preview
+    if getattr(study, "status", None) == "draft" and out.get("classification_questions"):
+        out["classification_questions"] = [
+            q for q in out["classification_questions"]
+            if q.get("question_id") != FRAGRANCE_QUESTION_ID
+        ]
+
     return out
 
 
@@ -716,8 +740,17 @@ def get_study_preview_endpoint(
             cq_list = []
         out['classification_questions'] = cq_list
 
+    # For draft studies, do not expose the system fragrance question (Q0) in edit/preview
+    if getattr(study, "status", None) == "draft" and out.get("classification_questions"):
+        out["classification_questions"] = [
+            q for q in out["classification_questions"]
+            if q.get("question_id") != FRAGRANCE_QUESTION_ID
+        ]
+
     return out
 
+
+from app.core.cache import RedisCache, invalidate_study_cache
 
 @router.get("/{study_id}/basic", response_model=StudyBasicDetails, response_model_exclude_none=True)
 def get_study_basic_details_endpoint(
@@ -733,9 +766,16 @@ def get_study_basic_details_endpoint(
     - Study config (audience segmentation)
     - Classification questions
     """
+    cache_key = f"study_config:basic:{study_id}"
+    cached_data = RedisCache.get(cache_key)
+    if cached_data:
+        return cached_data
+
     details = study_service.get_study_basic_details_public(db=db, study_id=study_id)
     if not details:
         raise HTTPException(status_code=404, detail="Study not found")
+        
+    RedisCache.set(cache_key, details, ttl_seconds=300)  # 5 minutes TTL
     return details
 
 
@@ -748,9 +788,16 @@ def get_study_basic_details_v2_endpoint(
     Same as basic but also includes total_responses (how many opted in/started the study).
     No authentication required.
     """
+    cache_key = f"study_config:basic_v2:{study_id}"
+    cached_data = RedisCache.get(cache_key)
+    if cached_data:
+        return cached_data
+
     details = study_service.get_study_basic_details_public_v2(db=db, study_id=study_id)
     if not details:
         raise HTTPException(status_code=404, detail="Study not found")
+        
+    RedisCache.set(cache_key, details, ttl_seconds=60)  # 1 minute TTL (because total_responses changes frequently)
     return details
 
 
@@ -828,6 +875,11 @@ def get_study_public_endpoint(
     Get study information for public access (no authentication required).
     Handles different study statuses with appropriate messaging.
     """
+    cache_key = f"study_config:public:{study_id}"
+    cached_data = RedisCache.get(cache_key)
+    if cached_data:
+        return cached_data
+
     result = study_service.get_study_public_with_status_check(db=db, study_id=study_id)
     
     # Check if there's an error in the result
@@ -853,6 +905,9 @@ def get_study_public_endpoint(
                 detail=result["message"]
             )
     
+    # Cache the successful response
+    RedisCache.set(cache_key, result, ttl_seconds=300)  # 5 minutes TTL
+    
     # Return the study data if no errors
     return result
 
@@ -867,6 +922,11 @@ def get_study_public_details_endpoint(
     Returns full study information including elements, layers, and classification questions.
     Only returns studies that are active and have a share_token.
     """
+    cache_key = f"study_config:public_details:{study_id}"
+    cached_data = RedisCache.get(cache_key)
+    if cached_data:
+        return cached_data
+
     study = study_service.get_study_public(db=db, study_id=study_id)
     if not study:
         raise HTTPException(
@@ -877,6 +937,9 @@ def get_study_public_details_endpoint(
         ar = (study.audience_segmentation or {}).get('aspect_ratio')
         out = StudyOut.model_validate(study).model_dump()
         out['aspect_ratio'] = ar
+        
+        # Cache the successful response
+        RedisCache.set(cache_key, out, ttl_seconds=300)  # 5 minutes TTL
         return out
     except Exception:
         return study
@@ -929,6 +992,9 @@ def update_study_endpoint(
             db=db, study_id=study_id, owner_id=current_user.id, payload=payload
         )
         
+        # Invalidate cache after successful update
+        invalidate_study_cache(study_id)
+        
         logger.info(f"Study {study_id} updated successfully")
         return result
         
@@ -949,6 +1015,7 @@ def delete_study_endpoint(
     current_user: User = Depends(get_current_active_user),
 ):
     study_service.delete_study(db=db, study_id=study_id, owner_id=current_user.id)
+    invalidate_study_cache(study_id)
     return None
 
 
@@ -959,9 +1026,11 @@ def change_status_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    return study_service.change_status(
+    result = study_service.change_status(
         db=db, study_id=study_id, owner_id=current_user.id, new_status=payload.status
     )
+    invalidate_study_cache(study_id)
+    return result
 
 
 @router.post("/{study_id}/regenerate-tasks", response_model=RegenerateTasksResponse)
@@ -974,9 +1043,11 @@ def regenerate_tasks_endpoint(
         "grid": generate_grid_tasks,
         "layer": generate_layer_tasks,
     }
-    return study_service.regenerate_tasks(
+    result = study_service.regenerate_tasks(
         db=db, study_id=study_id, owner_id=current_user.id, generator=generator
     )
+    invalidate_study_cache(study_id)
+    return result
 
 
 @router.get("/{study_id}/validate-tasks", response_model=ValidateTasksResponse)

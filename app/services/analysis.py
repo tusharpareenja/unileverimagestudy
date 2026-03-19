@@ -1217,10 +1217,16 @@ class StudyAnalysisService:
         sigma2 = sse / dof
         
         try:
-            XtX_inv = np.linalg.inv(X_design.T @ X_design)
-            se = np.sqrt(np.diag(sigma2 * XtX_inv))
-            t_vals = beta_full / se
-        except:
+            if dof <= 0:
+                t_vals = np.zeros_like(beta_full)
+            else:
+                XtX_inv = np.linalg.inv(X_design.T @ X_design)
+                se = np.sqrt(np.diag(sigma2 * XtX_inv))
+                se_safe = np.where(se > 0, se, np.nan)
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    t_vals = np.where(se_safe > 0, beta_full / se_safe, 0.0)
+                t_vals = np.nan_to_num(t_vals, nan=0.0, posinf=0.0, neginf=0.0)
+        except Exception:
             t_vals = np.zeros_like(beta_full)
             
         beta_with = beta_full[1:]

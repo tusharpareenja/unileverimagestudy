@@ -12,8 +12,9 @@ import asyncio
 from sqlalchemy.orm import Session
 from sqlalchemy import select, text
 
+from app.core.cache import RedisCache, invalidate_study_cache
 from app.core.dependencies import get_current_active_user
-from app.core.domain import is_unilever_domain
+from app.core.domain import is_unilever_domain, FRAGRANCE_QUESTION_ID
 from app.db.session import get_db
 from app.models.user_model import User
 from app.models.study_model import Study, StudyMember
@@ -95,7 +96,19 @@ async def submit_task(
     Submit a completed task for a study session.
     """
     service = StudyResponseService(db)
-    return service.submit_task(session_id, request)
+    result = service.submit_task(session_id, request)
+    
+    # Invalidate analytics caches since we have a new task submission
+    # We need to get the study_id from the session to invalidate the cache
+    try:
+        response = service.get_response_detail_by_session(session_id)
+        if response and response.study_id:
+            invalidate_study_cache(response.study_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to invalidate cache after task submission: {e}")
+        
+    return result
 
 @router.post("/submit-tasks-bulk", response_model=BulkSubmitTasksResponse)
 async def submit_tasks_bulk(
@@ -108,7 +121,18 @@ async def submit_tasks_bulk(
     Tasks are applied in the order provided; progress and completion are updated accordingly.
     """
     service = StudyResponseService(db)
-    return service.submit_tasks_bulk(session_id, request)
+    result = service.submit_tasks_bulk(session_id, request)
+    
+    # Invalidate analytics caches
+    try:
+        response = service.get_response_detail_by_session(session_id)
+        if response and response.study_id:
+            invalidate_study_cache(response.study_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to invalidate cache after bulk task submission: {e}")
+        
+    return result
 
 @router.post("/submit-classification", response_model=SubmitClassificationResponse)
 async def submit_classification(
@@ -121,6 +145,16 @@ async def submit_classification(
     """
     service = StudyResponseService(db)
     success = service.submit_classification(session_id, request)
+    
+    # Invalidate analytics caches
+    if success:
+        try:
+            response = service.get_response_detail_by_session(session_id)
+            if response and response.study_id:
+                invalidate_study_cache(response.study_id)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to invalidate cache after classification submission: {e}")
     
     return SubmitClassificationResponse(
         success=success,
@@ -157,6 +191,10 @@ async def submit_synthetic_respondent(
         study_id = request.study_id
         payload = request.payload
     result = service.submit_synthetic_respondent(study_id, payload)
+    
+    # Invalidate analytics caches
+    invalidate_study_cache(study_id)
+    
     return SubmitSyntheticRespondentResponse(**result)
 
 @router.post("/abandon-study", response_model=AbandonStudyResponse)
@@ -629,8 +667,19 @@ async def get_study_analytics(
     
     # No rate limiting - allow real-time updates
     
+    # Check cache first
+    cache_key = f"study_analytics:{study_id}"
+    cached_data = RedisCache.get(cache_key)
+    if cached_data:
+        end_time = time.time()
+        print(f"Analytics cache hit took: {(end_time - start_time)*1000:.2f}ms")
+        return cached_data
+    
     service = StudyResponseService(db)
     analytics = service.get_study_analytics(study_id)
+    
+    # Cache the result
+    RedisCache.set(cache_key, analytics.model_dump(), ttl_seconds=60)
     
     end_time = time.time()
     print(f"Analytics query took: {(end_time - start_time)*1000:.2f}ms")
@@ -686,13 +735,18 @@ async def stream_study_analytics(
         
         while True:
             # Smart caching: Use cache for most requests, refresh occasionally
+            cache_key = f"study_analytics:{study_id}"
             if request_count % 2 == 0:  # Refresh every 2nd request (every 20 seconds with 10s interval)
                 analytics = service.get_study_analytics(study_id)
+                RedisCache.set(cache_key, analytics.model_dump(), ttl_seconds=60)
             else:
                 # Use cached data for faster response
-                analytics = service._get_cached_analytics(study_id)
-                if not analytics:
+                cached_data = RedisCache.get(cache_key)
+                if cached_data:
+                    analytics = StudyAnalytics(**cached_data)
+                else:
                     analytics = service.get_study_analytics(study_id)
+                    RedisCache.set(cache_key, analytics.model_dump(), ttl_seconds=60)
             
             payload = json.dumps(analytics.model_dump())
             # Only send when changed to reduce client work
@@ -1586,6 +1640,8 @@ async def filter_study_regression_report(
     return sanitize_for_json(report)
 
 
+from app.core.cache import RedisCache
+
 @router.get("/respondent/preview/study/{study_id}/info")
 async def get_preview_study_info(
     study_id: UUID,
@@ -1595,21 +1651,38 @@ async def get_preview_study_info(
     Replica of the respondent info API for previewing a study.
     Always uses respondent_id=1 and works even for draft studies.
     """
+    # Check cache first
+    cache_key = f"respondent_study_info:{study_id}:1"
+    cached_data = RedisCache.get(cache_key)
+    if cached_data:
+        return cached_data
+        
     # Reuse the logic from get_respondent_study_info with respondent_id=1
-    return await get_respondent_study_info(respondent_id=1, study_id=study_id, db=db)
+    result = await get_respondent_study_info(respondent_id=1, study_id=study_id, db=db, skip_cache=True)
+    
+    # Cache the result
+    RedisCache.set(cache_key, result, ttl_seconds=300)
+    return result
 
 
 @router.get("/respondent/{respondent_id}/study/{study_id}/info")
 async def get_respondent_study_info(
     respondent_id: int,
     study_id: UUID,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    skip_cache: bool = False
 ):
     """
     Get study information for a specific respondent including classification questions 
     and tasks assigned to that respondent (tasks[respondent_id]).
     This endpoint is public and doesn't require authentication.
     """
+    if not skip_cache:
+        cache_key = f"respondent_study_info:{study_id}:{respondent_id}"
+        cached_data = RedisCache.get(cache_key)
+        if cached_data:
+            return cached_data
+            
     service = StudyResponseService(db)
     
     # Get study details
@@ -1628,7 +1701,10 @@ async def get_respondent_study_info(
         .where(StudyClassificationQuestion.study_id == study_id)
         .order_by(StudyClassificationQuestion.order)
     ).scalars().all()
-    
+    # For draft studies (e.g. create-study preview), do not expose the system fragrance question (Q0)
+    if study.get("status") == "draft":
+        classification_questions = [q for q in classification_questions if q.question_id != FRAGRANCE_QUESTION_ID]
+
     # Get tasks assigned to this specific respondent (tasks[respondent_id])
     respondent_tasks = service.get_respondent_tasks(study_id, respondent_id)
 
@@ -1704,7 +1780,7 @@ async def get_respondent_study_info(
             aspect_ratio = None
     tasks_per_consumer = len(respondent_tasks or [])
 
-    return {
+    result = {
         "respondent_id": respondent_id,
         "study_id": str(study_id),
         "study_info": {
@@ -1736,3 +1812,8 @@ async def get_respondent_study_info(
         ],
         "assigned_tasks": respondent_tasks
     }
+    
+    if not skip_cache:
+        RedisCache.set(f"respondent_study_info:{study_id}:{respondent_id}", result, ttl_seconds=300)
+        
+    return result

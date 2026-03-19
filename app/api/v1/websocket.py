@@ -514,7 +514,7 @@ async def websocket_simulate_ai(
         # Subscribe to Redis pub/sub for progress updates (works across workers)
         ping_interval = 30
         start_time = asyncio.get_event_loop().time()
-        timeout_seconds = 30 * 60  # 30 minutes max (simulation can be slow)
+        timeout_seconds = 8 * 60 * 60  # 30 minutes max (simulation can be slow)
         
         async def ping_task():
             """Send pings to keep connection alive."""
