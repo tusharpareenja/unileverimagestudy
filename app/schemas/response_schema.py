@@ -362,6 +362,14 @@ class SubmitPanelistResponse(BaseModel):
     panelist_gender: Optional[str]
     message: str
 
+
+class CheckPanelistParticipationResponse(BaseModel):
+    """Response for panelist participation check (study + panelist)."""
+    ok: bool = True
+    participated: bool = False
+    message: Optional[str] = None
+
+
 # ---------- Synthetic Respondent (accepts client JSON; stored like tasks + classification) ----------
 
 class SyntheticClassificationAnswerItem(BaseModel):

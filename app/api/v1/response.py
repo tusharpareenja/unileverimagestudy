@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 import json
 import asyncio
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.core.dependencies import get_current_active_user
 from app.core.domain import is_unilever_domain
@@ -25,6 +25,7 @@ from app.schemas.response_schema import (
     AbandonStudyRequest, AbandonStudyResponse, UpdateUserDetailsRequest,
     SubmitProductIdRequest, SubmitProductIdResponse,
     SubmitPanelistRequest, SubmitPanelistResponse,
+    CheckPanelistParticipationResponse,
     SubmitSyntheticRespondentRequest, SubmitSyntheticRespondentResponse,
     SyntheticRespondentPayload,
     StudyAnalytics, ResponseAnalytics, CompletedTaskOut,
@@ -55,6 +56,34 @@ async def start_study(
     
     service = StudyResponseService(db)
     return service.start_study(request, ip_address, user_agent)
+
+
+@router.get("/check-panelist-participation", response_model=CheckPanelistParticipationResponse)
+def check_panelist_participation(
+    study_id: UUID = Query(..., description="Study ID"),
+    panelist_id: str = Query(..., min_length=1, max_length=50, description="Panelist ID"),
+    db: Session = Depends(get_db),
+):
+    """
+    Ultra-fast check: has this panelist already responded to this study (completed or not)?
+    Uses indexed lookup on (study_id, panelist_id). No auth required (public participation flow).
+    """
+    row = db.execute(
+        text(
+            "SELECT 1 FROM study_responses "
+            "WHERE study_id = :study_id AND panelist_id = :panelist_id LIMIT 1"
+        ),
+        {"study_id": str(study_id), "panelist_id": panelist_id.strip()},
+    ).first()
+    participated = row is not None
+    if participated:
+        return CheckPanelistParticipationResponse(
+            ok=True,
+            participated=True,
+            message="This panelist has already responded to this study.",
+        )
+    return CheckPanelistParticipationResponse(ok=True, participated=False)
+
 
 @router.post("/submit-task", response_model=SubmitTaskResponse)
 async def submit_task(
