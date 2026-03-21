@@ -125,7 +125,7 @@ class StudyClassificationQuestionIn(BaseModel):
     question_text: str = Field(..., max_length=500)
     question_type: str = Field(default='multiple_choice', max_length=20)  # multiple_choice, text, rating, etc.
     is_required: bool = Field(default=True)
-    order: int = Field(default=1, ge=1)
+    order: int = Field(default=1, ge=0)  # 0 allowed for system question (e.g. fragrance Q0)
     answer_options: Optional[List[AnswerOption]] = None  # For multiple choice questions
     config: Optional[Dict[str, Any]] = None  # Additional question-specific config
 

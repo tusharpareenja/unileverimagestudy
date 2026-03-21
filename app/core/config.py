@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     TASK_GENERATION_CHUNK_SIZE: int = 50  # Process respondents in smaller chunks for memory efficiency
     MAX_MEMORY_USAGE_MB: int = 1024  # 1GB memory limit for task generation (matches Azure P2 plan)
     
+    # Redis Settings (for pub/sub across multiple workers)
+    REDIS_URL: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "REDIS_URL",
+            "redis_url",
+        ),
+    )
+    
     # SMTP Email Settings
     SMTP_SERVER: str = "smtp.gmail.com"
     SMTP_PORT: int = 587

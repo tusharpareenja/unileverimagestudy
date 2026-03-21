@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.job_model import Job, JobStatus
+from app.websocket.job_notifier import job_progress_notifier
 
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,13 @@ class BackgroundTaskService:
                     job_fresh.message = "Task generation completed successfully"
                     job_fresh.result = None
                     db_fresh.commit()
+                    
+                    # Notify WebSocket subscribers of completion
+                    job_progress_notifier.notify(job_id, {
+                        "type": "completed",
+                        "progress": 100.0,
+                        "message": "Task generation completed successfully"
+                    })
                 logger.info(f"Job {job_id} completed successfully")
             finally:
                 db_fresh.close()
@@ -198,6 +206,13 @@ class BackgroundTaskService:
                     job_err.error = str(e)
                     job_err.message = f"Study configuration error: {str(e)}"
                     db_err.commit()
+                    
+                    # Notify WebSocket subscribers of failure
+                    job_progress_notifier.notify(job_id, {
+                        "type": "failed",
+                        "error": str(e),
+                        "message": f"Study configuration error: {str(e)}"
+                    })
                 logger.error(f"Job {job_id} failed due to study configuration: {e}")
             finally:
                 db_err.close()
@@ -217,6 +232,13 @@ class BackgroundTaskService:
                     job_err.error = str(e)
                     job_err.message = f"Task generation failed: {str(e)}"
                     db_err.commit()
+                    
+                    # Notify WebSocket subscribers of failure
+                    job_progress_notifier.notify(job_id, {
+                        "type": "failed",
+                        "error": str(e),
+                        "message": f"Task generation failed: {str(e)}"
+                    })
                 logger.error(f"Job {job_id} failed: {e}")
                 import traceback
                 logger.error(f"Job {job_id} traceback: {traceback.format_exc()}")
@@ -241,33 +263,63 @@ class BackgroundTaskService:
         db.commit()
 
         def run_sync():
-            db_sim = SessionLocal()
+            # Create a session just for loading study data initially
+            db_init = SessionLocal()
             try:
                 study_id = UUID(job.study_id)
-                import os
-                progress_stdout = os.environ.get("SYNTHETIC_PROGRESS_STDOUT", "").strip().lower() in ("1", "true", "yes")
+            finally:
+                db_init.close()
+            
+            import os
+            progress_stdout = os.environ.get("SYNTHETIC_PROGRESS_STDOUT", "").strip().lower() in ("1", "true", "yes")
 
-                def progress(done: int, total: int, msg: str):
+            def progress(done: int, total: int, msg: str):
+                """Update job progress using a fresh DB session each time to avoid stale connections."""
+                try:
+                    pct = (100.0 * done / total) if total else 0
+                    line = f"[Simulate AI respondents] {msg} — progress: {pct:.0f}% ({done}/{total})"
+                    logger.info(line)
+                    if progress_stdout:
+                        print(line, flush=True)
+                    
+                    # Use fresh session for each progress update to avoid stale connection
+                    db_progress = SessionLocal()
                     try:
-                        pct = (100.0 * done / total) if total else 0
-                        line = f"[Simulate AI respondents] {msg} — progress: {pct:.0f}% ({done}/{total})"
-                        logger.info(line)
-                        if progress_stdout:
-                            print(line, flush=True)
-                        j = db_sim.query(Job).filter(Job.job_id == job_id).first()
+                        j = db_progress.query(Job).filter(Job.job_id == job_id).first()
                         if j:
                             j.progress = pct
                             j.message = msg
-                            db_sim.commit()
-                    except Exception as e:
+                            db_progress.commit()
+                    except Exception as db_err:
+                        logger.warning(f"Progress DB update failed (non-fatal): {db_err}")
                         try:
-                            logger.warning("Progress callback error (non-fatal): %s", e)
+                            db_progress.rollback()
                         except Exception:
                             pass
+                    finally:
                         try:
-                            db_sim.rollback()
+                            db_progress.close()
                         except Exception:
                             pass
+                    
+                    # Notify WebSocket subscribers (doesn't need DB)
+                    job_progress_notifier.notify(job_id, {
+                        "type": "progress",
+                        "progress": pct,
+                        "message": msg,
+                        "respondents_completed": done,
+                        "respondents_requested": total
+                    })
+                except Exception as e:
+                    try:
+                        logger.warning("Progress callback error (non-fatal): %s", e)
+                    except Exception:
+                        pass
+            
+            # Create a fresh session for the simulation
+            # Note: The simulation now uses fresh sessions internally for each respondent submission
+            db_sim = SessionLocal()
+            try:
                 return run_simulation(
                     db_sim,
                     study_id=study_id,
@@ -297,14 +349,36 @@ class BackgroundTaskService:
                 run_result = self._make_json_serializable(result)
                 existing = (job.result or {}) if isinstance(job.result, dict) else {}
                 job.result = {"payload": existing.get("payload") or payload, "run_result": run_result}
+                
+                # Extract respondents count for WebSocket notification
+                max_respondents = payload.get("max_respondents", 0)
+                
                 if result.get("success"):
                     job.status = JobStatus.COMPLETED
                     job.message = result.get("message", "Simulation completed.")
                     job.error = None
+                    
+                    # Notify WebSocket subscribers of completion
+                    job_progress_notifier.notify(job_id, {
+                        "type": "completed",
+                        "progress": 100.0,
+                        "message": job.message,
+                        "respondents_completed": max_respondents,
+                        "respondents_requested": max_respondents
+                    })
                 else:
                     job.status = JobStatus.FAILED
                     job.message = result.get("message", "Simulation failed.")
                     job.error = result.get("error")
+                    
+                    # Notify WebSocket subscribers of failure
+                    job_progress_notifier.notify(job_id, {
+                        "type": "failed",
+                        "error": job.error,
+                        "message": job.message,
+                        "respondents_completed": 0,
+                        "respondents_requested": max_respondents
+                    })
                 db_fresh.commit()
                 logger.info(
                     f"Job {job_id} simulate_ai_respondents finished: success={result.get('success')}, "
@@ -360,14 +434,22 @@ class BackgroundTaskService:
             try:
                 frac = max(0.0, min(1.0, done / max(1, N)))
                 current_progress = p_start + ((p_end - p_start) * frac)
+                message = f"Building respondents{f' ({phase_type})' if phase_type else ''} {done}/{N}..."
                 
                 db_progress = SessionLocal()
                 try:
                     job_progress = db_progress.query(Job).filter(Job.job_id == job.job_id).first()
                     if job_progress and abs(job_progress.progress - current_progress) > 1.0:
                         job_progress.progress = current_progress
-                        job_progress.message = f"Building respondents{f' ({phase_type})' if phase_type else ''} {done}/{N}..."
+                        job_progress.message = message
                         db_progress.commit()
+                        
+                        # Notify WebSocket subscribers
+                        job_progress_notifier.notify(job.job_id, {
+                            "type": "progress",
+                            "progress": current_progress,
+                            "message": message
+                        })
                 except Exception:
                     db_progress.rollback()
                 finally:
@@ -398,6 +480,33 @@ class BackgroundTaskService:
         phase_order = payload.get('phase_order', [])
         if not phase_order:
             raise ValueError("Hybrid study requires phase_order")
+        
+        job_id = job.job_id  # Capture job_id for fresh session queries
+        
+        # Helper to update job status with fresh session (avoids stale connection after long executor runs)
+        def _update_job_status(progress: float | None, message: str) -> bool:
+            """Update job status with fresh DB session. Returns False if job was cancelled."""
+            db_fresh = SessionLocal()
+            try:
+                job_fresh = db_fresh.query(Job).filter(Job.job_id == job_id).first()
+                if not job_fresh:
+                    return False
+                if job_fresh.status == JobStatus.CANCELLED:
+                    return False
+                if progress is not None:
+                    job_fresh.progress = progress
+                job_fresh.message = message
+                db_fresh.commit()
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to update job status: {e}")
+                try:
+                    db_fresh.rollback()
+                except Exception:
+                    pass
+                return True  # Continue anyway, non-fatal
+            finally:
+                db_fresh.close()
             
         job.progress = 10.0
         job.message = "Initializing hybrid task generation..."
@@ -422,8 +531,9 @@ class BackgroundTaskService:
             p_start = 10.0 + (i * (80.0 / num_phases))
             p_end = 10.0 + ((i + 1) * (80.0 / num_phases))
             
-            job.message = f"Starting generation for phase: {phase_type}..."
-            db.commit()
+            # Use fresh session for status update (original db may be stale after long phase)
+            if not _update_job_status(None, f"Starting generation for phase: {phase_type}..."):
+                raise RuntimeError("Job was cancelled")
             
             phase_result = await self._generate_tasks_for_phase(job, payload, db, phase_type=phase_type, progress_range=(p_start, p_end))
             
@@ -455,17 +565,17 @@ class BackgroundTaskService:
             
         if is_mix:
             import random
-            job.message = "Randomizing mixed tasks..."
-            db.commit()
+            # Use fresh session for status update
+            if not _update_job_status(None, "Randomizing mixed tasks..."):
+                raise RuntimeError("Job was cancelled")
             for resp_id, t_list in tasks_per_respondent_mix.items():
                 random.shuffle(t_list)
                 for idx, t in enumerate(t_list):
                     t['task_index'] = idx
                 combined_tasks[resp_id] = t_list
 
-        job.progress = 90.0
-        job.message = "Combining all phases..."
-        db.commit()
+        # Use fresh session for final status update
+        _update_job_status(90.0, "Combining all phases...")
         
         return {
             "tasks": combined_tasks,
@@ -473,6 +583,8 @@ class BackgroundTaskService:
         }
     
     async def _generate_layer_tasks_async(self, job: Job, payload: Dict, db: Session):
+        job_id = job.job_id  # Capture for fresh session queries
+        
         job.progress = 10.0
         job.message = "Planning layer task generation..."
         db.commit()
@@ -503,20 +615,24 @@ class BackgroundTaskService:
                 # Calculate progress
                 frac = max(0.0, min(1.0, done / max(1, N)))
                 current_progress = p_start + ((p_end - p_start) * frac)
+                message = f"Building respondents {done}/{N}..."
                 
                 # Update DB with fresh session
-                # Throttling could be added here if needed, but for now we update
-                # safely using a new session for this thread
                 db_progress = SessionLocal()
                 try:
-                    job_progress = db_progress.query(Job).filter(Job.job_id == job.job_id).first()
+                    job_progress = db_progress.query(Job).filter(Job.job_id == job_id).first()
                     if job_progress:
-                        # Only update if progress changed significantly or it's been a while?
-                        # For simplicity, we update every time but we could check against current value.
-                        if abs(job_progress.progress - current_progress) > 1.0: # Update every 1%
+                        if abs(job_progress.progress - current_progress) > 1.0:
                             job_progress.progress = current_progress
-                            job_progress.message = f"Building respondents {done}/{N}..."
+                            job_progress.message = message
                             db_progress.commit()
+                            
+                            # Notify WebSocket subscribers
+                            job_progress_notifier.notify(job_id, {
+                                "type": "progress",
+                                "progress": current_progress,
+                                "message": message
+                            })
                 except Exception:
                     db_progress.rollback()
                 finally:
@@ -547,22 +663,39 @@ class BackgroundTaskService:
                 raise RuntimeError(f"Study configuration error: {str(e)}.")
             raise
         
-        job.progress = 90.0
-        job.message = "Saving generated tasks..."
-        db.commit()
+        # Use fresh session after long executor run to avoid stale connection
+        db_post = SessionLocal()
+        try:
+            job_post = db_post.query(Job).filter(Job.job_id == job_id).first()
+            if job_post:
+                job_post.progress = 90.0
+                job_post.message = "Saving generated tasks..."
+                db_post.commit()
+        except Exception as e:
+            logger.warning(f"Failed to update job status after layer generation: {e}")
+            try:
+                db_post.rollback()
+            except Exception:
+                pass
+        finally:
+            db_post.close()
         
-        # Attach background image URL
+        # Attach background image URL using fresh session
         if isinstance(result, dict):
             try:
                 from app.models.study_model import Study
-                study = db.query(Study).filter(Study.id == job.study_id).first()
-                if study and hasattr(study, 'background_image_url'):
-                    bg_url = getattr(study, 'background_image_url', None)
-                    if bg_url is not None:
-                        meta = result.get('metadata', {})
-                        if isinstance(meta, dict):
-                            meta['background_image_url'] = bg_url
-                            result['metadata'] = meta
+                db_bg = SessionLocal()
+                try:
+                    study = db_bg.query(Study).filter(Study.id == job.study_id).first()
+                    if study and hasattr(study, 'background_image_url'):
+                        bg_url = getattr(study, 'background_image_url', None)
+                        if bg_url is not None:
+                            meta = result.get('metadata', {})
+                            if isinstance(meta, dict):
+                                meta['background_image_url'] = bg_url
+                                result['metadata'] = meta
+                finally:
+                    db_bg.close()
             except Exception as e:
                 logger.warning(f"Could not attach background image URL: {e}")
         
