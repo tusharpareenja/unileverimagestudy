@@ -435,7 +435,17 @@ class StudyAnalysisService:
             raw_row = {}
             for col in df.columns:
                 val = row[col]
-                if pd.isna(val):
+                # Handle case where duplicate columns return a Series
+                if isinstance(val, pd.Series):
+                    val = val.iloc[0] if not val.empty else None
+                
+                # Check for NA values safely
+                try:
+                    is_na = pd.isna(val) if not isinstance(val, (list, dict)) else False
+                except (ValueError, TypeError):
+                    is_na = False
+                
+                if is_na:
                     raw_row[col] = None
                 elif isinstance(val, (np.integer, np.int64)):
                     raw_row[col] = int(val)
@@ -1325,17 +1335,32 @@ class StudyAnalysisService:
     def _build_class_groups(self, coef_table, df, element_cols, class_cols):
         groups = {}
         for col_name in class_cols:
-            if col_name not in df.columns: continue
+            if col_name not in df.columns: 
+                continue
             
-            ans_series = df.dropna(subset=[col_name]).groupby(self.PANEL_COL)[col_name].first()
-            coef_with_ans = coef_table.merge(ans_series.rename("Answer"), left_on="Panelist", right_index=True, how="left")
+            filtered_df = df.dropna(subset=[col_name])
+            if filtered_df.empty:
+                continue
+                
+            ans_series = filtered_df.groupby(self.PANEL_COL)[col_name].first()
+            
+            # Skip if empty
+            if ans_series.empty:
+                continue
+            
+            # Ensure it's a Series (not DataFrame) - handle edge cases with duplicate column names
+            if isinstance(ans_series, pd.DataFrame):
+                ans_series = ans_series.iloc[:, 0]
+            
+            # Use a unique internal column name to avoid conflicts
+            coef_with_ans = coef_table.merge(ans_series.rename("_cls_answer_"), left_on="Panelist", right_index=True, how="left")
             
             segs = {}
             answer_labels = []
             unique_opts = ans_series.dropna().unique()
             
             for opt in unique_opts:
-                sub = coef_with_ans[coef_with_ans["Answer"] == opt]
+                sub = coef_with_ans[coef_with_ans["_cls_answer_"] == opt]
                 if not sub.empty:
                     segs[opt] = {
                         "base": int(sub["Panelist"].nunique()),
@@ -1346,7 +1371,7 @@ class StudyAnalysisService:
             if segs:
                 groups[col_name] = {
                     "question_text": col_name,
-                    "answer_labels": sorted(answer_labels, key=str), # Sort for consistency
+                    "answer_labels": sorted(answer_labels, key=str),
                     "segments": segs
                 }
         return groups

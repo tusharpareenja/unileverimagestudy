@@ -35,8 +35,10 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     result_expires=86400,
-    task_time_limit=21600,  # 6h hard limit
+    task_time_limit=21600,       # 6h hard limit
     task_soft_time_limit=21000,  # 5h50m soft limit
+    broker_heartbeat=1800,       # 30 min heartbeat (match RabbitMQ)
+    broker_connection_timeout=30,
 )
 
 # Redis-only transport options (skip for rpc:// or amqp)
