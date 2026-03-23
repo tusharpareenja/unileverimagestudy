@@ -435,7 +435,17 @@ class StudyAnalysisService:
             raw_row = {}
             for col in df.columns:
                 val = row[col]
-                if pd.isna(val):
+                # Handle case where duplicate columns return a Series
+                if isinstance(val, pd.Series):
+                    val = val.iloc[0] if not val.empty else None
+                
+                # Check for NA values safely
+                try:
+                    is_na = pd.isna(val) if not isinstance(val, (list, dict)) else False
+                except (ValueError, TypeError):
+                    is_na = False
+                
+                if is_na:
                     raw_row[col] = None
                 elif isinstance(val, (np.integer, np.int64)):
                     raw_row[col] = int(val)
