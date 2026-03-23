@@ -1065,10 +1065,15 @@ from __future__ import annotations
 import math
 import os
 import random
+import sys
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
+
+# On Windows (spawn), ProcessPoolExecutor workers can't import project modules.
+# Fall back to ThreadPoolExecutor which avoids pickling issues.
+_USE_THREADS = sys.platform == "win32"
 
 import multiprocessing as mp
 import numpy as np
@@ -1836,7 +1841,10 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
     except RuntimeError:
         pass
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    # On Windows, use ThreadPoolExecutor to avoid pickling issues with spawn
+    PoolClass = ThreadPoolExecutor if _USE_THREADS else ProcessPoolExecutor
+
+    with PoolClass(max_workers=max_workers) as executor:
         futures = []
         for resp_id in range(N):
             future = executor.submit(_build_one_worker, (
@@ -2044,12 +2052,14 @@ def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
     except RuntimeError:
         pass
 
+    PoolClass = ThreadPoolExecutor if _USE_THREADS else ProcessPoolExecutor
+
     tasks = []
     for r in range(1, N+1):
         tasks.append((r, T, category_info, E, A_min_used, BASE_SEED, LOG_EVERY_ROWS,
                       mode, max_active_per_row))
 
-    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+    with PoolClass(max_workers=max_workers) as ex:
         futures = {ex.submit(_build_one_worker, t): t[0] for t in tasks}
         done = 0
         for fut in as_completed(futures):

@@ -526,7 +526,6 @@ def simulate_ai_respondents_endpoint(
         )
 
     if run_async and N > settings.MAX_RESPONDENTS_FOR_SYNC:
-        import threading
         import logging
         from app.services.background_task_service import background_task_service
 
@@ -542,26 +541,46 @@ def simulate_ai_respondents_endpoint(
                 "randomize": randomize,
             },
         )
-        def run_background_job():
+
+        if getattr(settings, "USE_CELERY", False):
+            from app.tasks.celery_jobs import simulate_synthetic_respondents_celery
+            simulate_synthetic_respondents_celery.delay(
+                job_id=job_id,
+                study_id=str(study_id),
+                user_id=str(current_user.id),
+                payload={
+                    "max_respondents": N,
+                    "max_panelist_workers": max_panelist_workers,
+                    "is_special_creator": is_special_creator,
+                    "randomize": randomize,
+                },
+            )
+            logger.info(f"Dispatched simulate_synthetic_respondents to Celery: job_id={job_id}")
+        else:
+            import threading
             import asyncio
-            from app.db.session import SessionLocal
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            db_bg = SessionLocal()
-            try:
-                task = loop.run_until_complete(background_task_service.start_job(job_id, db_bg))
-                if task:
-                    loop.run_until_complete(task)
-            except Exception as e:
-                logger.error("Background simulate_ai_respondents job failed: %s", e)
-            finally:
+
+            def run_background_job():
+                from app.db.session import SessionLocal
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                db_bg = SessionLocal()
                 try:
-                    db_bg.close()
-                except Exception:
-                    pass
-                loop.close()
-        thread = threading.Thread(target=run_background_job, daemon=True)
-        thread.start()
+                    task = loop.run_until_complete(background_task_service.start_job(job_id, db_bg))
+                    if task:
+                        loop.run_until_complete(task)
+                except Exception as e:
+                    logger.error("Background simulate_ai_respondents job failed: %s", e)
+                finally:
+                    try:
+                        db_bg.close()
+                    except Exception:
+                        pass
+                    loop.close()
+
+            thread = threading.Thread(target=run_background_job, daemon=True)
+            thread.start()
+
         return {
             "job_id": job_id,
             "message": "Simulation started in background.",
@@ -1210,51 +1229,61 @@ def generate_tasks_from_body_endpoint(
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"Created background job {job_id} for {number_of_respondents} respondents")
-        
-        # Start the job asynchronously using a background thread
-        import threading
-        import asyncio
-        
-        def run_background_job():
-            """Run the background job in a separate thread with its own event loop"""
-            import logging
-            logger = logging.getLogger(__name__)
-            
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            # Use a fresh DB session in this background thread
-            from app.db.session import SessionLocal
-            db_bg = SessionLocal()
-            try:
-                logger.info(f"Starting background job {job_id}")
-                # Start the async job and then await the returned task to completion
-                task = loop.run_until_complete(background_task_service.start_job(job_id, db_bg))
-                logger.info(f"Background job {job_id} started, awaiting completion...")
-                loop.run_until_complete(task)
-                logger.info(f"Background job {job_id} completed successfully")
-            except Exception as e:
-                logger.error(f"Background job {job_id} failed: {e}")
-                import traceback
-                logger.error(f"Traceback: {traceback.format_exc()}")
-                # Update job status to failed if there's an error
-                job = background_task_service.get_job_status(job_id)
-                if job:
-                    from app.services.background_task_service import JobStatus
-                    job.status = JobStatus.FAILED
-                    job.error = str(e)
-                    job.message = f"Background job failed: {str(e)}"
-                    job.completed_at = datetime.utcnow()
-            finally:
+
+        if getattr(settings, "USE_CELERY", False):
+            from app.tasks.celery_jobs import generate_tasks_celery
+            generate_tasks_celery.delay(
+                job_id=job_id,
+                study_id=str(study_row.id),
+                user_id=str(current_user.id),
+                payload=payload.model_dump(mode="json"),
+            )
+            logger.info(f"Dispatched job {job_id} to Celery worker")
+        else:
+            # Start the job asynchronously using a background thread
+            import threading
+            import asyncio
+
+            def run_background_job():
+                """Run the background job in a separate thread with its own event loop"""
+                import logging
+                _logger = logging.getLogger(__name__)
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                from app.db.session import SessionLocal
+                db_bg = SessionLocal()
                 try:
-                    db_bg.close()
-                except Exception:
-                    pass
-                loop.close()
-        
-        # Start the background job in a daemon thread
-        thread = threading.Thread(target=run_background_job, daemon=True)
-        thread.start()
+                    _logger.info(f"Starting background job {job_id}")
+                    task = loop.run_until_complete(background_task_service.start_job(job_id, db_bg))
+                    _logger.info(f"Background job {job_id} started, awaiting completion...")
+                    loop.run_until_complete(task)
+                    _logger.info(f"Background job {job_id} completed successfully")
+                except Exception as e:
+                    _logger.error(f"Background job {job_id} failed: {e}")
+                    import traceback
+                    _logger.error(f"Traceback: {traceback.format_exc()}")
+                    from app.db.session import SessionLocal as _SessionLocal
+                    from app.models.job_model import Job, JobStatus
+                    _db = _SessionLocal()
+                    try:
+                        _job = _db.query(Job).filter(Job.job_id == job_id).first()
+                        if _job:
+                            _job.status = JobStatus.FAILED
+                            _job.error = str(e)
+                            _job.message = f"Background job failed: {str(e)}"
+                            _job.completed_at = datetime.utcnow()
+                            _db.commit()
+                    finally:
+                        _db.close()
+                finally:
+                    try:
+                        db_bg.close()
+                    except Exception:
+                        pass
+                    loop.close()
+
+            thread = threading.Thread(target=run_background_job, daemon=True)
+            thread.start()
         
         # Return only job metadata; frontend will poll for status/results
         logger.info(f"Returning background job response for job {job_id}")
