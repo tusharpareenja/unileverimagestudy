@@ -1073,7 +1073,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # On Windows (spawn), ProcessPoolExecutor workers can't import project modules.
 # Fall back to ThreadPoolExecutor which avoids pickling issues.
-_USE_THREADS = sys.platform == "win32"
+_USE_THREADS = sys.platform == "win32" or os.environ.get("CELERY_FORCE_THREADS", "").lower() in ("1", "true", "yes")
 
 import multiprocessing as mp
 import numpy as np
@@ -1836,10 +1836,10 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
     parallel_start = time.time()
     print(f"🔄 Starting parallel processing at {time.strftime('%H:%M:%S', time.localtime(parallel_start))}")
 
-    try:
-        mp.set_start_method("spawn")
-    except RuntimeError:
-        pass
+    # try:
+    #     mp.set_start_method("spawn")
+    # except RuntimeError:
+    #     pass
 
     # On Windows, use ThreadPoolExecutor to avoid pickling issues with spawn
     PoolClass = ThreadPoolExecutor if _USE_THREADS else ProcessPoolExecutor
