@@ -17,9 +17,13 @@ from app.core.cloudinary_config import init_cloudinary
 
 _appinsights_cs = (settings.APPLICATIONINSIGHTS_CONNECTION_STRING or "").strip()
 if _appinsights_cs:
+    print("Application Insights: connection string present, calling configure_azure_monitor")
     from azure.monitor.opentelemetry import configure_azure_monitor
 
     configure_azure_monitor(connection_string=_appinsights_cs)
+    print("Application Insights: configure_azure_monitor finished")
+else:
+    print("Application Insights: skipped (APPLICATIONINSIGHTS_CONNECTION_STRING empty or missing)")
 
 app = FastAPI(
     title="mindsurve API",
