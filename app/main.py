@@ -15,6 +15,12 @@ from app.api.v1.websocket import router as websocket_router
 from app.core.config import settings
 from app.core.cloudinary_config import init_cloudinary
 
+_appinsights_cs = (settings.APPLICATIONINSIGHTS_CONNECTION_STRING or "").strip()
+if _appinsights_cs:
+    from azure.monitor.opentelemetry import configure_azure_monitor
+
+    configure_azure_monitor(connection_string=_appinsights_cs)
+
 app = FastAPI(
     title="mindsurve API",
     description="API for user authentication and management",

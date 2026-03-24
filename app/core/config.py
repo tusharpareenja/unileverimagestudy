@@ -69,6 +69,9 @@ class Settings(BaseSettings):
             "azure_blob_sas_token",
         ),
     )  # Optional, appended to URLs for private containers
+
+    # Application Insights (optional; set in .env to send telemetry to Azure Monitor)
+    APPLICATIONINSIGHTS_CONNECTION_STRING: str | None = None
     
     # Application Settings
     BASE_URL: str = "https://mindsurve.com"  # Base URL for share links in frontend
