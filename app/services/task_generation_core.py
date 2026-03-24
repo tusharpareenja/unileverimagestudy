@@ -1071,10 +1071,14 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
-# On Windows, ProcessPoolExecutor with spawn can't import project modules properly.
+# On Windows, ProcessPoolExecutor can't import project modules properly.
 # Fall back to ThreadPoolExecutor which avoids pickling issues.
-# On Linux (including under Celery), we use ProcessPoolExecutor with explicit spawn context.
+# On Linux, we use ProcessPoolExecutor with 'fork' context (fast, no re-import needed).
 _USE_THREADS = sys.platform == "win32"
+
+# Linux multiprocessing context: 'fork' is faster and doesn't need to re-import modules.
+# 'spawn' would be safer but fails under Celery because it can't find __main__.
+_MP_CONTEXT = "fork" if sys.platform != "win32" else None
 
 import multiprocessing as mp
 import numpy as np
@@ -1838,12 +1842,12 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
     print(f"🔄 Starting parallel processing at {time.strftime('%H:%M:%S', time.localtime(parallel_start))}")
 
     # On Windows, use ThreadPoolExecutor to avoid pickling issues.
-    # On Linux, use ProcessPoolExecutor with explicit spawn context (works under Celery).
+    # On Linux, use ProcessPoolExecutor with 'fork' context (fast, works under Celery).
     if _USE_THREADS:
         executor_ctx = ThreadPoolExecutor(max_workers=max_workers)
     else:
-        spawn_ctx = mp.get_context("spawn")
-        executor_ctx = ProcessPoolExecutor(max_workers=max_workers, mp_context=spawn_ctx)
+        fork_ctx = mp.get_context(_MP_CONTEXT)
+        executor_ctx = ProcessPoolExecutor(max_workers=max_workers, mp_context=fork_ctx)
 
     with executor_ctx as executor:
         futures = []
@@ -2049,12 +2053,12 @@ def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
     print(f"🚀 Building {N} respondents concurrently with {max_workers} workers...")
 
     # On Windows, use ThreadPoolExecutor to avoid pickling issues.
-    # On Linux, use ProcessPoolExecutor with explicit spawn context (works under Celery).
+    # On Linux, use ProcessPoolExecutor with 'fork' context (fast, works under Celery).
     if _USE_THREADS:
         executor_ctx = ThreadPoolExecutor(max_workers=max_workers)
     else:
-        spawn_ctx = mp.get_context("spawn")
-        executor_ctx = ProcessPoolExecutor(max_workers=max_workers, mp_context=spawn_ctx)
+        fork_ctx = mp.get_context(_MP_CONTEXT)
+        executor_ctx = ProcessPoolExecutor(max_workers=max_workers, mp_context=fork_ctx)
 
     tasks = []
     for r in range(1, N+1):
