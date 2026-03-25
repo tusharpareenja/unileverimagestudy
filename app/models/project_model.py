@@ -32,8 +32,9 @@ class Project(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     
     # Relations
-    creator = relationship("User", back_populates="projects", lazy="selectin", passive_deletes=True)
-    studies = relationship("Study", back_populates="project", lazy="selectin", passive_deletes=True)
+    # Use lazy="noload" to prevent auto-loading heavy data
+    creator = relationship("User", back_populates="projects", lazy="noload", passive_deletes=True)
+    studies = relationship("Study", back_populates="project", lazy="noload", passive_deletes=True)
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan", lazy="selectin")
     
     __table_args__ = (

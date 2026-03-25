@@ -39,17 +39,19 @@ class User(Base):
     password_reset_expires = Column(DateTime(timezone=True), nullable=True)
 
     # Relations
+    # Use lazy="noload" to prevent auto-loading all studies/projects on every user query
+    # This is critical for performance - users with many studies would load megabytes of data otherwise
     studies = relationship(
         "Study",
         back_populates="creator",
-        lazy="selectin",
+        lazy="noload",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
     projects = relationship(
         "Project",
         back_populates="creator",
-        lazy="selectin",
+        lazy="noload",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )

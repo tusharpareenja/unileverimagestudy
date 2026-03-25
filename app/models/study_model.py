@@ -68,14 +68,17 @@ class Study(Base):
     product_id = Column(String(100), nullable=True)
 
     # Relations
-    creator = relationship("User", back_populates="studies", lazy="selectin", passive_deletes=True)
-    project = relationship("Project", back_populates="studies", lazy="selectin", passive_deletes=True)
-    # Grid categories for grouping elements
+    # Use lazy="noload" for heavy relationships to prevent accidental loading
+    # Load explicitly with selectinload/joinedload when needed
+    creator = relationship("User", back_populates="studies", lazy="noload", passive_deletes=True)
+    project = relationship("Project", back_populates="studies", lazy="noload", passive_deletes=True)
+    # Grid categories for grouping elements - keep selectin for detail views
     categories = relationship("StudyCategory", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     elements = relationship("StudyElement", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     layers = relationship("StudyLayer", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     classification_questions = relationship("StudyClassificationQuestion", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
-    study_responses = relationship("StudyResponse", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
+    # CRITICAL: study_responses can be huge - never auto-load
+    study_responses = relationship("StudyResponse", back_populates="study", cascade="all, delete-orphan", lazy="noload")
     members = relationship("StudyMember", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     filter_history = relationship("StudyFilterHistory", back_populates="study", cascade="all, delete-orphan", lazy="noload")
 
