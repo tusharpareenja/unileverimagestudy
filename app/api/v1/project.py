@@ -974,7 +974,7 @@ def get_public_project_studies_endpoint(
 
     # Get active studies for this project
     studies = db.execute(
-        select(Study.id, Study.title, Study.study_type)
+        select(Study.id, Study.title, Study.study_type, Study.product_id)
         .where(Study.project_id == project_id, Study.status == 'active')
         .order_by(Study.created_at.desc())
     ).all()
@@ -985,7 +985,8 @@ def get_public_project_studies_endpoint(
             {
                 "id": str(study.id),
                 "title": study.title,
-                "study_type": study.study_type
+                "study_type": study.study_type,
+                "product_id": study.product_id,
             }
             for study in studies
         ]
