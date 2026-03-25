@@ -165,6 +165,10 @@ class ProjectMemberService:
         # but adding a record doesn't hurt and ensures consistency if logic changes)
         project = db.get(Project, project_id)
         if project:
+            creator_email = db.execute(
+                select(User.email).where(User.id == project.creator_id)
+            ).scalar_one_or_none()
+
             # Check if project creator is already a member of the study
             existing_creator = db.scalars(
                 select(StudyMember).where(
@@ -180,10 +184,10 @@ class ProjectMemberService:
                     study_id=study_id,
                     user_id=project.creator_id,
                     role='admin',
-                    invited_email=project.creator.email
+                    invited_email=creator_email or ""
                 )
                 db.add(creator_member)
-                logger.info(f"Added project creator {project.creator.email} to new study {study_id} as admin")
+                logger.info(f"Added project creator {creator_email or project.creator_id} to new study {study_id} as admin")
 
         # 2. Add other project members
         project_members = db.scalars(
