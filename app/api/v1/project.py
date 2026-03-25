@@ -562,6 +562,40 @@ def export_project_zip_endpoint(
     current_user: User = Depends(get_current_active_user),
 ):
     """
+    Start a background job to export project as ZIP containing per-study Excel reports and mega_sheet.xlsx.
+    Returns a job_id that can be polled for status and download URL.
+    """
+    import uuid as uuid_module
+    from app.models.job_model import Job, JobStatus
+    from app.tasks.celery_jobs import export_project_zip_celery
+
+    # Create a job record
+    job_id = str(uuid_module.uuid4())
+    job = Job(
+        job_id=job_id,
+        study_id=str(project_id),
+        user_id=str(current_user.id),
+        status=JobStatus.PENDING,
+        progress=0.0,
+        message="Export queued...",
+    )
+    db.add(job)
+    db.commit()
+
+    # Trigger Celery task
+    export_project_zip_celery.delay(job_id, str(project_id), str(current_user.id))
+
+    return {"job_id": job_id, "status": "pending", "message": "Export started. Poll /projects/export-job/{job_id} for status."}
+
+
+@router.post("/{project_id}/export-zip-sync")
+def export_project_zip_sync_endpoint(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    [Legacy/Debug] Synchronous export - may timeout for large projects.
     Export a ZIP containing per-study Excel reports and mega_sheet.xlsx.
     Per-study files: full Excel report (same as /export/study/{id}/flattened-csv) - Raw Data, T Overall, B Overall, Info Block, etc. Named {product_id}.xlsx.
     mega_sheet.xlsx: Raw Data (sorted by product_id), Product Data, Range Sheet.
@@ -877,3 +911,39 @@ def delete_project_endpoint(
         user_id=current_user.id
     )
     return None
+
+
+@router.get("/export-job/{job_id}")
+def get_export_job_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Get the status of an export job.
+    Returns status, progress, and download_url when completed.
+    """
+    from app.models.job_model import Job, JobStatus
+    from fastapi import HTTPException
+
+    job = db.query(Job).filter(Job.job_id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.user_id != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Not authorized to access this job")
+
+    response = {
+        "job_id": job.job_id,
+        "status": job.status.value if job.status else "unknown",
+        "progress": job.progress or 0,
+        "message": job.message or "",
+    }
+
+    if job.status == JobStatus.COMPLETED and job.result:
+        response["download_url"] = job.result.get("download_url")
+        response["filename"] = job.result.get("filename")
+    elif job.status == JobStatus.FAILED:
+        response["error"] = job.error
+
+    return response

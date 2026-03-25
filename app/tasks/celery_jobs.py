@@ -625,3 +625,474 @@ def simulate_synthetic_respondents_celery(
             except Exception:
                 pass
         return {"success": False, "error": str(e)}
+
+
+@celery_app.task(bind=True, name="celery_job.export_project_zip")
+def export_project_zip_celery(
+    self, job_id: str, project_id: str, user_id: str
+) -> Dict[str, Any]:
+    """
+    Celery job for exporting project as ZIP with per-study Excel reports.
+    Uploads the ZIP to Azure Blob Storage and returns the download URL.
+    """
+    import io
+    import zipfile
+    import pandas as pd
+    from uuid import UUID
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from app.db.session import SessionLocal
+    from app.models.job_model import Job, JobStatus
+    from app.services import project_service
+    from app.services.response import StudyResponseService
+    from app.services.analysis import StudyAnalysisService
+    from app.api.v1.project import build_study_data_for_analysis
+    from app.websocket.job_notifier import job_progress_notifier
+    from app.core.config import settings
+    from azure.storage.blob import BlobServiceClient, ContentSettings
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.job_id == job_id).first()
+        if not job:
+            logger.error(f"Job {job_id} not found")
+            return {"success": False, "error": "Job not found"}
+
+        job.status = JobStatus.PROCESSING
+        job.message = "Loading project studies..."
+        job.started_at = datetime.utcnow()
+        db.commit()
+        
+        job_progress_notifier.notify(
+            job_id,
+            {"type": "progress", "progress": 5, "message": "Loading project studies..."},
+        )
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+    def _round6(val):
+        if val is None or val == "":
+            return ""
+        try:
+            return round(float(val), 6)
+        except (TypeError, ValueError):
+            return ""
+
+    def _format_cell(v):
+        if v is None or v == "":
+            return ""
+        if isinstance(v, (int, float)):
+            return round(float(v), 6)
+        try:
+            return round(float(v), 6)
+        except (TypeError, ValueError):
+            return v
+
+    try:
+        db_main = SessionLocal()
+        try:
+            studies = project_service.get_project_studies_for_export(
+                db=db_main,
+                project_id=UUID(project_id),
+                user_id=UUID(user_id),
+            )
+            
+            # Build canonical headers
+            all_key_names = []
+            seen_keys = set()
+            for s in studies:
+                for k in (getattr(s, "product_keys", None) or []):
+                    if isinstance(k, dict) and k.get("name") and k["name"] not in seen_keys:
+                        seen_keys.add(k["name"])
+                        all_key_names.append(k["name"])
+
+            class_q_names = []
+            if studies and getattr(studies[0], "classification_questions", None):
+                for q in sorted(studies[0].classification_questions, key=lambda x: getattr(x, "order", 0)):
+                    class_q_names.append(q.question_text or "")
+
+            element_cols_ordered = []
+            seen_el = set()
+            for s in studies:
+                study_data = build_study_data_for_analysis(s)
+                for el in study_data.get("elements", []):
+                    cat = el.get("category", {}) or {}
+                    cat_name = cat.get("name", "")
+                    el_name = el.get("name", "")
+                    if not cat_name or not el_name:
+                        continue
+                    col = f"{cat_name}-{el_name}".replace("_", "-").replace(" ", "-")
+                    if col not in seen_el:
+                        seen_el.add(col)
+                        element_cols_ordered.append(col)
+
+            product_header = ["product_id"] + all_key_names + class_q_names + element_cols_ordered + ["Rating", "ResponseTime"]
+            
+            # Prepare study data for workers
+            studies_data = []
+            for i, s in enumerate(studies):
+                study_data_dict = build_study_data_for_analysis(s)
+                product_keys_list = getattr(s, "product_keys", None) or []
+                if not isinstance(product_keys_list, list):
+                    product_keys_list = []
+                studies_data.append({
+                    "study_id": s.id,
+                    "product_id": getattr(s, "product_id", None),
+                    "product_keys": product_keys_list,
+                    "study_data": study_data_dict,
+                    "index": i,
+                })
+        finally:
+            try:
+                db_main.close()
+            except Exception:
+                pass
+
+        _update_job_progress(job_id, 10, f"Processing {len(studies)} studies...")
+        job_progress_notifier.notify(
+            job_id,
+            {"type": "progress", "progress": 10, "message": f"Processing {len(studies)} studies..."},
+        )
+
+        def _worker(study_info: Dict[str, Any]) -> Dict[str, Any]:
+            """Worker: process one study and return results."""
+            study_id = study_info["study_id"]
+            product_id_val = study_info["product_id"]
+            product_keys_list = study_info["product_keys"]
+            study_data_dict = study_info["study_data"]
+            index = study_info["index"]
+            
+            xlsx_bytes = b""
+            product_row = {"product_id": product_id_val or ""}
+            for kn in all_key_names:
+                product_row[kn] = ""
+            for qn in class_q_names:
+                product_row[qn] = ""
+            for ec in element_cols_ordered:
+                product_row[ec] = ""
+            product_row["Rating"] = ""
+            product_row["ResponseTime"] = ""
+            raw_df = pd.DataFrame()
+            db_session = None
+
+            try:
+                db_session = SessionLocal()
+                response_svc = StudyResponseService(db_session)
+                df = response_svc.get_study_dataframe(study_id, unilever_format=True)
+
+                analysis_svc = StudyAnalysisService()
+                try:
+                    excel_io = analysis_svc.generate_report(df, study_data_dict)
+                    xlsx_bytes = excel_io.getvalue() if excel_io else b""
+                except Exception:
+                    from openpyxl import Workbook
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = "Raw Data"
+                    ws.append(list(df.columns) if not df.empty else ["product_id"])
+                    buf = io.BytesIO()
+                    wb.save(buf)
+                    xlsx_bytes = buf.getvalue()
+
+                t_scores = analysis_svc.get_t_overall_scores(df, study_data_dict) if not df.empty else {}
+
+                key_map = {}
+                for k in product_keys_list or []:
+                    if isinstance(k, dict) and k.get("name") is not None:
+                        pct = k.get("percentage")
+                        key_map[k["name"]] = _round6(pct) if pct is not None else ""
+                for kn in all_key_names:
+                    product_row[kn] = key_map.get(kn, "")
+
+                for qn in class_q_names:
+                    if qn and not df.empty and qn in df.columns:
+                        try:
+                            product_row[qn] = _round6(float(df[qn].mean()))
+                        except (TypeError, ValueError):
+                            pass
+
+                for ec in element_cols_ordered:
+                    product_row[ec] = _round6(t_scores.get(ec, ""))
+
+                if not df.empty and "Rating" in df.columns:
+                    try:
+                        product_row["Rating"] = _round6(float(df["Rating"].mean()))
+                    except (TypeError, ValueError):
+                        pass
+                if not df.empty and "ResponseTime" in df.columns:
+                    try:
+                        product_row["ResponseTime"] = _round6(float(df["ResponseTime"].mean()))
+                    except (TypeError, ValueError):
+                        pass
+
+                pid = product_id_val or "unknown"
+                raw_df = df.copy()
+                if "Product ID" in raw_df.columns:
+                    raw_df = raw_df.drop(columns=["Product ID"])
+                raw_df.insert(0, "product_id", pid)
+            except Exception as e:
+                logger.warning(f"Worker error for study {study_id}: {e}")
+            finally:
+                if db_session is not None:
+                    try:
+                        db_session.close()
+                    except Exception:
+                        pass
+
+            return {
+                "index": index,
+                "study_id": str(study_id),
+                "product_id": product_id_val or "",
+                "xlsx_bytes": xlsx_bytes,
+                "product_row": product_row,
+                "raw_df": raw_df,
+            }
+
+        # Process studies with ThreadPoolExecutor
+        if not studies_data:
+            results = []
+            raw_chunks = []
+        else:
+            max_workers = min(10, max(1, len(studies_data)))
+            results = []
+            raw_chunks = []
+            BATCH_SIZE = 20
+            current_batch = []
+            completed = 0
+            total_studies = len(studies_data)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_worker, sd): sd["index"] for sd in studies_data}
+                for fut in as_completed(futures):
+                    try:
+                        result = fut.result()
+                        results.append(result)
+                        raw_df = result.get("raw_df")
+                        if raw_df is not None and not raw_df.empty:
+                            current_batch.append(raw_df)
+                            if len(current_batch) >= BATCH_SIZE:
+                                raw_chunks.append(pd.concat(current_batch, join="outer", ignore_index=True))
+                                current_batch = []
+                        
+                        completed += 1
+                        progress = 10 + int(70 * completed / total_studies)
+                        _update_job_progress(job_id, progress, f"Processed {completed}/{total_studies} studies...")
+                        job_progress_notifier.notify(
+                            job_id,
+                            {"type": "progress", "progress": progress, "message": f"Processed {completed}/{total_studies} studies..."},
+                        )
+                    except Exception as e:
+                        logger.warning(f"Future error: {e}")
+
+                if current_batch:
+                    raw_chunks.append(pd.concat(current_batch, join="outer", ignore_index=True))
+
+        # Sort by index
+        results.sort(key=lambda r: r["index"])
+
+        _update_job_progress(job_id, 85, "Building ZIP file...")
+        job_progress_notifier.notify(
+            job_id,
+            {"type": "progress", "progress": 85, "message": "Building ZIP file..."},
+        )
+
+        # Build filenames
+        def _safe_filename(s: str) -> str:
+            safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in (s or ""))
+            return safe.strip() or "unknown"
+
+        pid_counts = {}
+        index_to_filename = {}
+        for r in results:
+            base = _safe_filename(r["product_id"] or "unknown")
+            pid_counts[base] = pid_counts.get(base, 0) + 1
+            n = pid_counts[base]
+            filename = f"{base}.xlsx" if n == 1 else f"{base}_{n}.xlsx"
+            index_to_filename[r["index"]] = filename
+
+        # Build ZIP
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for r in results:
+                zf.writestr(index_to_filename[r["index"]], r["xlsx_bytes"])
+
+            # Mega-sheet
+            raw_combined = pd.concat(raw_chunks, join="outer", ignore_index=True) if raw_chunks else pd.DataFrame(columns=["product_id"])
+            if not raw_combined.empty and "product_id" in raw_combined.columns:
+                raw_combined["_sort_key"] = raw_combined["product_id"].fillna("").astype(str).str.strip()
+                raw_combined.loc[raw_combined["_sort_key"] == "", "_sort_key"] = "zzzz"
+                raw_combined["_order"] = range(len(raw_combined))
+                raw_combined = raw_combined.sort_values(by=["_sort_key", "_order"], kind="mergesort").drop(
+                    columns=["_sort_key", "_order"]
+                ).reset_index(drop=True)
+
+            from openpyxl import Workbook
+            from openpyxl.utils.dataframe import dataframe_to_rows
+
+            wb = Workbook()
+            ws_raw = wb.active
+            ws_raw.title = "Raw Data"
+            if not raw_combined.empty:
+                for row in dataframe_to_rows(raw_combined, index=False, header=True):
+                    ws_raw.append(row)
+            else:
+                ws_raw.append(["product_id"])
+
+            ws_product = wb.create_sheet("Product Data")
+            ws_product.append(product_header)
+            for r in results:
+                row_dict = r["product_row"]
+                cells = [_format_cell(row_dict.get(h, "")) for h in product_header]
+                ws_product.append(cells)
+
+            ws_range = wb.create_sheet("Range Sheet")
+            ws_range.append(["Dependent Variable", "Low", "High", "Average"])
+            product_rows = [r["product_row"] for r in results]
+            range_cols = class_q_names + element_cols_ordered
+            for col in range_cols:
+                vals = []
+                for row in product_rows:
+                    v = row.get(col, "")
+                    if v is None or v == "":
+                        continue
+                    try:
+                        vals.append(float(v))
+                    except (TypeError, ValueError):
+                        continue
+                if vals:
+                    ws_range.append([col, round(min(vals), 6), round(max(vals), 6), round(sum(vals) / len(vals), 6)])
+                else:
+                    ws_range.append([col, "", "", ""])
+
+            xl_buf = io.BytesIO()
+            wb.save(xl_buf)
+            xl_buf.seek(0)
+            zf.writestr("mega_sheet.xlsx", xl_buf.getvalue())
+
+        buf.seek(0)
+        zip_bytes = buf.getvalue()
+
+        _update_job_progress(job_id, 90, "Uploading to cloud storage...")
+        job_progress_notifier.notify(
+            job_id,
+            {"type": "progress", "progress": 90, "message": "Uploading to cloud storage..."},
+        )
+
+        # Upload to Azure Blob Storage
+        conn = settings.AZURE_STORAGE_CONNECTION_STRING
+        if not conn:
+            if settings.AZURE_STORAGE_ACCOUNT_NAME and settings.AZURE_STORAGE_ACCOUNT_KEY:
+                endpoint = f"https://{settings.AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net"
+                blob_service = BlobServiceClient(account_url=endpoint, credential=settings.AZURE_STORAGE_ACCOUNT_KEY)
+            else:
+                raise ValueError("Azure Storage not configured")
+        else:
+            blob_service = BlobServiceClient.from_connection_string(conn)
+
+        container = settings.AZURE_STORAGE_CONTAINER or "exports"
+        blob_name = f"exports/project_{project_id}_{job_id}.zip"
+        content_settings = ContentSettings(content_type="application/zip")
+        
+        try:
+            blob_client = blob_service.get_blob_client(container=container, blob=blob_name)
+            blob_client.upload_blob(zip_bytes, overwrite=True, content_settings=content_settings)
+        except Exception as e:
+            logger.error(f"Failed to upload ZIP to Azure: {e}")
+            raise ValueError(f"Failed to upload ZIP: {e}")
+
+        # Build download URL
+        account_name = settings.AZURE_STORAGE_ACCOUNT_NAME
+        if not account_name and conn:
+            import re
+            m = re.search(r"AccountName=([^;]+)", conn)
+            if m:
+                account_name = m.group(1)
+        
+        download_url = f"https://{account_name}.blob.core.windows.net/{container}/{blob_name}"
+        if settings.AZURE_STORAGE_SAS_TOKEN:
+            token = settings.AZURE_STORAGE_SAS_TOKEN.lstrip('?')
+            download_url = f"{download_url}?{token}"
+
+        # Update job as completed and send email notification
+        db_final = SessionLocal()
+        try:
+            from app.models.user_model import User
+            from app.models.project_model import Project
+            from app.services.email_service import email_service
+            
+            job = db_final.query(Job).filter(Job.job_id == job_id).first()
+            if job:
+                job.status = JobStatus.COMPLETED
+                job.progress = 100.0
+                job.message = "Export completed successfully"
+                job.completed_at = datetime.utcnow()
+                job.result = {"download_url": download_url, "filename": f"project_{project_id}_export.zip"}
+                db_final.commit()
+
+            # Get user and project info for email
+            user = db_final.query(User).filter(User.id == UUID(user_id)).first()
+            project = db_final.query(Project).filter(Project.id == UUID(project_id)).first()
+            
+            # Send email notification
+            if user and user.email:
+                user_name = user.full_name or user.email.split("@")[0]
+                project_name = project.name if project else f"Project {project_id[:8]}"
+                filename = f"{project_name.replace(' ', '_')}_export.zip"
+                
+                email_sent = email_service.send_export_ready_email(
+                    to_email=user.email,
+                    user_name=user_name,
+                    project_name=project_name,
+                    download_url=download_url,
+                    filename=filename,
+                )
+                if email_sent:
+                    logger.info(f"Export ready email sent to {user.email} for job {job_id}")
+                else:
+                    logger.warning(f"Failed to send export email to {user.email} for job {job_id}")
+
+            job_progress_notifier.notify(
+                job_id,
+                {
+                    "type": "completed",
+                    "progress": 100,
+                    "message": "Export completed successfully",
+                    "download_url": download_url,
+                },
+            )
+        finally:
+            try:
+                db_final.close()
+            except Exception:
+                pass
+
+        logger.info(f"Job {job_id} export_project_zip completed successfully")
+        return {"success": True, "job_id": job_id, "download_url": download_url}
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Job {job_id} failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+
+        db_err = SessionLocal()
+        try:
+            job = db_err.query(Job).filter(Job.job_id == job_id).first()
+            if job:
+                job.status = JobStatus.FAILED
+                job.completed_at = datetime.utcnow()
+                job.error = str(e)
+                job.message = f"Export failed: {str(e)}"
+                db_err.commit()
+
+            job_progress_notifier.notify(
+                job_id,
+                {"type": "failed", "error": str(e), "message": f"Export failed: {str(e)}"},
+            )
+        finally:
+            try:
+                db_err.close()
+            except Exception:
+                pass
+        return {"success": False, "error": str(e)}

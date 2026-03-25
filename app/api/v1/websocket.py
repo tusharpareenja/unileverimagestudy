@@ -577,3 +577,131 @@ async def websocket_simulate_ai(
             await websocket.close(code=1011, reason="Internal server error")
         except Exception:
             pass
+
+
+@router.websocket("/job-progress/{job_id}")
+async def websocket_job_progress(
+    websocket: WebSocket,
+    job_id: str,
+    token: str = Query(..., description="JWT access token"),
+):
+    """
+    Generic WebSocket endpoint for real-time job progress updates.
+    Works for any job type (export, task generation, etc.).
+    
+    Connect with: ws://host/api/v1/ws/job-progress/{job_id}?token={jwt_token}
+    
+    Messages: {"type": "progress|completed|failed", "progress": float, "message": str, ...}
+    """
+    db_auth = next(get_db())
+    try:
+        user = await get_user_from_token(token, db_auth)
+        if not user:
+            await websocket.close(code=4001, reason="Invalid or expired token")
+            return
+        
+        job = db_auth.query(Job).filter(Job.job_id == job_id).first()
+        if not job:
+            await websocket.close(code=4004, reason="Job not found")
+            return
+        
+        if job.user_id != str(user.id):
+            await websocket.close(code=4003, reason="Access denied")
+            return
+        
+        if job.status == JobStatus.COMPLETED:
+            await websocket.accept()
+            result = job.result or {}
+            await websocket.send_json({
+                "type": "completed",
+                "progress": 100.0,
+                "message": job.message or "Job completed",
+                "download_url": result.get("download_url"),
+                "filename": result.get("filename"),
+            })
+            await websocket.close()
+            return
+        
+        if job.status == JobStatus.FAILED:
+            await websocket.accept()
+            await websocket.send_json({
+                "type": "failed",
+                "error": job.error or "Unknown error",
+                "message": job.message or "Job failed"
+            })
+            await websocket.close()
+            return
+        
+        if job.status == JobStatus.CANCELLED:
+            await websocket.accept()
+            await websocket.send_json({
+                "type": "failed",
+                "error": "Job was cancelled",
+                "message": "Job was cancelled"
+            })
+            await websocket.close()
+            return
+        
+        initial_progress = job.progress or 0.0
+        initial_message = job.message or "Processing..."
+        
+    finally:
+        db_auth.close()
+
+    try:
+        await websocket.accept()
+        await websocket.send_json({
+            "type": "progress",
+            "progress": initial_progress,
+            "message": initial_message
+        })
+        
+        timeout_seconds = _websocket_job_wall_clock_seconds()
+        start_time = asyncio.get_event_loop().time()
+        
+        async def ping_loop():
+            while True:
+                try:
+                    await asyncio.sleep(25)
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
+        
+        ping_coro = asyncio.create_task(ping_loop())
+        
+        try:
+            async for update in job_progress_notifier.subscribe_redis(job_id):
+                # Check timeout
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed >= timeout_seconds:
+                    logger.warning(f"WebSocket timeout for job {job_id}")
+                    await websocket.send_json({
+                        "type": "failed",
+                        "error": "Connection timeout",
+                        "message": "Job timed out"
+                    })
+                    break
+                
+                await websocket.send_json(update)
+                
+                if update.get("type") in ("completed", "failed"):
+                    logger.info(f"Job {job_id} finished with status: {update.get('type')}")
+                    break
+                    
+        except WebSocketDisconnect:
+            logger.info(f"Client disconnected from job {job_id}")
+        finally:
+            ping_coro.cancel()
+            try:
+                await ping_coro
+            except asyncio.CancelledError:
+                pass
+                
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for job {job_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for job {job_id}: {e}")
+        try:
+            await websocket.close(code=1011, reason="Internal server error")
+        except Exception:
+            pass

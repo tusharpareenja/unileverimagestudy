@@ -409,5 +409,91 @@ class EmailService:
             return False
 
 
+    def send_export_ready_email(
+        self,
+        to_email: str,
+        user_name: str,
+        project_name: str,
+        download_url: str,
+        filename: str = "export.zip",
+    ) -> bool:
+        """
+        Send email when project export is ready for download.
+        
+        Args:
+            to_email: User's email address
+            user_name: User's name
+            project_name: Name of the exported project
+            download_url: Azure Blob Storage URL with SAS token
+            filename: Name of the ZIP file
+            
+        Returns:
+            bool: True if email sent successfully, False otherwise
+        """
+        try:
+            subject = f"Your export is ready: {project_name}"
+            
+            html_body = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: #2c3e50;">Your Export is Ready!</h2>
+                    
+                    <p>Hello {user_name},</p>
+                    
+                    <p>Great news! Your export for <strong>{project_name}</strong> is ready to download.</p>
+                    
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{download_url}" 
+                           style="background-color: #27ae60; color: white; padding: 14px 35px; 
+                                  text-decoration: none; border-radius: 5px; display: inline-block;
+                                  font-weight: bold; font-size: 16px;">
+                            Download ZIP
+                        </a>
+                    </div>
+                    
+                    <p style="font-size: 13px; color: #666;">
+                        <strong>Note:</strong> This download link will expire in 7 days for security reasons.
+                    </p>
+                    
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #eee;">
+                    <p style="font-size: 12px; color: #666;">
+                        This email was sent from {self.app_name}.<br>
+                        If you didn't request this export, please ignore this email.
+                    </p>
+                </div>
+            </body>
+            </html>
+            """
+            
+            text_body = f"""
+            Your Export is Ready! - {self.app_name}
+            
+            Hello {user_name},
+            
+            Great news! Your export for {project_name} is ready to download.
+            
+            Download your file here:
+            {download_url}
+            
+            Note: This download link will expire in 7 days for security reasons.
+            
+            ---
+            This email was sent from {self.app_name}.
+            If you didn't request this export, please ignore this email.
+            """
+            
+            return self._send_email(
+                to_email=to_email,
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to send export ready email to {to_email}: {str(e)}")
+            return False
+
+
 # Global email service instance
 email_service = EmailService()
