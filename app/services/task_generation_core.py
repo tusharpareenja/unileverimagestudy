@@ -1065,10 +1065,20 @@ from __future__ import annotations
 import math
 import os
 import random
+import sys
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
+
+# On Windows, ProcessPoolExecutor can't import project modules properly.
+# Fall back to ThreadPoolExecutor which avoids pickling issues.
+# On Linux, we use ProcessPoolExecutor with 'fork' context (fast, no re-import needed).
+_USE_THREADS = sys.platform == "win32"
+
+# Linux multiprocessing context: 'fork' is faster and doesn't need to re-import modules.
+# 'spawn' would be safer but fails under Celery because it can't find __main__.
+_MP_CONTEXT = "fork" if sys.platform != "win32" else None
 
 import multiprocessing as mp
 import numpy as np
@@ -1831,12 +1841,15 @@ def generate_grid_tasks_v2(categories_data: List[Dict], number_of_respondents: i
     parallel_start = time.time()
     print(f"🔄 Starting parallel processing at {time.strftime('%H:%M:%S', time.localtime(parallel_start))}")
 
-    try:
-        mp.set_start_method("spawn")
-    except RuntimeError:
-        pass
+    # On Windows, use ThreadPoolExecutor to avoid pickling issues.
+    # On Linux, use ProcessPoolExecutor with 'fork' context (fast, works under Celery).
+    if _USE_THREADS:
+        executor_ctx = ThreadPoolExecutor(max_workers=max_workers)
+    else:
+        fork_ctx = mp.get_context(_MP_CONTEXT)
+        executor_ctx = ProcessPoolExecutor(max_workers=max_workers, mp_context=fork_ctx)
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    with executor_ctx as executor:
         futures = []
         for resp_id in range(N):
             future = executor.submit(_build_one_worker, (
@@ -2039,17 +2052,20 @@ def generate_layer_tasks_v2(layers_data: List[Dict], number_of_respondents: int,
     max_workers = min(os.cpu_count() or 1, N)
     print(f"🚀 Building {N} respondents concurrently with {max_workers} workers...")
 
-    try:
-        mp.set_start_method("spawn")
-    except RuntimeError:
-        pass
+    # On Windows, use ThreadPoolExecutor to avoid pickling issues.
+    # On Linux, use ProcessPoolExecutor with 'fork' context (fast, works under Celery).
+    if _USE_THREADS:
+        executor_ctx = ThreadPoolExecutor(max_workers=max_workers)
+    else:
+        fork_ctx = mp.get_context(_MP_CONTEXT)
+        executor_ctx = ProcessPoolExecutor(max_workers=max_workers, mp_context=fork_ctx)
 
     tasks = []
     for r in range(1, N+1):
         tasks.append((r, T, category_info, E, A_min_used, BASE_SEED, LOG_EVERY_ROWS,
                       mode, max_active_per_row))
 
-    with ProcessPoolExecutor(max_workers=max_workers) as ex:
+    with executor_ctx as ex:
         futures = {ex.submit(_build_one_worker, t): t[0] for t in tasks}
         done = 0
         for fut in as_completed(futures):

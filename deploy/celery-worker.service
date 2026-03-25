@@ -1,0 +1,36 @@
+[Unit]
+Description=Mindsurve Celery Worker
+After=network.target
+# If RabbitMQ runs on the same VM, uncomment:
+# After=network.target rabbitmq-server.service
+# Requires=rabbitmq-server.service
+# CloudAMQP: keep only After=network.target (no local RabbitMQ)
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/uniliverimagestudy
+Environment="PATH=/home/azureuser/uniliverimagestudy/venv/bin"
+EnvironmentFile=/home/azureuser/uniliverimagestudy/.env
+
+# Celery worker command
+# --pool=prefork: uses multiprocessing (Linux supports this)
+# --concurrency=6: 6 worker processes (leave 2 cores for FastAPI/system)
+# Adjust concurrency based on task memory usage
+ExecStart=/home/azureuser/uniliverimagestudy/venv/bin/celery \
+    -A app.celery_app worker \
+    --loglevel=info \
+    --pool=prefork \
+    --concurrency=6
+
+# Restart on failure
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=append:/var/log/celery/worker.log
+StandardError=append:/var/log/celery/worker.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1111,40 +1111,34 @@ def list_studies(
     status_filter: Optional[StudyStatus] = None,
     page: int = 1,
     per_page: int = 10
-) -> Tuple[List[Study], int]:
-    # Build correlated subqueries for counters so results always match analytics
-    total_subq = (
-        select(func.count(StudyResponse.id))
-        .where(StudyResponse.study_id == Study.id)
-        .correlate(Study)
-        .scalar_subquery()
-    )
-    completed_subq = (
-        select(func.count(StudyResponse.id))
-        .where(and_(StudyResponse.study_id == Study.id, StudyResponse.is_completed == True))
-        .correlate(Study)
-        .scalar_subquery()
-    )
-    abandoned_subq = (
-        select(func.count(StudyResponse.id))
-        .where(and_(StudyResponse.study_id == Study.id, StudyResponse.is_abandoned == True))
-        .correlate(Study)
-        .scalar_subquery()
-    )
-    avg_duration_subq = (
-        select(func.avg(StudyResponse.total_study_duration))
-        .where(and_(StudyResponse.study_id == Study.id, StudyResponse.is_completed == True))
-        .correlate(Study)
-        .scalar_subquery()
-    )
-
+) -> Tuple[List, int]:
+    """
+    Ultra-fast study listing that:
+    1. Selects only columns needed for StudyListItem (excludes heavy JSONB like 'tasks')
+    2. Uses denormalized counters (total_responses, completed_responses, abandoned_responses)
+       stored directly on Study table — NO JOINs to study_responses needed!
+    
+    Note: Counters are updated by response.py when responses are added/completed/abandoned.
+    """
+    # Select only columns needed for StudyListItem
+    # Use denormalized counters directly from Study table (no JOIN needed!)
     base_stmt = (
         select(
-            Study,
-            total_subq.label("total_responses_calc"),
-            completed_subq.label("completed_responses_calc"),
-            abandoned_subq.label("abandoned_responses_calc"),
-            avg_duration_subq.label("avg_duration_calc"),
+            Study.id,
+            Study.title,
+            Study.study_type,
+            Study.status,
+            Study.created_at,
+            Study.last_step,
+            Study.jobid,
+            Study.project_id,
+            Study.creator_id,
+            Study.product_keys,
+            Study.product_id,
+            Study.audience_segmentation,  # Needed for respondents_target extraction
+            Study.total_responses.label("total_responses_calc"),
+            Study.completed_responses.label("completed_responses_calc"),
+            Study.abandoned_responses.label("abandoned_responses_calc"),
         )
         .outerjoin(StudyMember, and_(StudyMember.study_id == Study.id, StudyMember.user_id == owner_id))
         .where(
@@ -1154,6 +1148,7 @@ def list_studies(
             )
         )
     )
+    
     count_stmt = (
         select(func.count(Study.id.distinct()))
         .select_from(Study)
@@ -1165,6 +1160,7 @@ def list_studies(
             )
         )
     )
+    
     if status_filter:
         base_stmt = base_stmt.where(Study.status == status_filter)
         count_stmt = count_stmt.where(Study.status == status_filter)
@@ -1176,7 +1172,7 @@ def list_studies(
         .offset((page - 1) * per_page)
         .limit(per_page)
     ).all()
-    # Return list of rows containing (Study, derived counters)
+    
     return rows, int(total)
 
 def update_study(

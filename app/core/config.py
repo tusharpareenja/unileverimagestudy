@@ -69,9 +69,13 @@ class Settings(BaseSettings):
             "azure_blob_sas_token",
         ),
     )  # Optional, appended to URLs for private containers
+
+    # Application Insights (optional; set in .env to send telemetry to Azure Monitor)
+    APPLICATIONINSIGHTS_CONNECTION_STRING: str | None = None
     
     # Application Settings
     BASE_URL: str = "https://mindsurve.com"  # Base URL for share links in frontend
+    RUN_API_BACKGROUND_SERVICES: bool = True
     
     # Task Generation Settings
     TASK_GENERATION_TIMEOUT: int = 12000  # 200 minutes timeout for task generation (Azure max is ~4-5 min for sync requests)
@@ -79,7 +83,7 @@ class Settings(BaseSettings):
     TASK_GENERATION_CHUNK_SIZE: int = 50  # Process respondents in smaller chunks for memory efficiency
     MAX_MEMORY_USAGE_MB: int = 1024  # 1GB memory limit for task generation (matches Azure P2 plan)
     
-    # Redis Settings (for pub/sub across multiple workers)
+    # Redis Settings (for pub/sub and app cache only — not Celery broker)
     REDIS_URL: str | None = Field(
         default=None,
         validation_alias=AliasChoices(
@@ -87,6 +91,30 @@ class Settings(BaseSettings):
             "redis_url",
         ),
     )
+
+    # Celery: RabbitMQ (AMQP) broker (same URL for dev and prod is fine until you split instances)
+    CELERY_BROKER_URL: str | None = None
+    # Celery result backend: rpc:// uses RabbitMQ (no Redis). Or set e.g. redis://...
+    CELERY_RESULT_BACKEND: str | None = Field(
+        default=None,
+        description="Default rpc:// when using RabbitMQ broker",
+    )
+
+    # Celery: when True, dispatch task generation and synthetic simulation to Celery workers
+    USE_CELERY: bool = False
+
+    def get_celery_broker_url(self) -> str:
+        """RabbitMQ broker URL for Celery."""
+        url = (self.CELERY_BROKER_URL or "").strip()
+        if not url:
+            raise ValueError("Set CELERY_BROKER_URL in .env for Celery.")
+        return url
+
+    def get_celery_result_backend(self) -> str:
+        """Result backend: explicit CELERY_RESULT_BACKEND or rpc:// (RabbitMQ-friendly)."""
+        if self.CELERY_RESULT_BACKEND and self.CELERY_RESULT_BACKEND.strip():
+            return self.CELERY_RESULT_BACKEND.strip()
+        return "rpc://"
     
     # SMTP Email Settings
     SMTP_SERVER: str = "smtp.gmail.com"

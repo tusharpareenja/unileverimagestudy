@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _websocket_job_wall_clock_seconds() -> int:
+    """Match Celery hard time limit so job WebSockets are not closed before tasks can finish."""
+    from app.celery_app import celery_app
+
+    limit = celery_app.conf.task_time_limit
+    if limit is None:
+        return 28800
+    return int(limit)
+
+
 async def get_user_from_token(token: str, db: Session) -> User | None:
     """Validate JWT token and return the user if valid."""
     if not token:
@@ -277,8 +287,8 @@ async def websocket_task_generation(
         ping_interval = 30
         last_ping = asyncio.get_event_loop().time()
         start_time = asyncio.get_event_loop().time()
-        timeout_seconds = 15 * 60  # 15 minutes max
-        
+        timeout_seconds = _websocket_job_wall_clock_seconds()
+
         async def ping_task():
             """Send pings to keep connection alive."""
             nonlocal last_ping
@@ -289,16 +299,7 @@ async def websocket_task_generation(
                     last_ping = asyncio.get_event_loop().time()
                 except Exception:
                     break
-        
-        async def check_timeout():
-            """Check if we've exceeded the timeout."""
-            while True:
-                await asyncio.sleep(30)
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed >= timeout_seconds:
-                    return True
-            return False
-        
+
         # Start ping task in background
         ping_coro = asyncio.create_task(ping_task())
         
@@ -514,7 +515,7 @@ async def websocket_simulate_ai(
         # Subscribe to Redis pub/sub for progress updates (works across workers)
         ping_interval = 30
         start_time = asyncio.get_event_loop().time()
-        timeout_seconds = 8 * 60 * 60  # 30 minutes max (simulation can be slow)
+        timeout_seconds = _websocket_job_wall_clock_seconds()
         
         async def ping_task():
             """Send pings to keep connection alive."""

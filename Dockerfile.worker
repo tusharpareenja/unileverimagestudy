@@ -1,0 +1,60 @@
+FROM python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        build-essential \
+        gcc \
+        libpq-dev \
+    && python -m venv "$VIRTUAL_ENV" \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt requirements-docker.txt ./
+
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir -r requirements-docker.txt
+
+
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH" \
+    CELERY_CONCURRENCY=1 \
+    CELERY_PREFETCH_MULTIPLIER=1 \
+    CELERY_TIME_LIMIT=28800 \
+    CELERY_SOFT_TIME_LIMIT=28200 \
+    RUN_API_BACKGROUND_SERVICES=false
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        libpq5 \
+        tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 10001 appuser \
+    && useradd --uid 10001 --gid appuser --create-home --shell /usr/sbin/nologin appuser
+
+COPY --from=builder /opt/venv /opt/venv
+COPY . .
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+CMD ["sh", "-c", "exec celery -A app.celery_app worker --loglevel=info --pool=threads --concurrency=${CELERY_CONCURRENCY} --prefetch-multiplier=${CELERY_PREFETCH_MULTIPLIER} --soft-time-limit=${CELERY_SOFT_TIME_LIMIT} --time-limit=${CELERY_TIME_LIMIT}"]
