@@ -117,7 +117,7 @@ class AnswerOption(BaseModel):
 class ProductKey(BaseModel):
     """Product key: name and optional percentage (0-100). Percentage may be omitted when reading (e.g. copied studies)."""
     name: str = Field(..., max_length=200)
-    percentage: float = Field(0, ge=0, le=100)
+    percentage: float = Field(0, ge=0, le=100.01)
 
 
 class StudyClassificationQuestionIn(BaseModel):

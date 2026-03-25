@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 class ValidateProductKey(BaseModel):
     """Key name and percentage for uniqueness check."""
     name: str = Field(..., max_length=200)
-    percentage: float = Field(..., ge=0, le=100)
+    percentage: float = Field(..., ge=0, le=100.01)
 
 
 class ValidateProductRequest(BaseModel):
