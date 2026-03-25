@@ -84,8 +84,8 @@ Leave 2 cores for FastAPI/Gunicorn and system overhead.
 ## Time Limits
 
 Configured in `app/celery_app.py`:
-- **Hard limit:** 6 hours (`task_time_limit=21600`)
-- **Soft limit:** 5h50m (`task_soft_time_limit=21000`)
+- **Hard limit:** 8 hours (`task_time_limit=28800`)
+- **Soft limit:** 7h50m (`task_soft_time_limit=28200`)
 
 ## Troubleshooting
 

@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     
     # Application Settings
     BASE_URL: str = "https://mindsurve.com"  # Base URL for share links in frontend
+    RUN_API_BACKGROUND_SERVICES: bool = True
     
     # Task Generation Settings
     TASK_GENERATION_TIMEOUT: int = 12000  # 200 minutes timeout for task generation (Azure max is ~4-5 min for sync requests)

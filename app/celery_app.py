@@ -35,8 +35,8 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     result_expires=86400,
-    task_time_limit=21600,       # 6h hard limit
-    task_soft_time_limit=21000,  # 5h50m soft limit
+    task_time_limit=28800,       # 8h hard limit
+    task_soft_time_limit=28200,  # 7h50m soft limit (10m before hard)
     broker_heartbeat=1800,       # 30 min heartbeat (match RabbitMQ)
     broker_connection_timeout=30,
 )

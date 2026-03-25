@@ -408,8 +408,13 @@ def list_studies_endpoint(
     # Lightweight enrichment: only the counters needed for the list card
     if not rows:
         return []
-    study_ids = [row[0].id for row in rows]
-    project_ids = list({row[0].project_id for row in rows if row[0].project_id is not None})
+    
+    # Row structure from optimized query:
+    # (id, title, study_type, status, created_at, last_step, jobid, project_id, 
+    #  creator_id, product_keys, product_id, audience_segmentation,
+    #  total_responses_calc, completed_responses_calc, abandoned_responses_calc, avg_duration_calc)
+    study_ids = [row.id for row in rows]
+    project_ids = list({row.project_id for row in rows if row.project_id is not None})
     project_creator_map: Dict[UUID, UUID] = {}
     project_role_map: Dict[UUID, str] = {}
     study_role_map: Dict[UUID, str] = {}
@@ -441,35 +446,44 @@ def list_studies_endpoint(
     }
     enriched: List[StudyListItem] = []
     for row in rows:
-        # row is (Study, total_calc, completed_calc, abandoned_calc, avg_duration_calc)
-        s = row[0]
-        total_calc = int(row[1] or 0)
-        completed_calc = int(row[2] or 0)
-        abandoned_calc = int(row[3] or 0)
-        avg_duration_calc = float(row[4] or 0)
-        item = StudyListItem.model_validate(s).model_dump()
-        respondents_target = int((s.audience_segmentation or {}).get("number_of_respondents") or 0)
+        # Extract values from the optimized row (named tuple-like access)
+        total_calc = int(row.total_responses_calc or 0)
+        completed_calc = int(row.completed_responses_calc or 0)
+        abandoned_calc = int(row.abandoned_responses_calc or 0)
+        avg_duration_calc = float(row.avg_duration_calc or 0)
+        respondents_target = int((row.audience_segmentation or {}).get("number_of_respondents") or 0)
+        
         user_role = _user_role_for_study(
-            s.id,
-            s.creator_id,
-            s.project_id,
+            row.id,
+            row.creator_id,
+            row.project_id,
             project_creator_map,
             project_role_map,
             study_role_map,
             current_user.id,
         )
-        item.update({
-            "total_responses": total_calc,
-            "completed_responses": completed_calc,
-            "abandoned_responses": abandoned_calc,
-            "respondents_target": respondents_target,
-            "respondents_completed": completed_calc,
-            "average_duration": avg_duration_calc,
-            "completion_rate": (completed_calc / total_calc * 100) if total_calc else 0,
-            "abandonment_rate": (abandoned_calc / total_calc * 100) if total_calc else 0,
-            "user_role": user_role,
-        })
-        enriched.append(StudyListItem(**item))
+        
+        enriched.append(StudyListItem(
+            id=row.id,
+            title=row.title,
+            study_type=row.study_type,
+            status=row.status,
+            created_at=row.created_at,
+            last_step=row.last_step,
+            jobid=row.jobid,
+            project_id=row.project_id,
+            product_keys=row.product_keys,
+            product_id=row.product_id,
+            total_responses=total_calc,
+            completed_responses=completed_calc,
+            abandoned_responses=abandoned_calc,
+            respondents_target=respondents_target,
+            respondents_completed=completed_calc,
+            average_duration=avg_duration_calc,
+            completion_rate=(completed_calc / total_calc * 100) if total_calc else 0,
+            abandonment_rate=(abandoned_calc / total_calc * 100) if total_calc else 0,
+            user_role=user_role,
+        ))
 
     # Cache for 15 seconds to debounce dashboard loads (store JSON-serializable dicts)
     RedisCache.set(
