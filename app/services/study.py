@@ -1113,24 +1113,15 @@ def list_studies(
     per_page: int = 10
 ) -> Tuple[List, int]:
     """
-    Optimized study listing that:
+    Ultra-fast study listing that:
     1. Selects only columns needed for StudyListItem (excludes heavy JSONB like 'tasks')
-    2. Uses a single grouped aggregation instead of 4 correlated subqueries per row
+    2. Uses denormalized counters (total_responses, completed_responses, abandoned_responses)
+       stored directly on Study table — NO JOINs to study_responses needed!
+    
+    Note: Counters are updated by response.py when responses are added/completed/abandoned.
     """
-    # Build aggregated response stats in ONE query (grouped by study_id)
-    response_stats = (
-        select(
-            StudyResponse.study_id,
-            func.count(StudyResponse.id).label("total_responses"),
-            func.count(StudyResponse.id).filter(StudyResponse.is_completed == True).label("completed_responses"),
-            func.count(StudyResponse.id).filter(StudyResponse.is_abandoned == True).label("abandoned_responses"),
-            func.avg(StudyResponse.total_study_duration).filter(StudyResponse.is_completed == True).label("avg_duration"),
-        )
-        .group_by(StudyResponse.study_id)
-        .subquery()
-    )
-
-    # Select only columns needed for StudyListItem (exclude heavy columns like 'tasks', 'background', etc.)
+    # Select only columns needed for StudyListItem
+    # Use denormalized counters directly from Study table (no JOIN needed!)
     base_stmt = (
         select(
             Study.id,
@@ -1145,12 +1136,10 @@ def list_studies(
             Study.product_keys,
             Study.product_id,
             Study.audience_segmentation,  # Needed for respondents_target extraction
-            func.coalesce(response_stats.c.total_responses, 0).label("total_responses_calc"),
-            func.coalesce(response_stats.c.completed_responses, 0).label("completed_responses_calc"),
-            func.coalesce(response_stats.c.abandoned_responses, 0).label("abandoned_responses_calc"),
-            func.coalesce(response_stats.c.avg_duration, 0.0).label("avg_duration_calc"),
+            Study.total_responses.label("total_responses_calc"),
+            Study.completed_responses.label("completed_responses_calc"),
+            Study.abandoned_responses.label("abandoned_responses_calc"),
         )
-        .outerjoin(response_stats, response_stats.c.study_id == Study.id)
         .outerjoin(StudyMember, and_(StudyMember.study_id == Study.id, StudyMember.user_id == owner_id))
         .where(
             or_(

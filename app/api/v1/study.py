@@ -446,11 +446,10 @@ def list_studies_endpoint(
     }
     enriched: List[StudyListItem] = []
     for row in rows:
-        # Extract values from the optimized row (named tuple-like access)
+        # Extract values from denormalized counters (no JOINs needed!)
         total_calc = int(row.total_responses_calc or 0)
         completed_calc = int(row.completed_responses_calc or 0)
         abandoned_calc = int(row.abandoned_responses_calc or 0)
-        avg_duration_calc = float(row.avg_duration_calc or 0)
         respondents_target = int((row.audience_segmentation or {}).get("number_of_respondents") or 0)
         
         user_role = _user_role_for_study(
@@ -479,7 +478,7 @@ def list_studies_endpoint(
             abandoned_responses=abandoned_calc,
             respondents_target=respondents_target,
             respondents_completed=completed_calc,
-            average_duration=avg_duration_calc,
+            average_duration=0,  # Not needed for list view, calculated on detail view
             completion_rate=(completed_calc / total_calc * 100) if total_calc else 0,
             abandonment_rate=(abandoned_calc / total_calc * 100) if total_calc else 0,
             user_role=user_role,
