@@ -947,3 +947,46 @@ def get_export_job_status(
         response["error"] = job.error
 
     return response
+
+
+@router.get("/public/{project_id}/studies")
+def get_public_project_studies_endpoint(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+):
+    """
+    Get public studies for a project.
+    Returns project name and a list of active studies.
+    No authentication required.
+    """
+    from app.models.project_model import Project
+    from app.models.study_model import Study
+    from fastapi import HTTPException
+    from sqlalchemy import select
+
+    # Verify project exists and get its name
+    project = db.execute(
+        select(Project.name).where(Project.id == project_id)
+    ).scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Get active studies for this project
+    studies = db.execute(
+        select(Study.id, Study.title, Study.study_type)
+        .where(Study.project_id == project_id, Study.status == 'active')
+        .order_by(Study.created_at.desc())
+    ).all()
+
+    return {
+        "project_name": project,
+        "studies": [
+            {
+                "id": str(study.id),
+                "title": study.title,
+                "study_type": study.study_type
+            }
+            for study in studies
+        ]
+    }

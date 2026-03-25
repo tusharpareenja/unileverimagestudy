@@ -1037,7 +1037,7 @@ def export_project_zip_celery(
             
             # Send email notification
             if user and user.email:
-                user_name = user.full_name or user.email.split("@")[0]
+                user_name = user.name or user.email.split("@")[0]
                 project_name = project.name if project else f"Project {project_id[:8]}"
                 filename = f"{project_name.replace(' ', '_')}_export.zip"
                 
