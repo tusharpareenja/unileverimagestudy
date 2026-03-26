@@ -435,7 +435,11 @@ def flattened_project_csv_endpoint(
         db_session = SessionLocal()
         try:
             response_svc = StudyResponseService(db_session)
-            df = response_svc.get_study_dataframe(study_id, unilever_format=True)
+            df = response_svc.get_study_dataframe(
+                study_id,
+                unilever_format=True,
+                completed_only=True,
+            )
             analysis_svc = StudyAnalysisService()
             t_scores = analysis_svc.get_t_overall_scores(df, study_data_dict) if not df.empty else {}
 
@@ -688,7 +692,11 @@ def export_project_zip_sync_endpoint(
         try:
             db_session = SessionLocal()
             response_svc = StudyResponseService(db_session)
-            df = response_svc.get_study_dataframe(study_id, unilever_format=True)
+            df = response_svc.get_study_dataframe(
+                study_id,
+                unilever_format=True,
+                completed_only=True,
+            )
 
             # Per-study file: full Excel report (same as /export/study/{id}/flattened-csv) - Raw Data, T Overall, B Overall, Info Block, etc.
             analysis_svc = StudyAnalysisService()

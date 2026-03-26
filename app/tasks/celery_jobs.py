@@ -780,7 +780,11 @@ def export_project_zip_celery(
             try:
                 db_session = SessionLocal()
                 response_svc = StudyResponseService(db_session)
-                df = response_svc.get_study_dataframe(study_id, unilever_format=True)
+                df = response_svc.get_study_dataframe(
+                    study_id,
+                    unilever_format=True,
+                    completed_only=True,
+                )
 
                 analysis_svc = StudyAnalysisService()
                 try:

@@ -115,6 +115,29 @@ class StudyResponseService:
         """Get a study response by session ID."""
         stmt = select(StudyResponse).where(StudyResponse.session_id == session_id)
         return self.db.execute(stmt).scalar_one_or_none()
+
+    def _get_response_by_session_for_update(self, session_id: str) -> Optional[StudyResponse]:
+        """Get a study response by session ID with row-level lock for safe progress updates."""
+        stmt = (
+            select(StudyResponse)
+            .where(StudyResponse.session_id == session_id)
+            .with_for_update()
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def _completed_task_exists(self, study_response_id: UUID, task_id: str) -> bool:
+        """Check if a task_id is already stored for a response (idempotency guard)."""
+        exists_stmt = (
+            select(CompletedTask.id)
+            .where(
+                and_(
+                    CompletedTask.study_response_id == study_response_id,
+                    CompletedTask.task_id == task_id,
+                )
+            )
+            .limit(1)
+        )
+        return self.db.execute(exists_stmt).scalar_one_or_none() is not None
     
     def get_response_by_respondent_id(self, respondent_id: int) -> Optional[StudyResponse]:
         """Get a study response by respondent ID."""
@@ -395,12 +418,23 @@ class StudyResponseService:
     
     def submit_task(self, session_id: str, request: SubmitTaskRequest) -> SubmitTaskResponse:
         """Submit a completed task."""
-        response = self.get_response_by_session(session_id)
+        response = self._get_response_by_session_for_update(session_id)
         if not response:
             raise HTTPException(status_code=404, detail="Session not found")
         
         if response.is_completed:
             raise HTTPException(status_code=400, detail="Study already completed")
+
+        # Idempotency: if same task already exists for this session, ignore duplicate submit.
+        if self._completed_task_exists(response.id, request.task_id):
+            # Release row lock quickly; no state changes.
+            self.db.commit()
+            return SubmitTaskResponse(
+                success=True,
+                next_task_index=response.current_task_index if not response.is_completed else None,
+                is_study_complete=bool(response.is_completed),
+                completion_percentage=float(response.completion_percentage or 0.0),
+            )
         
         # Create completed task record (fast path - no heavy enrichment)
         now_utc = datetime.utcnow()
@@ -782,7 +816,7 @@ class StudyResponseService:
 
     def submit_tasks_bulk(self, session_id: str, request: BulkSubmitTasksRequest) -> BulkSubmitTasksResponse:
         """Submit multiple completed tasks in a single transaction (optimized for large payloads)."""
-        response = self.get_response_by_session(session_id)
+        response = self._get_response_by_session_for_update(session_id)
         if not response:
             raise HTTPException(status_code=404, detail="Session not found")
         if response.is_completed:
@@ -808,8 +842,21 @@ class StudyResponseService:
         interactions_to_insert: List[ElementInteraction] = []
         submitted = 0
         study_just_completed = False
+        existing_task_ids = set(
+            self.db.execute(
+                select(CompletedTask.task_id).where(CompletedTask.study_response_id == response.id)
+            ).scalars().all()
+        )
+        seen_in_payload = set()
 
         for item in request.tasks or []:
+            # Idempotency guards:
+            # 1) task already persisted for this session
+            # 2) duplicate task_id repeated inside same bulk payload
+            if item.task_id in existing_task_ids or item.task_id in seen_in_payload:
+                continue
+            seen_in_payload.add(item.task_id)
+
             # Build task model
             elements_shown_in_task = item.elements_shown_in_task or {}
             
@@ -967,6 +1014,7 @@ class StudyResponseService:
                     task_model.elements_shown_content = enriched
 
             tasks_to_insert.append(task_model)
+            existing_task_ids.add(item.task_id)
 
             # Queue interactions
             if item.element_interactions:
@@ -2471,7 +2519,12 @@ class StudyResponseService:
             "total_tasks": int(result.total_tasks or 0)
         }
 
-    def get_study_dataframe(self, study_id: UUID, unilever_format: bool = False) -> pd.DataFrame:
+    def get_study_dataframe(
+        self,
+        study_id: UUID,
+        unilever_format: bool = False,
+        completed_only: bool = False,
+    ) -> pd.DataFrame:
         from sqlalchemy.orm import noload, load_only
 
         """
@@ -2495,6 +2548,8 @@ class StudyResponseService:
         if str(study.study_type) in ('grid', 'text', 'hybrid'):
             response_cols.append(StudyResponse.respondent_id)
         responses_query = select(*response_cols).where(StudyResponse.study_id == study_id)
+        if completed_only:
+            responses_query = responses_query.where(StudyResponse.is_completed.is_(True))
         responses_df = pd.read_sql(responses_query, self.db.bind)
 
         if responses_df.empty:

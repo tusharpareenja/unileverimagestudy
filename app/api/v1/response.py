@@ -1074,7 +1074,11 @@ async def export_study_analysis(
 
     # 1. Get DataFrame
     response_service = StudyResponseService(db)
-    df = response_service.get_study_dataframe(study_id, unilever_format=unilever_format)
+    df = response_service.get_study_dataframe(
+        study_id,
+        unilever_format=unilever_format,
+        completed_only=True,
+    )
     
         
     # 2. Get Study Data (JSON)
