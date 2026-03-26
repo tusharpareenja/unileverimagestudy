@@ -1239,7 +1239,11 @@ async def export_study_analysis_json(
 
     # 1. Get DataFrame
     response_service = StudyResponseService(db)
-    df = response_service.get_study_dataframe(study_id, unilever_format=unilever_format)
+    df = response_service.get_study_dataframe(
+        study_id,
+        unilever_format=unilever_format,
+        completed_only=True,
+    )
 
     # 2. Build study_data dict from the ORM object
     study_data = {
