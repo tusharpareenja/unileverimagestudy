@@ -1,14 +1,16 @@
 # app/services/response.py
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any, Tuple, Iterable
+from typing import Optional, List, Dict, Any, Tuple, Iterable, Callable
 from uuid import UUID, uuid4
 from datetime import datetime, timedelta
 import time
+import random
 import pandas as pd
 
 from sqlalchemy.orm import Session, selectinload, load_only
 from sqlalchemy import select, func, desc, and_, or_, text
+from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException, status
 
 from app.models.response_model import (
@@ -63,47 +65,41 @@ class StudyResponseService:
         # Generate unique session ID
         session_id = f"session_{uuid4().hex[:16]}"
         
-        # Get next available respondent ID
-        respondent_id = self._get_next_respondent_id(response_data.study_id)
-        
-        # Derive total tasks assigned for this respondent
-        total_tasks_assigned = 0
-        try:
-            if isinstance(study.tasks, list):
-                # Flat list of tasks
-                total_tasks_assigned = len(study.tasks)
-            elif isinstance(study.tasks, dict):
-                # Either per-respondent list OR index-keyed dict ("0","1",...)
-                per_resp = study.tasks.get(str(respondent_id))
-                if isinstance(per_resp, list):
-                    total_tasks_assigned = len(per_resp)
-                else:
-                    # If values are task dicts keyed by numeric strings, count keys (exclude design_matrix)
-                    # e.g., {"0": {...}, "1": {...}, ...}
-                    total_tasks_assigned = len([k for k in study.tasks if str(k).isdigit()])
-        except Exception:
+        def _payload_builder(respondent_id: int) -> Dict[str, Any]:
             total_tasks_assigned = 0
+            try:
+                if isinstance(study.tasks, list):
+                    total_tasks_assigned = len(study.tasks)
+                elif isinstance(study.tasks, dict):
+                    per_resp = study.tasks.get(str(respondent_id))
+                    if isinstance(per_resp, list):
+                        total_tasks_assigned = len(per_resp)
+                    else:
+                        total_tasks_assigned = len([k for k in study.tasks if str(k).isdigit()])
+            except Exception:
+                total_tasks_assigned = 0
 
-        # Create response
-        response = StudyResponse(
+            return {
+                "study_id": response_data.study_id,
+                "session_id": session_id,
+                "total_tasks_assigned": total_tasks_assigned,
+                "session_start_time": response_data.session_start_time or datetime.utcnow(),
+                "personal_info": response_data.personal_info,
+                "ip_address": response_data.ip_address,
+                "user_agent": response_data.user_agent,
+                "browser_info": response_data.browser_info,
+                "product_id": getattr(response_data, 'product_id', None),
+                "last_activity": datetime.utcnow(),
+                "status": "in_progress",
+                "is_abandoned": False,
+                "is_completed": False,
+            }
+
+        response = self._create_response_with_respondent_retry(
             study_id=response_data.study_id,
-            session_id=session_id,
-            respondent_id=respondent_id,
-            total_tasks_assigned=total_tasks_assigned,
-            session_start_time=response_data.session_start_time or datetime.utcnow(),
-            personal_info=response_data.personal_info,
-            ip_address=response_data.ip_address,
-            user_agent=response_data.user_agent,
-            browser_info=response_data.browser_info,
-            product_id=getattr(response_data, 'product_id', None),
-            last_activity=datetime.utcnow(),
-            status='in_progress',  # Set status as in_progress when session starts
-            is_abandoned=False,    # Set to False initially, will be True after 15 minutes if no activity
-            is_completed=False     # Set to False initially
+            payload_builder=_payload_builder,
+            max_retries=3,
         )
-        
-        self.db.add(response)
-        self.db.commit()
         self.db.refresh(response)
         
         # Update study response counters
@@ -346,10 +342,22 @@ class StudyResponseService:
         # Generate IDs - session_id without DB query, respondent_id with proper sequential logic
         from uuid import uuid4 as _uuid4
         session_id = f"session_{_uuid4().hex[:16]}"
-        respondent_id = self._get_next_respondent_id(request.study_id)
-        
-        # Fast task count calculation - get tasks for this specific respondent
-        total_tasks_assigned = self._calculate_respondent_task_count(study_row.tasks, respondent_id)
+        def _payload_builder(respondent_id: int) -> Dict[str, Any]:
+            total_tasks_assigned = self._calculate_respondent_task_count(study_row.tasks, respondent_id)
+            return {
+                "study_id": request.study_id,
+                "session_id": session_id,
+                "total_tasks_assigned": total_tasks_assigned,
+                "session_start_time": now_utc,
+                "personal_info": combined_personal_info,
+                "ip_address": ip_address,
+                "user_agent": user_agent,
+                "product_id": getattr(request, 'product_id', None),
+                "last_activity": now_utc,
+                "status": "in_progress",
+                "is_abandoned": False,
+                "is_completed": False,
+            }
         
         # Minimal personal info merge
         combined_personal_info = None
@@ -360,26 +368,11 @@ class StudyResponseService:
         
         now_utc = datetime.utcnow()
         
-        # Create response with minimal fields
-        new_response = StudyResponse(
+        new_response = self._create_response_with_respondent_retry(
             study_id=request.study_id,
-            session_id=session_id,
-            respondent_id=respondent_id,
-            total_tasks_assigned=total_tasks_assigned,
-            session_start_time=now_utc,
-            personal_info=combined_personal_info,
-            ip_address=ip_address,
-            user_agent=user_agent,
-            product_id=getattr(request, 'product_id', None),
-            last_activity=now_utc,
-            status='in_progress',
-            is_abandoned=False,
-            is_completed=False
+            payload_builder=_payload_builder,
+            max_retries=3,
         )
-        
-        # Single database operation
-        self.db.add(new_response)
-        self.db.commit()
         
         # Check if study should be auto-completed immediately after new response is created
         # This ensures immediate completion when total_responses equals expected_respondents
@@ -388,8 +381,8 @@ class StudyResponseService:
         # Return immediately without refresh or counter updates
         return StartStudyResponse(
             session_id=session_id,
-            respondent_id=respondent_id,
-            total_tasks_assigned=total_tasks_assigned,
+            respondent_id=new_response.respondent_id,
+            total_tasks_assigned=new_response.total_tasks_assigned,
             study_info={
                 "id": str(request.study_id),
                 "title": study_row.title,
@@ -1043,24 +1036,27 @@ class StudyResponseService:
         if getattr(payload, "personal_info", None) and isinstance(payload.personal_info, dict):
             personal_info = dict(payload.personal_info)
 
-        respondent_id = self._get_next_respondent_id(study_id)
-        new_response = StudyResponse(
+        def _payload_builder(respondent_id: int) -> Dict[str, Any]:
+            return {
+                "study_id": study_id,
+                "session_id": session_id,
+                "total_tasks_assigned": total_tasks_assigned,
+                "session_start_time": now_utc,
+                "personal_info": personal_info,
+                "ip_address": None,
+                "user_agent": None,
+                "last_activity": now_utc,
+                "status": "in_progress",
+                "is_abandoned": False,
+                "is_completed": False,
+                "panelist_id": payload.panelist_id,
+            }
+
+        new_response = self._create_response_with_respondent_retry(
             study_id=study_id,
-            session_id=session_id,
-            respondent_id=respondent_id,
-            total_tasks_assigned=total_tasks_assigned,
-            session_start_time=now_utc,
-            personal_info=personal_info,
-            ip_address=None,
-            user_agent=None,
-            last_activity=now_utc,
-            status="in_progress",
-            is_abandoned=False,
-            is_completed=False,
-            panelist_id=payload.panelist_id,
+            payload_builder=_payload_builder,
+            max_retries=3,
         )
-        self.db.add(new_response)
-        self.db.commit()
         self.db.refresh(new_response)
 
         # Truncate to fit existing DB columns (no migrations)
@@ -2272,6 +2268,46 @@ class StudyResponseService:
         max_id = self.db.execute(stmt).scalar()
         
         return (max_id or 0) + 1
+
+    def _is_respondent_unique_conflict(self, exc: IntegrityError) -> bool:
+        """Return True if IntegrityError was caused by duplicate (study_id, respondent_id)."""
+        msg = str(getattr(exc, "orig", exc)).lower()
+        return (
+            "uq_study_responses_study_respondent" in msg
+            or ("study_id" in msg and "respondent_id" in msg and ("unique" in msg or "duplicate" in msg))
+        )
+
+    def _create_response_with_respondent_retry(
+        self,
+        *,
+        study_id: UUID,
+        payload_builder: Callable[[int], Dict[str, Any]],
+        max_retries: int = 3,
+    ) -> StudyResponse:
+        """
+        Create StudyResponse with optimistic respondent_id allocation.
+        Retries quickly on unique conflicts for (study_id, respondent_id).
+        """
+        for attempt in range(max_retries + 1):
+            respondent_id = self._get_next_respondent_id(study_id)
+            payload = payload_builder(respondent_id) or {}
+            response = StudyResponse(respondent_id=respondent_id, **payload)
+            self.db.add(response)
+            try:
+                self.db.commit()
+                return response
+            except IntegrityError as exc:
+                self.db.rollback()
+                if not self._is_respondent_unique_conflict(exc):
+                    raise
+                if attempt < max_retries:
+                    # Tiny jitter keeps concurrent retries from colliding again.
+                    time.sleep((0.001 * (2 ** attempt)) + random.uniform(0.0, 0.002))
+                    continue
+                raise HTTPException(
+                    status_code=503,
+                    detail="High traffic while assigning respondent id. Please retry.",
+                )
 
     def _get_generated_respondent_capacity(self, tasks: Any) -> int:
         """Count how many respondent slots were generated in the task matrix."""

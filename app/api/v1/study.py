@@ -53,6 +53,13 @@ def _invalidate_user_studies_list_cache(user_id: UUID) -> None:
     RedisCache.delete_pattern(f"user_studies_list:{user_id}:*")
 
 
+def _invalidate_project_public_studies_cache(project_id: Optional[UUID]) -> None:
+    """Invalidate public studies list cache for a project."""
+    if project_id is None:
+        return
+    RedisCache.delete(f"project_public_studies:{project_id}")
+
+
 def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents: int) -> Dict[str, Any]:
     """Generate a small preview of tasks for immediate display while background job runs"""
     # Generate tasks for just 1-3 respondents as a preview
@@ -277,6 +284,7 @@ def create_study_endpoint(
         base_url_for_share=settings.BASE_URL,
     )
     _invalidate_user_studies_list_cache(current_user.id)
+    _invalidate_project_public_studies_cache(getattr(study, "project_id", None))
     # Inject aspect_ratio from audience_segmentation for output
     try:
         ar = (study.audience_segmentation or {}).get('aspect_ratio')
@@ -319,6 +327,7 @@ def create_study_minimal_endpoint(
         product_id=getattr(payload, 'product_id', None),
     )
     _invalidate_user_studies_list_cache(current_user.id)
+    _invalidate_project_public_studies_cache(getattr(payload, "project_id", None))
     return StudyCreateMinimalResponse(id=study_id)
 
 
@@ -342,6 +351,7 @@ def copy_study_endpoint(
         project_id=body.project_id,
     )
     _invalidate_user_studies_list_cache(current_user.id)
+    _invalidate_project_public_studies_cache(getattr(new_study, "project_id", None))
     # Reload with relations so StudyOut has categories, elements, layers, classification_questions
     study = study_service.get_study(db=db, study_id=new_study.id, owner_id=current_user.id)
     try:
@@ -1014,6 +1024,7 @@ def update_study_endpoint(
     # Debug logging
     import logging
     logger = logging.getLogger(__name__)
+    previous_project_id = db.scalar(select(Study.project_id).where(Study.id == study_id))
     
     try:
         logger.info(f"PUT /studies/{study_id} - User: {current_user.id}")
@@ -1034,6 +1045,8 @@ def update_study_endpoint(
         # Invalidate cache after successful update
         invalidate_study_cache(study_id)
         _invalidate_user_studies_list_cache(current_user.id)
+        _invalidate_project_public_studies_cache(previous_project_id)
+        _invalidate_project_public_studies_cache(getattr(result, "project_id", None))
         
         logger.info(f"Study {study_id} updated successfully")
         return result
@@ -1054,9 +1067,11 @@ def delete_study_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    previous_project_id = db.scalar(select(Study.project_id).where(Study.id == study_id))
     study_service.delete_study(db=db, study_id=study_id, owner_id=current_user.id)
     invalidate_study_cache(study_id)
     _invalidate_user_studies_list_cache(current_user.id)
+    _invalidate_project_public_studies_cache(previous_project_id)
     return None
 
 
@@ -1067,11 +1082,13 @@ def change_status_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    project_id = db.scalar(select(Study.project_id).where(Study.id == study_id))
     result = study_service.change_status(
         db=db, study_id=study_id, owner_id=current_user.id, new_status=payload.status
     )
     invalidate_study_cache(study_id)
     _invalidate_user_studies_list_cache(current_user.id)
+    _invalidate_project_public_studies_cache(project_id)
     return result
 
 
@@ -1568,6 +1585,7 @@ def update_and_launch_study_endpoint(
     Does not regenerate tasks; intended for non-task-affecting edits (e.g., title, text).
     """
     # Check if payload is empty (launch-only)
+    previous_project_id = db.scalar(select(Study.project_id).where(Study.id == study_id))
     payload_dict = payload.model_dump(exclude_none=True)
     if not payload_dict:
         # Ultra-fast launch-only path
@@ -1586,6 +1604,8 @@ def update_and_launch_study_endpoint(
         )
     invalidate_study_cache(study_id)
     _invalidate_user_studies_list_cache(current_user.id)
+    _invalidate_project_public_studies_cache(previous_project_id)
+    _invalidate_project_public_studies_cache(getattr(study, "project_id", None))
     return study
 
 

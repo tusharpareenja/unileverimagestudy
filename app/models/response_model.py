@@ -1,6 +1,6 @@
 # app/models/response.py
 from sqlalchemy import (
-    Column, String, Integer, Float, DateTime, Boolean, ForeignKey, Index, Text
+    Column, String, Integer, Float, DateTime, Boolean, ForeignKey, Index, Text, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
@@ -163,6 +163,7 @@ class StudyResponse(Base):
     task_sessions = relationship("TaskSession", back_populates="study_response", cascade="all, delete-orphan")
 
     __table_args__ = (
+        UniqueConstraint("study_id", "respondent_id", name="uq_study_responses_study_respondent"),
         Index("idx_study_response_study", "study_id"),
         Index("idx_study_response_session", "session_id"),
         Index("idx_study_response_respondent", "respondent_id"),

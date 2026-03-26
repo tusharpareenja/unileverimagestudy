@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_active_user
+from app.core.cache import RedisCache
 from app.db.session import get_db, SessionLocal
 from app.models.user_model import User
 from app.schemas.project_schema import (
@@ -31,6 +32,10 @@ from app.services.response import StudyResponseService
 from app.services.analysis import StudyAnalysisService
 
 router = APIRouter()
+
+
+def _invalidate_public_project_studies_cache(project_id: UUID) -> None:
+    RedisCache.delete(f"project_public_studies:{project_id}")
 
 
 @router.post("/{project_id}/members/invite", response_model=ProjectMemberOut)
@@ -298,12 +303,14 @@ def assign_study_to_project_endpoint(
     - Project viewer cannot assign; editor and admin can
     - Project creator becomes study admin; study creator demoted per project logic
     """
-    return project_service.assign_study_to_project(
+    result = project_service.assign_study_to_project(
         db=db,
         project_id=project_id,
         user_id=current_user.id,
         payload=payload,
     )
+    _invalidate_public_project_studies_cache(project_id)
+    return result
 
 
 @router.put("/{project_id}", response_model=ProjectOut)
@@ -330,6 +337,7 @@ def update_project_endpoint(
     study_count = db.scalar(
         select(func.count(Study.id)).where(Study.project_id == project_id)
     ) or 0
+    _invalidate_public_project_studies_cache(project_id)
     
     return ProjectOut(
         id=project.id,
@@ -910,6 +918,7 @@ def delete_project_endpoint(
         project_id=project_id,
         user_id=current_user.id
     )
+    _invalidate_public_project_studies_cache(project_id)
     return None
 
 
@@ -964,6 +973,11 @@ def get_public_project_studies_endpoint(
     from fastapi import HTTPException
     from sqlalchemy import select
 
+    cache_key = f"project_public_studies:{project_id}"
+    cached_data = RedisCache.get(cache_key)
+    if cached_data:
+        return cached_data
+
     # Verify project exists and get its name
     project = db.execute(
         select(Project.name).where(Project.id == project_id)
@@ -979,7 +993,7 @@ def get_public_project_studies_endpoint(
         .order_by(Study.created_at.desc())
     ).all()
 
-    return {
+    result = {
         "project_name": project,
         "studies": [
             {
@@ -991,3 +1005,5 @@ def get_public_project_studies_endpoint(
             for study in studies
         ]
     }
+    RedisCache.set(cache_key, result, ttl_seconds=7)
+    return result
