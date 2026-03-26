@@ -26,6 +26,7 @@ from app.services.task_generation_adapter import generate_grid_tasks, generate_l
 from app.services.study_member_service import study_member_service
 from app.schemas.study_schema import StudyMemberInvite, StudyMemberOut, StudyMemberUpdate
 from app.core.config import settings
+from app.core.cache import RedisCache, invalidate_study_cache
 from app.core.domain import FRAGRANCE_QUESTION_ID
 
 router = APIRouter()
@@ -45,6 +46,11 @@ def _user_has_study_access(db: Session, study_id: UUID, user_id: UUID) -> bool:
         )
     )
     return member is not None
+
+
+def _invalidate_user_studies_list_cache(user_id: UUID) -> None:
+    """Invalidate studies-list cache for a single user."""
+    RedisCache.delete_pattern(f"user_studies_list:{user_id}:*")
 
 
 def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents: int) -> Dict[str, Any]:
@@ -270,6 +276,7 @@ def create_study_endpoint(
         payload=payload,
         base_url_for_share=settings.BASE_URL,
     )
+    _invalidate_user_studies_list_cache(current_user.id)
     # Inject aspect_ratio from audience_segmentation for output
     try:
         ar = (study.audience_segmentation or {}).get('aspect_ratio')
@@ -311,6 +318,7 @@ def create_study_minimal_endpoint(
         product_keys=product_keys_list,
         product_id=getattr(payload, 'product_id', None),
     )
+    _invalidate_user_studies_list_cache(current_user.id)
     return StudyCreateMinimalResponse(id=study_id)
 
 
@@ -333,6 +341,7 @@ def copy_study_endpoint(
         user_id=current_user.id,
         project_id=body.project_id,
     )
+    _invalidate_user_studies_list_cache(current_user.id)
     # Reload with relations so StudyOut has categories, elements, layers, classification_questions
     study = study_service.get_study(db=db, study_id=new_study.id, owner_id=current_user.id)
     try:
@@ -488,7 +497,7 @@ def list_studies_endpoint(
     RedisCache.set(
         cache_key,
         [x.model_dump(mode="json") for x in enriched],
-        ttl_seconds=15,
+        ttl_seconds=7,
     )
     return enriched
 
@@ -782,8 +791,6 @@ def get_study_preview_endpoint(
     return out
 
 
-from app.core.cache import RedisCache, invalidate_study_cache
-
 @router.get("/{study_id}/basic", response_model=StudyBasicDetails, response_model_exclude_none=True)
 def get_study_basic_details_endpoint(
     study_id: UUID,
@@ -807,7 +814,7 @@ def get_study_basic_details_endpoint(
     if not details:
         raise HTTPException(status_code=404, detail="Study not found")
         
-    RedisCache.set(cache_key, details, ttl_seconds=300)  # 5 minutes TTL
+    RedisCache.set(cache_key, details, ttl_seconds=7)
     return details
 
 
@@ -829,7 +836,7 @@ def get_study_basic_details_v2_endpoint(
     if not details:
         raise HTTPException(status_code=404, detail="Study not found")
         
-    RedisCache.set(cache_key, details, ttl_seconds=60)  # 1 minute TTL (because total_responses changes frequently)
+    RedisCache.set(cache_key, details, ttl_seconds=7)
     return details
 
 
@@ -938,7 +945,7 @@ def get_study_public_endpoint(
             )
     
     # Cache the successful response
-    RedisCache.set(cache_key, result, ttl_seconds=300)  # 5 minutes TTL
+    RedisCache.set(cache_key, result, ttl_seconds=7)
     
     # Return the study data if no errors
     return result
@@ -971,7 +978,7 @@ def get_study_public_details_endpoint(
         out['aspect_ratio'] = ar
         
         # Cache the successful response
-        RedisCache.set(cache_key, out, ttl_seconds=300)  # 5 minutes TTL
+        RedisCache.set(cache_key, out, ttl_seconds=7)
         return out
     except Exception:
         return study
@@ -1026,6 +1033,7 @@ def update_study_endpoint(
         
         # Invalidate cache after successful update
         invalidate_study_cache(study_id)
+        _invalidate_user_studies_list_cache(current_user.id)
         
         logger.info(f"Study {study_id} updated successfully")
         return result
@@ -1048,6 +1056,7 @@ def delete_study_endpoint(
 ):
     study_service.delete_study(db=db, study_id=study_id, owner_id=current_user.id)
     invalidate_study_cache(study_id)
+    _invalidate_user_studies_list_cache(current_user.id)
     return None
 
 
@@ -1062,6 +1071,7 @@ def change_status_endpoint(
         db=db, study_id=study_id, owner_id=current_user.id, new_status=payload.status
     )
     invalidate_study_cache(study_id)
+    _invalidate_user_studies_list_cache(current_user.id)
     return result
 
 
@@ -1574,6 +1584,8 @@ def update_and_launch_study_endpoint(
             owner_id=current_user.id,
             payload=payload,
         )
+    invalidate_study_cache(study_id)
+    _invalidate_user_studies_list_cache(current_user.id)
     return study
 
 

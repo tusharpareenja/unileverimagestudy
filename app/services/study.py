@@ -5,6 +5,7 @@ import re
 from typing import Optional, Tuple, List, Dict, Any
 from uuid import UUID, uuid4
 from datetime import datetime
+from types import SimpleNamespace
 
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select, func, desc, and_, or_
@@ -1113,15 +1114,14 @@ def list_studies(
     per_page: int = 10
 ) -> Tuple[List, int]:
     """
-    Ultra-fast study listing that:
-    1. Selects only columns needed for StudyListItem (excludes heavy JSONB like 'tasks')
-    2. Uses denormalized counters (total_responses, completed_responses, abandoned_responses)
-       stored directly on Study table — NO JOINs to study_responses needed!
-    
-    Note: Counters are updated by response.py when responses are added/completed/abandoned.
+    Study listing optimized for dashboard cards.
+    Uses live response counts from study_responses with a paged aggregate:
+    1) fetch page of studies
+    2) fetch grouped counts for only those study IDs
+
+    This keeps counts accurate while avoiding heavy per-row correlated subqueries.
     """
-    # Select only columns needed for StudyListItem
-    # Use denormalized counters directly from Study table (no JOIN needed!)
+    # Select only fields needed by StudyListItem; counters are added via grouped aggregate query
     base_stmt = (
         select(
             Study.id,
@@ -1136,9 +1136,6 @@ def list_studies(
             Study.product_keys,
             Study.product_id,
             Study.audience_segmentation,  # Needed for respondents_target extraction
-            Study.total_responses.label("total_responses_calc"),
-            Study.completed_responses.label("completed_responses_calc"),
-            Study.abandoned_responses.label("abandoned_responses_calc"),
         )
         .outerjoin(StudyMember, and_(StudyMember.study_id == Study.id, StudyMember.user_id == owner_id))
         .where(
@@ -1172,8 +1169,46 @@ def list_studies(
         .offset((page - 1) * per_page)
         .limit(per_page)
     ).all()
-    
-    return rows, int(total)
+
+    if not rows:
+        return [], int(total)
+
+    study_ids = [row.id for row in rows]
+    count_rows = db.execute(
+        select(
+            StudyResponse.study_id.label("study_id"),
+            func.count(StudyResponse.id).label("total_responses_calc"),
+            func.count(StudyResponse.id).filter(StudyResponse.is_completed == True).label("completed_responses_calc"),
+            func.count(StudyResponse.id).filter(StudyResponse.is_abandoned == True).label("abandoned_responses_calc"),
+        )
+        .where(StudyResponse.study_id.in_(study_ids))
+        .group_by(StudyResponse.study_id)
+    ).all()
+
+    counts_by_study: Dict[UUID, Dict[str, int]] = {
+        c.study_id: {
+            "total_responses_calc": int(c.total_responses_calc or 0),
+            "completed_responses_calc": int(c.completed_responses_calc or 0),
+            "abandoned_responses_calc": int(c.abandoned_responses_calc or 0),
+        }
+        for c in count_rows
+    }
+
+    enriched_rows: List[Any] = []
+    for row in rows:
+        row_dict = dict(row._mapping)
+        counts = counts_by_study.get(
+            row.id,
+            {
+                "total_responses_calc": 0,
+                "completed_responses_calc": 0,
+                "abandoned_responses_calc": 0,
+            },
+        )
+        row_dict.update(counts)
+        enriched_rows.append(SimpleNamespace(**row_dict))
+
+    return enriched_rows, int(total)
 
 def update_study(
     db: Session,

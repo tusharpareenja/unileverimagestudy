@@ -1978,10 +1978,14 @@ class StudyResponseService:
     
     def _check_and_complete_studies(self, study_id: Optional[UUID] = None):
         """Check if studies should be automatically marked as completed.
-        When total_responses equals expected_respondents, immediately mark study as complete
-        regardless of current status (active, paused, etc.).
+
+        A study is auto-completed when either:
+        - completed_responses reaches the configured respondent target, or
+        - total_responses reaches the generated respondent pool capacity
+          (meaning no more respondent task slots remain).
+
         Also marks any in_progress responses as abandoned when study is completed.
-        
+
         If study_id is provided, only checks that specific study (optimized path).
         """
         import logging
@@ -2023,12 +2027,18 @@ class StudyResponseService:
             completed_responses = counts.completed or 0
             abandoned_responses = counts.abandoned or 0
             
-            # Check if all expected respondents have either completed or abandoned
-            expected_respondents = study.audience_segmentation.get('number_of_respondents', 0) if study.audience_segmentation else 0
+            try:
+                expected_respondents = int(
+                    (study.audience_segmentation or {}).get('number_of_respondents') or 0
+                )
+            except Exception:
+                expected_respondents = 0
+            generated_pool = self._get_generated_respondent_capacity(getattr(study, 'tasks', None))
             
             # Debug logging
             logger.info(f"Study {study.id} completion check:")
             logger.info(f"  - Expected respondents: {expected_respondents}")
+            logger.info(f"  - Generated respondent pool: {generated_pool}")
             logger.info(f"  - Total responses: {total_responses}")
             logger.info(f"  - Completed: {completed_responses}")
             logger.info(f"  - Abandoned: {abandoned_responses}")
@@ -2039,19 +2049,41 @@ class StudyResponseService:
             completion_reason = ""
             
             if expected_respondents > 0:
-                # Study has explicit expected respondents - check if total_responses equals expected
-                if total_responses >= expected_respondents:
+                # Primary rule: complete once the target number of respondents is fully completed.
+                if completed_responses >= expected_respondents:
                     should_complete = True
-                    completion_reason = f"total responses ({total_responses}) reached expected respondents ({expected_respondents})"
+                    completion_reason = (
+                        f"completed responses ({completed_responses}) reached expected respondents "
+                        f"({expected_respondents})"
+                    )
+                # Edge case: if all generated respondent slots are already consumed, no more work remains.
+                elif generated_pool > 0 and total_responses >= generated_pool:
+                    should_complete = True
+                    completion_reason = (
+                        f"total responses ({total_responses}) reached generated respondent pool "
+                        f"({generated_pool})"
+                    )
                 else:
-                    logger.info(f"Study {study.id} needs {expected_respondents - total_responses} more respondents to complete")
+                    logger.info(
+                        f"Study {study.id} needs {max(0, expected_respondents - completed_responses)} "
+                        "more completed respondents to reach target"
+                    )
             else:
-                # No expected respondents set, check if all current respondents have completed/abandoned
-                if total_responses > 0 and (completed_responses + abandoned_responses) >= total_responses:
+                # No explicit target: fall back to generated pool if available.
+                if generated_pool > 0 and total_responses >= generated_pool:
+                    should_complete = True
+                    completion_reason = (
+                        f"total responses ({total_responses}) reached generated respondent pool "
+                        f"({generated_pool})"
+                    )
+                elif total_responses > 0 and (completed_responses + abandoned_responses) >= total_responses:
                     should_complete = True
                     completion_reason = f"all {total_responses} current respondents completed/abandoned"
                 else:
-                    logger.info(f"Study {study.id} has {total_responses} total responses, {completed_responses} completed, {abandoned_responses} abandoned")
+                    logger.info(
+                        f"Study {study.id} has {total_responses} total responses, "
+                        f"{completed_responses} completed, {abandoned_responses} abandoned"
+                    )
             
             if should_complete:
                 logger.info(f"Study {study.id} auto-completion triggered: {completion_reason}")
@@ -2240,6 +2272,16 @@ class StudyResponseService:
         max_id = self.db.execute(stmt).scalar()
         
         return (max_id or 0) + 1
+
+    def _get_generated_respondent_capacity(self, tasks: Any) -> int:
+        """Count how many respondent slots were generated in the task matrix."""
+        if not isinstance(tasks, dict):
+            return 0
+
+        try:
+            return sum(1 for key in tasks if str(key).isdigit())
+        except Exception:
+            return 0
     
     def _calculate_respondent_task_count(self, tasks: Any, respondent_id: int) -> int:
         """Calculate the number of tasks assigned to a specific respondent."""
