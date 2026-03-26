@@ -424,6 +424,14 @@ class StudyResponseService:
         
         if response.is_completed:
             raise HTTPException(status_code=400, detail="Study already completed")
+        if response.is_abandoned or str(response.status or "") != "in_progress":
+            raise HTTPException(status_code=400, detail="Session is no longer active")
+
+        study_status = self.db.execute(
+            select(Study.status).where(Study.id == response.study_id)
+        ).scalar_one_or_none()
+        if str(study_status or "") == "completed":
+            raise HTTPException(status_code=400, detail="Study is no longer accepting submissions")
 
         # Idempotency: if same task already exists for this session, ignore duplicate submit.
         if self._completed_task_exists(response.id, request.task_id):
@@ -821,6 +829,14 @@ class StudyResponseService:
             raise HTTPException(status_code=404, detail="Session not found")
         if response.is_completed:
             raise HTTPException(status_code=400, detail="Study already completed")
+        if response.is_abandoned or str(response.status or "") != "in_progress":
+            raise HTTPException(status_code=400, detail="Session is no longer active")
+
+        study_status = self.db.execute(
+            select(Study.status).where(Study.id == response.study_id)
+        ).scalar_one_or_none()
+        if str(study_status or "") == "completed":
+            raise HTTPException(status_code=400, detail="Study is no longer accepting submissions")
 
         now_utc = datetime.utcnow()
         study_row: Optional[Study] = self.db.get(Study, response.study_id)
