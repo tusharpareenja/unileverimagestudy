@@ -9,7 +9,7 @@ import random
 import pandas as pd
 
 from sqlalchemy.orm import Session, selectinload, load_only
-from sqlalchemy import select, func, desc, and_, or_, text
+from sqlalchemy import select, func, desc, and_, or_, text, delete
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException, status
 
@@ -125,18 +125,20 @@ class StudyResponseService:
         )
         return self.db.execute(stmt).scalar_one_or_none()
 
-    def _completed_task_exists(self, study_response_id: UUID, task_id: str) -> bool:
-        """Check if a task_id is already stored for a response (idempotency guard)."""
-        exists_stmt = (
-            select(CompletedTask.id)
-            .where(
-                and_(
-                    CompletedTask.study_response_id == study_response_id,
-                    CompletedTask.task_id == task_id,
-                )
-            )
-            .limit(1)
-        )
+    def _completed_task_exists(
+        self,
+        study_response_id: UUID,
+        task_id: str,
+        task_type: Optional[str] = None,
+    ) -> bool:
+        """Check if a task is already stored for a response (phase-aware idempotency guard)."""
+        conditions = [
+            CompletedTask.study_response_id == study_response_id,
+            CompletedTask.task_id == task_id,
+        ]
+        if task_type is not None:
+            conditions.append(CompletedTask.task_type == task_type)
+        exists_stmt = select(CompletedTask.id).where(and_(*conditions)).limit(1)
         return self.db.execute(exists_stmt).scalar_one_or_none() is not None
     
     def get_response_by_respondent_id(self, respondent_id: int) -> Optional[StudyResponse]:
@@ -342,6 +344,25 @@ class StudyResponseService:
         self.db.delete(response)
         self.db.commit()
         return True
+
+    def delete_response_by_study_and_session(self, study_id: UUID, session_id: str) -> bool:
+        """
+        Fast path delete by (study_id, session_id).
+        Uses indexed filters and avoids loading ORM objects into memory.
+        """
+        stmt = delete(StudyResponse).where(
+            StudyResponse.study_id == study_id,
+            StudyResponse.session_id == session_id,
+        )
+        result = self.db.execute(stmt)
+        deleted = (result.rowcount or 0) > 0
+        if not deleted:
+            self.db.rollback()
+            return False
+
+        self._update_study_counters(study_id)
+        self.db.commit()
+        return True
     
     # ---------- Study Participation Flow ----------
     
@@ -433,17 +454,6 @@ class StudyResponseService:
         if str(study_status or "") == "completed":
             raise HTTPException(status_code=400, detail="Study is no longer accepting submissions")
 
-        # Idempotency: if same task already exists for this session, ignore duplicate submit.
-        if self._completed_task_exists(response.id, request.task_id):
-            # Release row lock quickly; no state changes.
-            self.db.commit()
-            return SubmitTaskResponse(
-                success=True,
-                next_task_index=response.current_task_index if not response.is_completed else None,
-                is_study_complete=bool(response.is_completed),
-                completion_percentage=float(response.completion_percentage or 0.0),
-            )
-        
         # Create completed task record (fast path - no heavy enrichment)
         now_utc = datetime.utcnow()
         # Accept visibility payload from either elements_shown_in_task or elements_shown
@@ -466,10 +476,18 @@ class StudyResponseService:
         if study_row and str(study_row.study_type) == 'hybrid':
             try:
                 if isinstance(study_row.tasks, dict):
-                    rk = str(response.respondent_id)
-                    tasks_for_r = study_row.tasks.get(rk)
+                    candidate_keys = [str(response.respondent_id), str(max(0, (response.respondent_id or 0) - 1))]
+                    tasks_for_r = None
+                    for rk in candidate_keys:
+                        val = study_row.tasks.get(rk)
+                        if isinstance(val, list):
+                            tasks_for_r = val
+                            break
                     if isinstance(tasks_for_r, list) and 0 <= response.current_task_index < len(tasks_for_r):
                         task_def = tasks_for_r[response.current_task_index] or {}
+                    else:
+                        task_def = study_row.tasks.get(str(response.current_task_index), {}) or {}
+                    if isinstance(task_def, dict):
                         task_phase_type = task_def.get('phase_type')
                         if task_phase_type in ('grid', 'text'):
                             effective_study_type = task_phase_type
@@ -579,6 +597,20 @@ class StudyResponseService:
             name_visibility = raw_visibility if isinstance(raw_visibility, dict) else {}
         # For hybrid studies, use the phase_type as task_type; otherwise use study_type
         task_type_value = task_phase_type if task_phase_type else (str(study_row.study_type) if study_row else None)
+
+        # Idempotency: ignore duplicate of same task_id within the same task phase/type.
+        if task_type_value in ('grid', 'text', 'layer') and self._completed_task_exists(
+            response.id,
+            request.task_id,
+            task_type=task_type_value,
+        ):
+            self.db.commit()
+            return SubmitTaskResponse(
+                success=True,
+                next_task_index=response.current_task_index if not response.is_completed else None,
+                is_study_complete=bool(response.is_completed),
+                completion_percentage=float(response.completion_percentage or 0.0),
+            )
         
         task_data = CompletedTaskCreate(
             task_id=request.task_id,
@@ -858,21 +890,16 @@ class StudyResponseService:
         interactions_to_insert: List[ElementInteraction] = []
         submitted = 0
         study_just_completed = False
-        existing_task_ids = set(
+        existing_task_keys = set(
             self.db.execute(
-                select(CompletedTask.task_id).where(CompletedTask.study_response_id == response.id)
-            ).scalars().all()
+                select(CompletedTask.task_id, CompletedTask.task_type).where(
+                    CompletedTask.study_response_id == response.id
+                )
+            ).all()
         )
         seen_in_payload = set()
 
         for item in request.tasks or []:
-            # Idempotency guards:
-            # 1) task already persisted for this session
-            # 2) duplicate task_id repeated inside same bulk payload
-            if item.task_id in existing_task_ids or item.task_id in seen_in_payload:
-                continue
-            seen_in_payload.add(item.task_id)
-
             # Build task model
             elements_shown_in_task = item.elements_shown_in_task or {}
             
@@ -894,6 +921,13 @@ class StudyResponseService:
                             if task_phase_type in ('grid', 'text'):
                                 effective_study_type = task_phase_type
                             break
+                    if task_phase_type not in ('grid', 'text'):
+                        task_def_fallback = tasks_dict.get(str(actual_task_index), {}) or {}
+                        if isinstance(task_def_fallback, dict):
+                            phase_fallback = task_def_fallback.get('phase_type')
+                            if phase_fallback in ('grid', 'text'):
+                                task_phase_type = phase_fallback
+                                effective_study_type = phase_fallback
                 except Exception:
                     pass
             
@@ -949,6 +983,15 @@ class StudyResponseService:
             
             # For hybrid studies, use the phase_type as task_type; otherwise use study_type
             task_type_value = task_phase_type if task_phase_type else (str(study_row.study_type) if study_row else None)
+            task_key = (item.task_id, task_type_value)
+            dedupe_allowed = task_type_value in ('grid', 'text', 'layer')
+            if dedupe_allowed:
+                # Idempotency guards (phase-aware):
+                # 1) task_id+task_type already persisted for this session
+                # 2) duplicate task_id+task_type repeated inside same bulk payload
+                if task_key in existing_task_keys or task_key in seen_in_payload:
+                    continue
+                seen_in_payload.add(task_key)
             
             task_model = CompletedTask(
                 task_id=item.task_id,
@@ -1030,7 +1073,8 @@ class StudyResponseService:
                     task_model.elements_shown_content = enriched
 
             tasks_to_insert.append(task_model)
-            existing_task_ids.add(item.task_id)
+            if dedupe_allowed:
+                existing_task_keys.add(task_key)
 
             # Queue interactions
             if item.element_interactions:
@@ -1998,11 +2042,11 @@ class StudyResponseService:
         return True
     
     def check_and_mark_abandoned_sessions(self) -> int:
-        """Check for sessions that have been inactive for 15+ minutes and mark them as abandoned."""
+        """Check for sessions that have been inactive for 60+ minutes and mark them as abandoned."""
         from datetime import timedelta
         
-        # Find sessions that are in_progress but haven't been active for 15+ minutes
-        cutoff_time = datetime.utcnow() - timedelta(minutes=15)
+        # Find sessions that are in_progress but haven't been active for 60+ minutes
+        cutoff_time = datetime.utcnow() - timedelta(minutes=60)
         
         abandoned_sessions = self.db.execute(
             select(StudyResponse)
@@ -2021,7 +2065,7 @@ class StudyResponseService:
             session.is_completed = False
             session.status = 'abandoned'
             session.abandonment_timestamp = datetime.utcnow()
-            session.abandonment_reason = 'Inactive for 15+ minutes'
+            session.abandonment_reason = 'Inactive for 60+ minutes'
             count += 1
         
         if count > 0:

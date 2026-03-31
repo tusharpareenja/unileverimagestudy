@@ -214,6 +214,22 @@ async def abandon_study(
         message="Study marked as abandoned" if success else "Failed to abandon study"
     )
 
+@router.get("/session/{session_id}/status")
+async def get_session_status(
+    session_id: str,
+    db: Session = Depends(get_db)
+):
+    """Lightweight status check - returns only completion state."""
+    service = StudyResponseService(db)
+    response = service.get_response_by_session(session_id)
+    if not response:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "is_completed": response.is_completed,
+        "completed_tasks_count": response.completed_tasks_count,
+        "total_tasks_assigned": response.total_tasks_assigned,
+    }
+
 @router.get("/session/{session_id}", response_model=StudyResponseDetail)
 async def get_session(
     session_id: str,
@@ -623,6 +639,32 @@ async def delete_response(
     
     return {"message": "Response deleted successfully"}
 
+
+@router.delete("/study/{study_id}/session/{session_id}")
+async def delete_response_by_study_session(
+    study_id: UUID,
+    session_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Delete one response by study ID + session ID.
+    Public endpoint with no ownership/member checks.
+    """
+    service = StudyResponseService(db)
+    deleted = service.delete_response_by_study_and_session(study_id, session_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Response for this session_id in the study was not found",
+        )
+
+    invalidate_study_cache(study_id)
+    return {
+        "message": "Session response cleared successfully",
+        "study_id": str(study_id),
+        "session_id": session_id,
+    }
+
 # ---------- Analytics Endpoints ----------
 
 @router.get("/analytics/study/{study_id}", response_model=StudyAnalytics)
@@ -797,7 +839,7 @@ async def check_abandoned_sessions(
     db: Session = Depends(get_db)
 ):
     """
-    Manually trigger check for sessions that should be marked as abandoned (15+ minutes inactive).
+    Manually trigger check for sessions that should be marked as abandoned (60+ minutes inactive).
     This endpoint can be called periodically or by a background task.
     """
     service = StudyResponseService(db)

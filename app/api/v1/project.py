@@ -978,6 +978,7 @@ def get_public_project_studies_endpoint(
     """
     from app.models.project_model import Project
     from app.models.study_model import Study
+    from app.models.user_model import User
     from fastapi import HTTPException
     from sqlalchemy import select
 
@@ -986,12 +987,15 @@ def get_public_project_studies_endpoint(
     if cached_data:
         return cached_data
 
-    # Verify project exists and get its name
-    project = db.execute(
-        select(Project.name).where(Project.id == project_id)
-    ).scalar_one_or_none()
+    # Verify project exists and get its name + creator email
+    project_row = db.execute(
+        select(Project.name, User.email)
+        .select_from(Project)
+        .join(User, User.id == Project.creator_id, isouter=True)
+        .where(Project.id == project_id)
+    ).first()
 
-    if not project:
+    if not project_row:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Get active studies for this project
@@ -1002,7 +1006,8 @@ def get_public_project_studies_endpoint(
     ).all()
 
     result = {
-        "project_name": project,
+        "project_name": project_row.name,
+        "creator_email": project_row.email,
         "studies": [
             {
                 "id": str(study.id),
