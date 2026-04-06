@@ -24,6 +24,8 @@ from app.schemas.project_schema import (
     ProjectMemberInvite, ProjectMemberOut, ProjectMemberUpdate,
     ValidateProductRequest, ValidateProductResponse,
     AssignStudyRequest, AssignStudyResponse,
+    ExportCompletedPanelistsRequest,
+    ExportAbandonedResponsesRequest,
 )
 from app.services import project_service
 from app.services.project_member_service import project_member_service
@@ -964,6 +966,276 @@ def get_export_job_status(
         response["error"] = job.error
 
     return response
+
+
+@router.post("/{project_id}/export-completed-panelists")
+def export_completed_panelists_endpoint(
+    project_id: UUID,
+    payload: ExportCompletedPanelistsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Export completed panelists from all studies in a project as CSV.
+    
+    Optimized for fast response using a single SQL query with joins.
+    
+    Args:
+        project_id: UUID of the project
+        payload: Optional time filters (after_utc, before_utc)
+    
+    Returns:
+        StreamingResponse with CSV data
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import text, and_
+    from datetime import datetime
+    
+    # Verify project exists and user has access
+    project = project_service.get_project(db=db, project_id=project_id, user_id=current_user.id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Build optimized single query with all joins
+    query = """
+        SELECT 
+            s.title as study_name,
+            s.id as study_id,
+            sr.panelist_id,
+            sr.respondent_id,
+            sr.session_id,
+            sr.is_completed,
+            sr.status,
+            sr.completion_percentage,
+            sr.session_start_time,
+            sr.session_end_time,
+            sr.total_study_duration
+        FROM study_responses sr
+        INNER JOIN studies s ON sr.study_id = s.id
+        WHERE s.project_id = :project_id
+          AND (sr.is_completed = true OR sr.status = 'completed')
+    """
+    params: Dict[str, Any] = {"project_id": str(project_id)}
+    
+    if payload.after_utc:
+        query += " AND sr.session_end_time >= :after_utc"
+        params["after_utc"] = payload.after_utc
+    
+    if payload.before_utc:
+        query += " AND sr.session_end_time < :before_utc"
+        params["before_utc"] = payload.before_utc
+    
+    query += " ORDER BY sr.session_end_time"
+    
+    # Execute query
+    results = db.execute(text(query), params).fetchall()
+    
+    # Generate CSV using streaming for memory efficiency
+    def generate_csv():
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow([
+            "study_name",
+            "study_id", 
+            "panelist_id",
+            "respondent_id",
+            "session_id",
+            "is_completed",
+            "status",
+            "completion_percentage",
+            "session_start_time",
+            "session_end_time",
+            "total_duration_seconds"
+        ])
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+        
+        # Write data rows in chunks for better streaming
+        for row in results:
+            writer.writerow([
+                row.study_name,
+                str(row.study_id),
+                row.panelist_id or "N/A",
+                row.respondent_id,
+                row.session_id,
+                row.is_completed,
+                row.status,
+                row.completion_percentage,
+                row.session_start_time.isoformat() if row.session_start_time else "",
+                row.session_end_time.isoformat() if row.session_end_time else "",
+                row.total_study_duration or 0
+            ])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+    
+    # Generate filename with timestamp
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    safe_project_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in project.name)
+    safe_project_name = safe_project_name.replace(" ", "_")[:50]
+    filename = f"completed_panelists_{safe_project_name}_{timestamp}.csv"
+    
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Total-Records": str(len(results))
+    }
+    
+    return StreamingResponse(
+        generate_csv(),
+        media_type="text/csv",
+        headers=headers
+    )
+
+
+@router.post("/{project_id}/export-abandoned-responses")
+def export_abandoned_responses_endpoint(
+    project_id: UUID,
+    payload: ExportAbandonedResponsesRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Export abandoned responses from all studies in a project as CSV.
+    
+    Includes panelist details, demographics, classification status, and task progress.
+    Optimized for fast response using a single SQL query with joins.
+    
+    Args:
+        project_id: UUID of the project
+        payload: Optional time filters (after_utc, before_utc)
+    
+    Returns:
+        StreamingResponse with CSV data
+    """
+    from fastapi import HTTPException
+    from sqlalchemy import text
+    from datetime import datetime
+    
+    # Verify project exists and user has access
+    project = project_service.get_project(db=db, project_id=project_id, user_id=current_user.id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Build optimized single query with classification count subquery
+    query = """
+        SELECT 
+            s.title as study_name,
+            s.id as study_id,
+            sr.panelist_id,
+            sr.product_id,
+            sr.respondent_id,
+            sr.session_id,
+            sr.personal_info,
+            sr.completed_tasks_count,
+            sr.total_tasks_assigned,
+            sr.completion_percentage,
+            sr.session_start_time,
+            sr.abandonment_timestamp,
+            sr.abandonment_reason,
+            sr.total_study_duration,
+            sr.last_activity,
+            (SELECT COUNT(*) FROM classification_answers ca WHERE ca.study_response_id = sr.id) as classification_count
+        FROM study_responses sr
+        INNER JOIN studies s ON sr.study_id = s.id
+        WHERE s.project_id = :project_id
+          AND sr.is_abandoned = true
+    """
+    params: Dict[str, Any] = {"project_id": str(project_id)}
+    
+    if payload.after_utc:
+        query += " AND sr.abandonment_timestamp >= :after_utc"
+        params["after_utc"] = payload.after_utc
+    
+    if payload.before_utc:
+        query += " AND sr.abandonment_timestamp < :before_utc"
+        params["before_utc"] = payload.before_utc
+    
+    query += " ORDER BY sr.abandonment_timestamp DESC"
+    
+    # Execute query
+    results = db.execute(text(query), params).fetchall()
+    
+    # Generate CSV using streaming for memory efficiency
+    def generate_csv():
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow([
+            "study_name",
+            "study_id",
+            "panelist_id",
+            "product_id",
+            "respondent_id",
+            "session_id",
+            "age",
+            "gender",
+            "did_classification",
+            "classification_questions_answered",
+            "tasks_completed",
+            "total_tasks",
+            "completion_percentage",
+            "session_start_time",
+            "abandonment_timestamp",
+            "abandonment_reason",
+            "total_duration_seconds",
+            "last_activity"
+        ])
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+        
+        # Write data rows
+        for row in results:
+            personal_info = row.personal_info or {}
+            age = personal_info.get("age", "N/A")
+            gender = personal_info.get("gender", "N/A")
+            classification_count = row.classification_count or 0
+            did_classification = "Yes" if classification_count > 0 else "No"
+            
+            writer.writerow([
+                row.study_name,
+                str(row.study_id),
+                row.panelist_id or "N/A",
+                row.product_id or "N/A",
+                row.respondent_id,
+                row.session_id,
+                age,
+                gender,
+                did_classification,
+                classification_count,
+                row.completed_tasks_count or 0,
+                row.total_tasks_assigned or 0,
+                row.completion_percentage or 0,
+                row.session_start_time.isoformat() if row.session_start_time else "",
+                row.abandonment_timestamp.isoformat() if row.abandonment_timestamp else "",
+                row.abandonment_reason or "",
+                row.total_study_duration or 0,
+                row.last_activity.isoformat() if row.last_activity else ""
+            ])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+    
+    # Generate filename with timestamp
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    safe_project_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in project.name)
+    safe_project_name = safe_project_name.replace(" ", "_")[:50]
+    filename = f"abandoned_responses_{safe_project_name}_{timestamp}.csv"
+    
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Total-Records": str(len(results))
+    }
+    
+    return StreamingResponse(
+        generate_csv(),
+        media_type="text/csv",
+        headers=headers
+    )
 
 
 @router.get("/public/{project_id}/studies")

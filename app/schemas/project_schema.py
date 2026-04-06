@@ -110,3 +110,15 @@ class ProjectMemberOut(BaseModel):
 class ProjectMemberUpdate(BaseModel):
     """Schema for updating a project member's role"""
     role: str = Field(..., description="New role: 'editor' or 'viewer'")
+
+
+class ExportCompletedPanelistsRequest(BaseModel):
+    """Request for exporting completed panelists from a project"""
+    after_utc: Optional[datetime] = Field(None, description="Only include panelists who completed after this UTC datetime")
+    before_utc: Optional[datetime] = Field(None, description="Only include panelists who completed before this UTC datetime")
+
+
+class ExportAbandonedResponsesRequest(BaseModel):
+    """Request for exporting abandoned responses from a project"""
+    after_utc: Optional[datetime] = Field(None, description="Only include responses abandoned after this UTC datetime")
+    before_utc: Optional[datetime] = Field(None, description="Only include responses abandoned before this UTC datetime")
