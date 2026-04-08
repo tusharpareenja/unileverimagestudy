@@ -57,7 +57,7 @@ def _generate_grid_tasks(
     progress_range: tuple = (20.0, 90.0),
 ) -> Dict[str, Any]:
     """Generate grid-style tasks for a phase."""
-    from app.services.task_generation_core import generate_grid_tasks_v2
+    from app.services.golden_task_generator import generate_grid_tasks_golden
 
     categories_data = []
     payload_categories = payload.get("categories") or []
@@ -99,12 +99,15 @@ def _generate_grid_tasks(
         except Exception:
             pass
 
+    tpr = int(payload.get("tasks_per_respondent") or 0)
+
     try:
-        result = generate_grid_tasks_v2(
+        result = generate_grid_tasks_golden(
             categories_data=categories_data,
             number_of_respondents=payload.get("audience_segmentation", {}).get("number_of_respondents", 0),
             exposure_tolerance_cv=payload.get("exposure_tolerance_cv", 1.0),
             seed=payload.get("seed"),
+            tasks_per_respondent=tpr,
             progress_callback=on_progress,
         )
         return result
@@ -120,7 +123,7 @@ def _generate_layer_tasks(job_id: str, payload: Dict) -> Dict[str, Any]:
     """Generate layer-style tasks."""
     from app.db.session import SessionLocal
     from app.models.study_model import Study
-    from app.services.task_generation_core import generate_layer_tasks_v2
+    from app.services.golden_task_generator import generate_layer_tasks_golden
 
     _update_job_progress(job_id, 10.0, "Planning layer task generation...")
 
@@ -130,7 +133,14 @@ def _generate_layer_tasks(job_id: str, payload: Dict) -> Dict[str, Any]:
             "name": layer.get("name", ""),
             "z_index": layer.get("z_index", 0),
             "order": layer.get("order", 0),
-            "images": [{"name": img.get("name", ""), "url": img.get("url", "")} for img in layer.get("images", [])],
+            "images": [
+                {
+                    "name": img.get("name", ""),
+                    "url": img.get("url", ""),
+                    "alt_text": img.get("alt_text", "") or "",
+                }
+                for img in layer.get("images", [])
+            ],
         }
         layers.append(layer_obj)
 
@@ -146,12 +156,15 @@ def _generate_layer_tasks(job_id: str, payload: Dict) -> Dict[str, Any]:
         except Exception:
             pass
 
+    tpr = int(payload.get("tasks_per_respondent") or 0)
+
     try:
-        result = generate_layer_tasks_v2(
+        result = generate_layer_tasks_golden(
             layers_data=layers,
             number_of_respondents=payload.get("audience_segmentation", {}).get("number_of_respondents", 0),
             exposure_tolerance_pct=payload.get("exposure_tolerance_pct", 2.0),
             seed=payload.get("seed"),
+            tasks_per_respondent=tpr,
             progress_callback=on_progress,
         )
     except RuntimeError as e:

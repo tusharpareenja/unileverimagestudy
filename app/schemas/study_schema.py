@@ -404,6 +404,10 @@ class GenerateTasksRequest(BaseModel):
     exposure_tolerance_cv: Optional[float] = None
     exposure_tolerance_pct: Optional[float] = None
     phase_order: Optional[List[str]] = None
+    tasks_per_respondent: Optional[int] = Field(
+        default=0,
+        description="Tasks per respondent; 0 = auto (Golden Matrix ceil(1.5×P)).",
+    )
     toggle_shuffle: Optional[bool] = None
     product_keys: Optional[List[ProductKey]] = None
     product_id: Optional[str] = None

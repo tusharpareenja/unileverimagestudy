@@ -88,14 +88,14 @@ def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents
                 ]
             })
         
-        # Generate preview tasks using the same algorithm but with fewer respondents
-        from app.services.task_generation_core import generate_grid_tasks_v2
+        from app.services.golden_task_generator import generate_grid_tasks_golden
         try:
-            result = generate_grid_tasks_v2(
+            result = generate_grid_tasks_golden(
                 categories_data=categories_data,
                 number_of_respondents=preview_respondents,
                 exposure_tolerance_cv=payload.exposure_tolerance_cv or 1.0,
                 seed=payload.seed,
+                tasks_per_respondent=int(payload.tasks_per_respondent or 0),
             )
             return result.get('tasks', {})
         except Exception:
@@ -129,6 +129,7 @@ def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents
                 number_of_respondents=preview_respondents,
                 exposure_tolerance_pct=payload.exposure_tolerance_pct or 2.0,
                 seed=payload.seed,
+                tasks_per_consumer=int(payload.tasks_per_respondent or 0),
             )
             return result.get('tasks', {})
         except Exception:
@@ -171,13 +172,14 @@ def _generate_preview_tasks(payload: GenerateTasksRequest, number_of_respondents
                     ]
                 })
             
-            from app.services.task_generation_core import generate_grid_tasks_v2
+            from app.services.golden_task_generator import generate_grid_tasks_golden
             try:
-                phase_result = generate_grid_tasks_v2(
+                phase_result = generate_grid_tasks_golden(
                     categories_data=cat_data,
                     number_of_respondents=preview_respondents,
                     exposure_tolerance_cv=payload.exposure_tolerance_cv or 1.0,
-                    seed=payload.seed
+                    seed=payload.seed,
+                    tasks_per_respondent=int(payload.tasks_per_respondent or 0),
                 )
                 phase_tasks = phase_result.get('tasks', {})
                 
@@ -1460,13 +1462,13 @@ def generate_tasks_from_body_endpoint(
             # If the quick preflight itself fails for unexpected reasons, proceed to generation as before
             pass
         
-        # Use v2 function directly with categories_data
-        from app.services.task_generation_core import generate_grid_tasks_v2
-        result = generate_grid_tasks_v2(
+        from app.services.golden_task_generator import generate_grid_tasks_golden
+        result = generate_grid_tasks_golden(
             categories_data=categories_data,
             number_of_respondents=payload.audience_segmentation.number_of_respondents,
             exposure_tolerance_cv=payload.exposure_tolerance_cv or 1.0,
             seed=payload.seed,
+            tasks_per_respondent=int(payload.tasks_per_respondent or 0),
         )
         # Persist tasks to draft study
         study_row.tasks = result.get('tasks', {})
@@ -1540,6 +1542,7 @@ def generate_tasks_from_body_endpoint(
             number_of_respondents=payload.audience_segmentation.number_of_respondents,
             exposure_tolerance_pct=payload.exposure_tolerance_pct or 2.0,
             seed=payload.seed,
+            tasks_per_consumer=int(payload.tasks_per_respondent or 0),
         )
         # Persist tasks to draft study
         study_row.tasks = result.get('tasks', {})

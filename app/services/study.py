@@ -1844,14 +1844,9 @@ def regenerate_tasks(
         )
         study.tasks = result.get('tasks', {})
         
-        # Optimized total calculation - cache metadata
         meta = result.get('metadata', {})
         tpc = meta.get('tasks_per_consumer')
-        try:
-            computed = int(tpc or 0) * int(number_of_respondents or 0)
-        except Exception:
-            computed = 0
-        # Fallback: count from generated tasks
+        computed = meta.get('capacity')
         if not computed and isinstance(study.tasks, dict):
             try:
                 computed = sum(len(v or []) for k, v in study.tasks.items() if str(k).isdigit())
@@ -1860,7 +1855,7 @@ def regenerate_tasks(
         resp_count = len([k for k in study.tasks if isinstance(study.tasks, dict) and str(k).isdigit()]) if isinstance(study.tasks, dict) else 'n/a'
         logger.debug("Regenerate grid computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
                      computed, tpc, number_of_respondents, resp_count)
-        computed_total = computed
+        computed_total = int(computed or 0)
 
     elif study.study_type == 'layer':
         # Cache constants to avoid repeated lookups
@@ -1898,13 +1893,9 @@ def regenerate_tasks(
             pass
         study.tasks = result.get('tasks', {})
         
-        # Optimized total calculation - cache metadata
         meta = result.get('metadata', {})
         tpc = meta.get('tasks_per_consumer')
-        try:
-            computed = int(tpc or 0) * int(number_of_respondents or 0)
-        except Exception:
-            computed = 0
+        computed = meta.get('capacity')
         if not computed and isinstance(study.tasks, dict):
             try:
                 computed = sum(len(v or []) for k, v in study.tasks.items() if str(k).isdigit())
@@ -1913,9 +1904,11 @@ def regenerate_tasks(
         resp_count = len([k for k in study.tasks if isinstance(study.tasks, dict) and str(k).isdigit()]) if isinstance(study.tasks, dict) else 'n/a'
         logger.debug("Regenerate layer computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
                      computed, tpc, number_of_respondents, resp_count)
-        computed_total = computed
+        computed_total = int(computed or 0)
 
     elif study.study_type == 'hybrid':
+        exposure_tolerance_cv = 1.0
+        seed = None
         phase_order = study.phase_order or []
         if not phase_order:
             raise HTTPException(status_code=400, detail="Hybrid study requires phase_order.")
@@ -1973,12 +1966,13 @@ def regenerate_tasks(
                     ]
                 })
             
-            from app.services.task_generation_core import generate_grid_tasks_v2
-            phase_result = generate_grid_tasks_v2(
+            from app.services.golden_task_generator import generate_grid_tasks_golden
+            phase_result = generate_grid_tasks_golden(
                 categories_data=cat_data,
                 number_of_respondents=number_of_respondents,
                 exposure_tolerance_cv=exposure_tolerance_cv,
-                seed=seed
+                seed=seed,
+                tasks_per_respondent=0,
             )
             
             phase_tasks = phase_result.get('tasks', {})
