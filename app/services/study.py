@@ -886,24 +886,12 @@ def get_study_public_minimal(db: Session, study_id: UUID) -> Optional[StudyPubli
     except Exception:
         respondents_target = 0
     
-    # Get number of tasks per respondent from study.tasks
+    # Get number of tasks per respondent using TaskService
     tasks_per_respondent = 0
     try:
-        # Load the study to access tasks
-        study = db.get(Study, study_id)
-        if study and study.tasks:
-            if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent (skip design_matrix key)
-                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
-                if first_respondent_key is not None:
-                    first_respondent_tasks = study.tasks[first_respondent_key]
-                    if isinstance(first_respondent_tasks, list):
-                        tasks_per_respondent = len(first_respondent_tasks)
-                    else:
-                        tasks_per_respondent = 1 if first_respondent_tasks else 0
-            elif isinstance(study.tasks, list):
-                # If tasks is a flat list, we can't determine per-respondent count
-                tasks_per_respondent = 0
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        tasks_per_respondent = task_service.get_tasks_per_respondent(study_id)
     except Exception:
         tasks_per_respondent = 0
     
@@ -974,24 +962,12 @@ def get_study_public_with_status_check(db: Session, study_id: UUID) -> Dict[str,
     except Exception:
         respondents_target = 0
     
-    # Get number of tasks per respondent from study.tasks
+    # Get number of tasks per respondent using TaskService
     tasks_per_respondent = 0
     try:
-        # Load the study to access tasks
-        study = db.get(Study, study_id)
-        if study and study.tasks:
-            if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent (skip design_matrix key)
-                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
-                if first_respondent_key is not None:
-                    first_respondent_tasks = study.tasks[first_respondent_key]
-                    if isinstance(first_respondent_tasks, list):
-                        tasks_per_respondent = len(first_respondent_tasks)
-                    else:
-                        tasks_per_respondent = 1 if first_respondent_tasks else 0
-            elif isinstance(study.tasks, list):
-                # If tasks is a flat list, we can't determine per-respondent count
-                tasks_per_respondent = 0
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        tasks_per_respondent = task_service.get_tasks_per_respondent(study_id)
     except Exception:
         tasks_per_respondent = 0
     
@@ -1047,24 +1023,12 @@ def get_study_public_preview(db: Session, study_id: UUID) -> Dict[str, Any]:
     except Exception:
         respondents_target = 0
     
-    # Get number of tasks per respondent from study.tasks
+    # Get number of tasks per respondent using TaskService
     tasks_per_respondent = 0
     try:
-        # Load the study to access tasks
-        study = db.get(Study, study_id)
-        if study and study.tasks:
-            if isinstance(study.tasks, dict) and study.tasks:
-                # Get tasks for the first respondent (skip design_matrix key)
-                first_respondent_key = next((k for k in study.tasks if str(k).isdigit()), None)
-                if first_respondent_key is not None:
-                    first_respondent_tasks = study.tasks[first_respondent_key]
-                    if isinstance(first_respondent_tasks, list):
-                        tasks_per_respondent = len(first_respondent_tasks)
-                    else:
-                        tasks_per_respondent = 1 if first_respondent_tasks else 0
-            elif isinstance(study.tasks, list):
-                # If tasks is a flat list, we can't determine per-respondent count
-                tasks_per_respondent = 0
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        tasks_per_respondent = task_service.get_tasks_per_respondent(study_id)
     except Exception:
         tasks_per_respondent = 0
     
@@ -1842,17 +1806,20 @@ def regenerate_tasks(
             db=db,
             study_id=str(study.id)
         )
-        study.tasks = result.get('tasks', {})
+        tasks = result.get('tasks', {})
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        task_service.save_tasks(study.id, tasks)
         
         meta = result.get('metadata', {})
         tpc = meta.get('tasks_per_consumer')
         computed = meta.get('capacity')
-        if not computed and isinstance(study.tasks, dict):
+        if not computed and isinstance(tasks, dict):
             try:
-                computed = sum(len(v or []) for k, v in study.tasks.items() if str(k).isdigit())
+                computed = sum(len(v or []) for k, v in tasks.items() if str(k).isdigit())
             except Exception:
                 computed = 0
-        resp_count = len([k for k in study.tasks if isinstance(study.tasks, dict) and str(k).isdigit()]) if isinstance(study.tasks, dict) else 'n/a'
+        resp_count = len([k for k in tasks if isinstance(tasks, dict) and str(k).isdigit()]) if isinstance(tasks, dict) else 'n/a'
         logger.debug("Regenerate grid computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
                      computed, tpc, number_of_respondents, resp_count)
         computed_total = int(computed or 0)
@@ -1891,17 +1858,20 @@ def regenerate_tasks(
                     result['metadata'] = meta_tmp
         except Exception:
             pass
-        study.tasks = result.get('tasks', {})
+        tasks = result.get('tasks', {})
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        task_service.save_tasks(study.id, tasks)
         
         meta = result.get('metadata', {})
         tpc = meta.get('tasks_per_consumer')
         computed = meta.get('capacity')
-        if not computed and isinstance(study.tasks, dict):
+        if not computed and isinstance(tasks, dict):
             try:
-                computed = sum(len(v or []) for k, v in study.tasks.items() if str(k).isdigit())
+                computed = sum(len(v or []) for k, v in tasks.items() if str(k).isdigit())
             except Exception:
                 computed = 0
-        resp_count = len([k for k in study.tasks if isinstance(study.tasks, dict) and str(k).isdigit()]) if isinstance(study.tasks, dict) else 'n/a'
+        resp_count = len([k for k in tasks if isinstance(tasks, dict) and str(k).isdigit()]) if isinstance(tasks, dict) else 'n/a'
         logger.debug("Regenerate layer computed total_tasks=%s (tpc=%s, nresp=%s, tasks_keys=%s)",
                      computed, tpc, number_of_respondents, resp_count)
         computed_total = int(computed or 0)
@@ -2015,7 +1985,9 @@ def regenerate_tasks(
                     t['task_index'] = idx
                 combined_tasks[resp_id] = t_list
 
-        study.tasks = combined_tasks
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        task_service.save_tasks(study.id, combined_tasks)
         # Simple count for computed_total
         computed_total = sum(len(v) for k, v in combined_tasks.items() if str(k).isdigit()) if combined_tasks else 0
 
@@ -2049,7 +2021,12 @@ def validate_tasks(
     owner_id: UUID
 ) -> ValidateTasksResponse:
     study = _load_owned_study(db, study_id, owner_id, for_update=False)
-    if not study.tasks:
+    
+    from app.services.task_service import TaskService
+    task_service = TaskService(db)
+    tasks = task_service.get_all_tasks_as_dict(study_id)
+    
+    if not tasks:
         return ValidateTasksResponse(validation_passed=False, issues=["No tasks generated"], totals={})
 
     issues: List[str] = []
@@ -2058,7 +2035,7 @@ def validate_tasks(
 
     if study.study_type in ('grid', 'text', 'hybrid'):
         # Basic structural checks (skip design_matrix key)
-        for respondent, task_list in study.tasks.items():
+        for respondent, task_list in tasks.items():
             if not str(respondent).isdigit():
                 continue
             if not isinstance(task_list, list):
@@ -2067,11 +2044,11 @@ def validate_tasks(
                 elements_shown = task.get("elements_shown", {})
                 active_count = sum(1 for k, v in elements_shown.items() if not k.endswith('_content') and int(v or 0) == 1)
 
-        totals['respondents'] = len([k for k in study.tasks if str(k).isdigit()])
+        totals['respondents'] = len([k for k in tasks if str(k).isdigit()])
 
     elif study.study_type == 'layer':
         # Check structure presence only (skip design_matrix key)
-        for respondent, task_list in study.tasks.items():
+        for respondent, task_list in tasks.items():
             if not str(respondent).isdigit():
                 continue
             if not isinstance(task_list, list):
@@ -2080,7 +2057,7 @@ def validate_tasks(
                 if "elements_shown" not in task and "elements_shown_content" not in task:
                     issues.append(f"Task {task.get('task_id')} missing elements_shown/_content.")
 
-        totals['respondents'] = len([k for k in study.tasks if str(k).isdigit()])
+        totals['respondents'] = len([k for k in tasks if str(k).isdigit()])
 
     else:
         issues.append(f"Unsupported study type {study.study_type}")

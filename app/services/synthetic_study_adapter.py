@@ -4,11 +4,11 @@ Build a study_data dict in the shape expected by synthetic_respondents
 """
 from __future__ import annotations
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from uuid import UUID
 
 # Study is typed generically to avoid circular imports; caller passes loaded Study with relationships
-def build_study_data_for_synthetic(study: Any) -> Dict[str, Any]:
+def build_study_data_for_synthetic(study: Any, tasks: Optional[Dict[str, Any]] = None, db: Any = None) -> Dict[str, Any]:
     """
     Build a single dict in the shape expected by app.synthetic.panelist_generator
     and app.synthetic.ai_respondent from a loaded Study ORM instance.
@@ -113,8 +113,18 @@ def build_study_data_for_synthetic(study: Any) -> Dict[str, Any]:
                     "category_name": cat.name,
                 })
     
-    # Tasks: use as-is; must be dict with string keys "1", "2", ... and list of task dicts with elements_shown, elements_shown_content
-    tasks = study.tasks
+    # Tasks: use provided tasks, or load using TaskService if db is available
+    if tasks is None:
+        if db is not None:
+            try:
+                from app.services.task_service import TaskService
+                task_service = TaskService(db)
+                tasks = task_service.get_all_tasks_as_dict(study.id)
+            except Exception:
+                tasks = {}
+        else:
+            # Fallback to legacy study.tasks
+            tasks = study.tasks
     if tasks is not None and not isinstance(tasks, dict):
         tasks = {}
     

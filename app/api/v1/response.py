@@ -296,31 +296,23 @@ async def get_session(
     except Exception:
         response_dict["background_image_url"] = None
 
-    # Enrich completed tasks with elements_shown_content from study.tasks if missing
+    # Enrich completed tasks with elements_shown_content from task assignments if missing
     try:
         if response_dict.get("completed_tasks") and response_dict.get("study_id"):
-            from app.models.study_model import Study as StudyModel
-            study_row = db.execute(
-                select(StudyModel).where(StudyModel.id == response.study_id)
-            ).scalar_one_or_none()
-            if study_row and isinstance(study_row.tasks, dict):
-                # Respondent keys in generated tasks are 0-based; sessions may be 1-based.
-                resp_id = response_dict.get("respondent_id")
-                keys_to_try = [str(resp_id), str(max(0, (resp_id or 0) - 1))]
-                respondent_tasks = []
-                for k in keys_to_try:
-                    respondent_tasks = study_row.tasks.get(k)
-                    if respondent_tasks:
-                        break
-                index_to_content = {
-                    int(t.get("task_index")): t.get("elements_shown_content")
-                    for t in (respondent_tasks or []) if isinstance(t, dict)
-                }
-                for ct in response_dict.get("completed_tasks", []):
-                    if ct.get("elements_shown_content") is None:
-                        task_index = ct.get("task_index")
-                        if task_index in index_to_content:
-                            ct["elements_shown_content"] = index_to_content[task_index]
+            from app.services.task_service import TaskService
+            task_service = TaskService(db)
+            resp_id = response_dict.get("respondent_id")
+            respondent_tasks = task_service.get_respondent_tasks(response.study_id, resp_id)
+            
+            index_to_content = {
+                int(t.get("task_index")): t.get("elements_shown_content")
+                for t in (respondent_tasks or []) if isinstance(t, dict)
+            }
+            for ct in response_dict.get("completed_tasks", []):
+                if ct.get("elements_shown_content") is None:
+                    task_index = ct.get("task_index")
+                    if task_index in index_to_content:
+                        ct["elements_shown_content"] = index_to_content[task_index]
     except Exception:
         # Non-fatal enrichment
         pass

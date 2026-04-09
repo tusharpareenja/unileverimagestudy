@@ -273,10 +273,11 @@ def _generate_hybrid_tasks(job_id: str, payload: Dict) -> Dict[str, Any]:
 
 
 def _save_results(job_id: str, study_id: str, user_id: str, payload: Dict, result: Dict[str, Any]) -> None:
-    """Save generated tasks to the study."""
+    """Save generated tasks to the study_task_assignments table."""
     from uuid import UUID
     from app.db.session import SessionLocal
     from app.models.study_model import Study, StudyMember
+    from app.services.task_service import TaskService
 
     db = SessionLocal()
     try:
@@ -295,7 +296,11 @@ def _save_results(job_id: str, study_id: str, user_id: str, payload: Dict, resul
         if not study:
             raise ValueError(f"Study {study_id} not found or access denied")
 
-        study.tasks = result.get("tasks", {})
+        tasks = result.get("tasks", {})
+        
+        task_service = TaskService(db)
+        task_count = task_service.save_tasks(UUID(study_id), tasks)
+        logger.info(f"Saved {task_count} task assignments for study {study_id}")
 
         last_step_val = payload.get("last_step")
         if last_step_val is not None and isinstance(last_step_val, int):
@@ -304,7 +309,7 @@ def _save_results(job_id: str, study_id: str, user_id: str, payload: Dict, resul
                 study.last_step = last_step_val
 
         db.commit()
-        logger.info(f"Saved tasks for study {study_id}")
+        logger.info(f"Completed saving tasks for study {study_id}")
     finally:
         try:
             db.close()

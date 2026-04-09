@@ -43,7 +43,7 @@ def get_max_panelist_combinations(db: Session, study_id: UUID) -> Optional[int]:
     study = db.get(Study, study_id)
     if not study:
         return None
-    study_data = build_study_data_for_synthetic(study)
+    study_data = build_study_data_for_synthetic(study, db=db)
     tasks = study_data.get("tasks") or {}
     if not isinstance(tasks, dict) or len(tasks) == 0:
         return None
@@ -168,7 +168,7 @@ def run_simulation(
         study = db.get(Study, study_id)
         if not study:
             return {"success": False, "respondents_simulated": 0, "message": "Study not found", "error": "Study not found"}
-        study_data = build_study_data_for_synthetic(study)
+        study_data = build_study_data_for_synthetic(study, db=db)
     study_data["is_special_creator"] = is_special_creator
     study_data["randomize"] = randomize
     

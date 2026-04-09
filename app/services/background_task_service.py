@@ -715,8 +715,9 @@ class BackgroundTaskService:
         return result
     
     async def _save_results(self, job: Job, payload: Dict, result: Dict[str, Any], db: Session):
-        """Save generated tasks to the study"""
+        """Save generated tasks to the study_task_assignments table"""
         from app.models.study_model import Study
+        from app.services.task_service import TaskService
         
         study = db.query(Study).filter(
             Study.id == job.study_id,
@@ -725,7 +726,6 @@ class BackgroundTaskService:
         
         if not study:
            # Try to find by member access if creator check fails (unified access)
-           # We use the same unified logic as implemented earlier
            from app.models.study_model import StudyMember
            stmt_member = db.query(Study).join(StudyMember).filter(
                Study.id == job.study_id,
@@ -736,7 +736,10 @@ class BackgroundTaskService:
         if not study:
             raise ValueError(f"Study {job.study_id} not found or access denied")
         
-        study.tasks = result.get('tasks', {})
+        tasks = result.get('tasks', {})
+        task_service = TaskService(db)
+        task_count = task_service.save_tasks(job.study_id, tasks)
+        logger.info(f"Saved {task_count} task assignments for study {job.study_id}")
         
         last_step_val = payload.get('last_step')
         if last_step_val is not None and isinstance(last_step_val, int):
@@ -751,7 +754,7 @@ class BackgroundTaskService:
         if result:
             result['last_step'] = study.last_step
         
-        logger.info(f"Saved tasks for study {job.study_id}")
+        logger.info(f"Completed saving tasks for study {job.study_id}")
     
     async def _launch_study(self, job: Job, payload: Dict, db: Session):
         """Launch study"""

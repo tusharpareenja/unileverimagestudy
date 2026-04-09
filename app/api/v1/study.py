@@ -530,7 +530,10 @@ def simulate_ai_respondents_endpoint(
     Body (optional): max_respondents, is_special_creator, randomize. If is_special_creator=true, AI rates only 1 or 5. If randomize=true, use fallback (random) ratings instead of ChatGPT.
     """
     study = study_service.get_study(db=db, study_id=study_id, owner_id=current_user.id)
-    if not study.tasks or not isinstance(study.tasks, dict) or len(study.tasks) == 0:
+    
+    from app.services.task_service import TaskService
+    task_service = TaskService(db)
+    if not task_service.has_tasks(study_id):
         raise HTTPException(status_code=400, detail="Study has no tasks. Generate tasks first.")
     if not study.classification_questions or len(study.classification_questions) == 0:
         raise HTTPException(status_code=400, detail="Study has no classification questions.")
@@ -544,9 +547,8 @@ def simulate_ai_respondents_endpoint(
     N = body_max if body_max is not None and body_max >= 1 else (max_respondents if max_respondents is not None and max_respondents >= 1 else int(seg.get("number_of_respondents") or 0))
     if N <= 0:
         try:
-            task_keys = [k for k in study.tasks if str(k).isdigit()]
-            N = max(int(k) for k in task_keys) if task_keys else 0
-        except (ValueError, TypeError):
+            N = task_service.get_respondent_count(study_id)
+        except Exception:
             N = 0
     if N <= 0:
         raise HTTPException(status_code=400, detail="Could not determine number of respondents (set audience_segmentation.number_of_respondents or ensure tasks have numeric keys).")
@@ -1470,8 +1472,12 @@ def generate_tasks_from_body_endpoint(
             seed=payload.seed,
             tasks_per_respondent=int(payload.tasks_per_respondent or 0),
         )
-        # Persist tasks to draft study
-        study_row.tasks = result.get('tasks', {})
+        # Persist tasks to new table
+        tasks = result.get('tasks', {})
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        task_service.save_tasks(study_row.id, tasks)
+        
         # Update last_step if provided and greater than current
         if payload.last_step is not None:
             current_step = getattr(study_row, 'last_step', 1) or 1
@@ -1482,7 +1488,7 @@ def generate_tasks_from_body_endpoint(
         db.refresh(study_row)
         return GenerateTasksResult(
             last_step=getattr(study_row, 'last_step', None),
-            tasks=result.get('tasks', {}),
+            tasks=tasks,
             metadata={
                 **result.get('metadata', {}),
                 "study_id": str(study_row.id)
@@ -1544,8 +1550,12 @@ def generate_tasks_from_body_endpoint(
             seed=payload.seed,
             tasks_per_consumer=int(payload.tasks_per_respondent or 0),
         )
-        # Persist tasks to draft study
-        study_row.tasks = result.get('tasks', {})
+        # Persist tasks to new table
+        tasks = result.get('tasks', {})
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        task_service.save_tasks(study_row.id, tasks)
+        
         # Update last_step if provided and greater than current
         if payload.last_step is not None:
             current_step = getattr(study_row, 'last_step', 1) or 1
@@ -1568,7 +1578,7 @@ def generate_tasks_from_body_endpoint(
             meta['aspect_ratio'] = ar
         return GenerateTasksResult(
             last_step=getattr(study_row, 'last_step', None),
-            tasks=result.get('tasks', {}),
+            tasks=tasks,
             metadata=meta
         )
     else:
@@ -1861,8 +1871,12 @@ def get_task_generation_result(
         # If any unexpected serialization issue occurs, fall back without layers
         layers = []
 
+    # Load tasks using TaskService
+    from app.services.task_service import TaskService
+    task_service = TaskService(db)
+    enriched_tasks = task_service.get_all_tasks_as_dict(UUID(job.study_id))
+    
     # Enrich tasks with transform inside each non-null elements_shown_content entry
-    enriched_tasks = study.tasks or {}
     try:
         # Build layer_name -> transform map (default when missing)
         transform_map = {}
@@ -1884,8 +1898,8 @@ def get_task_generation_result(
             new_tasks[respondent_id] = new_task_list
         enriched_tasks = new_tasks
     except Exception:
-        # On any enrichment error, return original tasks
-        enriched_tasks = study.tasks
+        # On any enrichment error, keep tasks as loaded
+        pass
 
     return {
         "job_id": job.job_id,
@@ -1893,7 +1907,7 @@ def get_task_generation_result(
         "status": job.status.value,
         "tasks": enriched_tasks,
         "metadata": {
-            "total_respondents": len([k for k in study.tasks if str(k).isdigit()]) if (study.tasks and isinstance(study.tasks, dict)) else (len(study.tasks) if study.tasks else 0),
+            "total_respondents": len([k for k in enriched_tasks if str(k).isdigit()]) if isinstance(enriched_tasks, dict) else 0,
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,
             "message": "Task generation completed successfully"
         },

@@ -81,6 +81,7 @@ class Study(Base):
     study_responses = relationship("StudyResponse", back_populates="study", cascade="all, delete-orphan", lazy="noload")
     members = relationship("StudyMember", back_populates="study", cascade="all, delete-orphan", lazy="selectin")
     filter_history = relationship("StudyFilterHistory", back_populates="study", cascade="all, delete-orphan", lazy="noload")
+    task_assignments = relationship("StudyTaskAssignment", back_populates="study", cascade="all, delete-orphan", lazy="noload")
 
     __table_args__ = (
         UniqueConstraint('share_token', name='uq_studies_share_token'),
@@ -243,6 +244,36 @@ class StudyMember(Base):
         UniqueConstraint('study_id', 'invited_email', name='uq_study_members_study_email'),
         Index('idx_study_members_study_id_role', 'study_id', 'role'),
         Index('idx_study_members_user_id', 'user_id'),
+    )
+
+
+class StudyTaskAssignment(Base):
+    """
+    Normalized storage for task assignments per respondent.
+    Replaces the study.tasks JSONB blob to avoid PostgreSQL size limits.
+    Each row represents one task for one respondent.
+    """
+    __tablename__ = "study_task_assignments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    study_id = Column(UUID(as_uuid=True), ForeignKey('studies.id', ondelete='CASCADE'), nullable=False, index=True)
+    
+    respondent_id = Column(Integer, nullable=False)
+    task_index = Column(Integer, nullable=False)
+    task_id = Column(String(50), nullable=False)
+    
+    elements_shown = Column(JSONB, nullable=False)
+    elements_shown_content = Column(JSONB, nullable=True)
+    phase_type = Column(String(20), nullable=True)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    study = relationship("Study", back_populates="task_assignments", lazy="noload")
+
+    __table_args__ = (
+        UniqueConstraint('study_id', 'respondent_id', 'task_index', name='uq_study_task_assignment'),
+        Index('idx_sta_study_respondent', 'study_id', 'respondent_id'),
+        Index('idx_sta_study', 'study_id'),
     )
 
 

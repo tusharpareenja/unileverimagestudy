@@ -68,14 +68,10 @@ class StudyResponseService:
         def _payload_builder(respondent_id: int) -> Dict[str, Any]:
             total_tasks_assigned = 0
             try:
-                if isinstance(study.tasks, list):
-                    total_tasks_assigned = len(study.tasks)
-                elif isinstance(study.tasks, dict):
-                    per_resp = study.tasks.get(str(respondent_id))
-                    if isinstance(per_resp, list):
-                        total_tasks_assigned = len(per_resp)
-                    else:
-                        total_tasks_assigned = len([k for k in study.tasks if str(k).isdigit()])
+                from app.services.task_service import TaskService
+                task_service = TaskService(self.db)
+                respondent_tasks = task_service.get_respondent_tasks(study.id, respondent_id)
+                total_tasks_assigned = len(respondent_tasks)
             except Exception:
                 total_tasks_assigned = 0
 
@@ -164,33 +160,9 @@ class StudyResponseService:
     
     def get_respondent_tasks(self, study_id: UUID, respondent_id: int) -> List[Dict[str, Any]]:
         """Get tasks assigned to a specific respondent."""
-        # Get the study to access tasks
-        study = self.db.get(Study, study_id)
-        if not study or not study.tasks:
-            return []
-        
-        # Handle different task structures
-        if isinstance(study.tasks, list):
-            # Flat list of tasks - return all tasks
-            return study.tasks
-        elif isinstance(study.tasks, dict):
-            # Per-respondent tasks or index-keyed tasks
-            respondent_key = str(respondent_id)
-            if respondent_key in study.tasks:
-                tasks = study.tasks[respondent_key]
-                if isinstance(tasks, list):
-                    return tasks
-                else:
-                    return [tasks] if tasks else []
-            else:
-                # Fallback: return tasks keyed by numeric strings (0, 1, 2, ...) - skip design_matrix
-                numeric_tasks = []
-                for key, value in study.tasks.items():
-                    if str(key).isdigit():
-                        numeric_tasks.append(value)
-                return numeric_tasks
-        
-        return []
+        from app.services.task_service import TaskService
+        task_service = TaskService(self.db)
+        return task_service.get_respondent_tasks(study_id, respondent_id)
     
     def get_response_detail_by_session(self, session_id: str) -> Optional[StudyResponse]:
         """Get a study response by session ID with related details, optimized for speed."""
@@ -380,14 +352,17 @@ class StudyResponseService:
         if study_row.status != 'active':
             raise HTTPException(status_code=400, detail="Study is not active")
         
-        if not study_row.tasks or len(study_row.tasks) == 0:
+        from app.services.task_service import TaskService
+        task_service = TaskService(self.db)
+        if not task_service.has_tasks(request.study_id):
             raise HTTPException(status_code=400, detail="Study has no tasks")
         
         # Generate IDs - session_id without DB query, respondent_id with proper sequential logic
         from uuid import uuid4 as _uuid4
         session_id = f"session_{_uuid4().hex[:16]}"
         def _payload_builder(respondent_id: int) -> Dict[str, Any]:
-            total_tasks_assigned = self._calculate_respondent_task_count(study_row.tasks, respondent_id)
+            respondent_tasks = task_service.get_respondent_tasks(request.study_id, respondent_id)
+            total_tasks_assigned = len(respondent_tasks)
             return {
                 "study_id": request.study_id,
                 "session_id": session_id,
@@ -475,22 +450,15 @@ class StudyResponseService:
         task_phase_type: Optional[str] = None
         if study_row and str(study_row.study_type) == 'hybrid':
             try:
-                if isinstance(study_row.tasks, dict):
-                    candidate_keys = [str(response.respondent_id), str(max(0, (response.respondent_id or 0) - 1))]
-                    tasks_for_r = None
-                    for rk in candidate_keys:
-                        val = study_row.tasks.get(rk)
-                        if isinstance(val, list):
-                            tasks_for_r = val
-                            break
-                    if isinstance(tasks_for_r, list) and 0 <= response.current_task_index < len(tasks_for_r):
-                        task_def = tasks_for_r[response.current_task_index] or {}
-                    else:
-                        task_def = study_row.tasks.get(str(response.current_task_index), {}) or {}
-                    if isinstance(task_def, dict):
-                        task_phase_type = task_def.get('phase_type')
-                        if task_phase_type in ('grid', 'text'):
-                            effective_study_type = task_phase_type
+                from app.services.task_service import TaskService
+                task_service = TaskService(self.db)
+                task_def = task_service.get_task_by_index(
+                    study_row.id, response.respondent_id, response.current_task_index
+                )
+                if task_def:
+                    task_phase_type = task_def.get('phase_type')
+                    if task_phase_type in ('grid', 'text'):
+                        effective_study_type = task_phase_type
             except Exception:
                 pass
         
@@ -501,17 +469,16 @@ class StudyResponseService:
             ).scalars().all()
             id_to_name: Dict[str, str] = {str(e.element_id).upper(): e.name for e in elements}
 
-            # If client didn't send anything, try fallback from study.tasks
+            # If client didn't send anything, try fallback from task service
             payload = raw_visibility
             if not isinstance(payload, dict) or len(payload) == 0:
                 try:
-                    if isinstance(study_row.tasks, dict):
-                        rk = str(response.respondent_id)
-                        tasks_for_r = study_row.tasks.get(rk)
-                        if isinstance(tasks_for_r, list) and 0 <= response.current_task_index < len(tasks_for_r):
-                            task_def = tasks_for_r[response.current_task_index] or {}
-                        else:
-                            task_def = study_row.tasks.get(str(response.current_task_index), {}) or {}
+                    from app.services.task_service import TaskService
+                    task_service = TaskService(self.db)
+                    task_def = task_service.get_task_by_index(
+                        study_row.id, response.respondent_id, response.current_task_index
+                    )
+                    if task_def:
                         payload = task_def.get('elements_shown_in_task') or task_def.get('elements_shown') or {}
                 except Exception:
                     payload = {}
@@ -636,18 +603,16 @@ class StudyResponseService:
                 layer_payload = getattr(request, 'layers_shown_in_task', None) or getattr(request, 'elements_shown_content', None)
             except Exception:
                 layer_payload = None
-            # Fallback to task definition from study.tasks
+            # Fallback to task definition from task service
             if layer_payload is None or layer_payload == {}:
                 try:
-                    task_def = None
-                    if isinstance(study_row.tasks, dict):
-                        rk = str(response.respondent_id)
-                        tasks_for_r = study_row.tasks.get(rk)
-                        if isinstance(tasks_for_r, list) and 0 <= response.current_task_index - 1 < len(tasks_for_r):
-                            task_def = tasks_for_r[response.current_task_index - 1] or {}
-                        else:
-                            task_def = study_row.tasks.get(str(response.current_task_index - 1), {}) or {}
-                    if isinstance(task_def, dict):
+                    from app.services.task_service import TaskService
+                    task_service = TaskService(self.db)
+                    # Note: current_task_index is 1-based after increment, so use -1 for 0-based lookup
+                    task_def = task_service.get_task_by_index(
+                        study_row.id, response.respondent_id, response.current_task_index - 1
+                    )
+                    if task_def:
                         layer_payload = task_def.get('layers_shown_in_task') or task_def.get('elements_shown_content')
                 except Exception:
                     layer_payload = None
@@ -660,7 +625,10 @@ class StudyResponseService:
         # For grid/text studies (or hybrid with grid/text phase), if elements_shown_content is missing, hydrate from generated tasks
         if study_row and effective_study_type in ('grid', 'text'):
             try:
-                if completed_task.elements_shown_content is None and isinstance(study_row.tasks, dict):
+                if completed_task.elements_shown_content is None:
+                    from app.services.task_service import TaskService
+                    task_service = TaskService(self.db)
+                    
                     # Resolve respondent and task index from task_id when possible
                     rid_from_task = None
                     idx_from_task = None
@@ -673,42 +641,31 @@ class StudyResponseService:
                         rid_from_task = None
                         idx_from_task = None
 
-                    # Prefer exact respondent key; try 0-based then 1-based
-                    candidate_keys = []
-                    if rid_from_task is not None:
-                        candidate_keys.extend([str(rid_from_task), str(max(0, rid_from_task - 1))])
-                    candidate_keys.extend([str(response.respondent_id), str(max(0, (response.respondent_id or 0) - 1))])
-                    tasks_for_r = None
-                    for k in candidate_keys:
-                        val = (study_row.tasks or {}).get(k)
-                        if isinstance(val, list):
-                            tasks_for_r = val
-                            break
-                    if isinstance(tasks_for_r, list):
-                        # Use index from task_id when present; else current_task_index (1-based -> 0-based)
-                        idx = idx_from_task if isinstance(idx_from_task, int) else max(0, (response.current_task_index or 1) - 1)
-                        if 0 <= idx < len(tasks_for_r):
-                            tdef = tasks_for_r[idx]
-                            if isinstance(tdef, dict):
-                                esc = tdef.get('elements_shown_content')
-                                if esc:
-                                    # Store name, url, visible per key; normalize key to CategoryName_ImageName
-                                    out_map = {}
-                                    vis_map = completed_task.elements_shown_in_task or {}
-                                    for k, v in esc.items():
-                                        if isinstance(v, dict):
-                                            # Derive category name from key like "Category 1_4"
-                                            cat_name = k.rsplit('_', 1)[0] if isinstance(k, str) and '_' in k else ''
-                                            elem_name = v.get('name')
-                                            new_key = f"{cat_name}_{elem_name}" if cat_name and elem_name else k
-                                            out_map[new_key] = {
-                                                "name": elem_name,
-                                                "url": v.get('content'),
-                                                "visible": 1 if vis_map.get(k) or vis_map.get(new_key) else 0,
-                                            }
-                                        else:
-                                            out_map[k] = None
-                                    completed_task.elements_shown_content = out_map
+                    # Determine respondent_id and task_index for lookup
+                    lookup_respondent = rid_from_task if rid_from_task is not None else response.respondent_id
+                    lookup_index = idx_from_task if isinstance(idx_from_task, int) else max(0, (response.current_task_index or 1) - 1)
+                    
+                    tdef = task_service.get_task_by_index(study_row.id, lookup_respondent, lookup_index)
+                    if tdef:
+                        esc = tdef.get('elements_shown_content')
+                        if esc:
+                            # Store name, url, visible per key; normalize key to CategoryName_ImageName
+                            out_map = {}
+                            vis_map = completed_task.elements_shown_in_task or {}
+                            for k, v in esc.items():
+                                if isinstance(v, dict):
+                                    # Derive category name from key like "Category 1_4"
+                                    cat_name = k.rsplit('_', 1)[0] if isinstance(k, str) and '_' in k else ''
+                                    elem_name = v.get('name')
+                                    new_key = f"{cat_name}_{elem_name}" if cat_name and elem_name else k
+                                    out_map[new_key] = {
+                                        "name": elem_name,
+                                        "url": v.get('content'),
+                                        "visible": 1 if vis_map.get(k) or vis_map.get(new_key) else 0,
+                                    }
+                                else:
+                                    out_map[k] = None
+                            completed_task.elements_shown_content = out_map
             except Exception:
                 pass
         
@@ -883,8 +840,10 @@ class StudyResponseService:
 
         # Preload tasks for hybrid phase_type lookup
         tasks_dict: Dict[str, Any] = {}
-        if study_row and str(study_row.study_type) == 'hybrid' and isinstance(study_row.tasks, dict):
-            tasks_dict = study_row.tasks
+        if study_row and str(study_row.study_type) == 'hybrid':
+            from app.services.task_service import TaskService
+            task_service = TaskService(self.db)
+            tasks_dict = task_service.get_all_tasks_as_dict(response.study_id)
 
         tasks_to_insert: List[CompletedTask] = []
         interactions_to_insert: List[ElementInteraction] = []
@@ -1011,16 +970,24 @@ class StudyResponseService:
             # Grid/text enrichment for content map if missing (also applies to hybrid grid/text phases)
             if study_row and effective_study_type in ('grid', 'text') and task_model.elements_shown_in_task and not task_model.elements_shown_content:
                 enriched = None
-                # Try: resolve from Study.tasks using actual_task_index (NOT parsed from task_id)
+                # Try: resolve from tasks_dict using actual_task_index (NOT parsed from task_id)
                 # because task_id can be duplicated across phases (e.g., "5_0" in both grid and text)
                 try:
+                    # If tasks_dict not preloaded for hybrid, load now
+                    if not tasks_dict:
+                        from app.services.task_service import TaskService
+                        _task_service = TaskService(self.db)
+                        tasks_dict_local = _task_service.get_all_tasks_as_dict(response.study_id)
+                    else:
+                        tasks_dict_local = tasks_dict
+                    
                     # Candidate respondent keys
                     candidate_keys = [
                         str(response.respondent_id), str(max(0, (response.respondent_id or 0) - 1))
                     ]
                     tasks_for_r = None
                     for key in candidate_keys:
-                        val = (study_row.tasks or {}).get(key)
+                        val = tasks_dict_local.get(key)
                         if isinstance(val, list):
                             tasks_for_r = val
                             break
@@ -2825,16 +2792,10 @@ class StudyResponseService:
                     col_headers.append(col_header)
                     col_to_cat_el[col_header] = (cat.name, el.name)
 
-            # Load Study.tasks as the source of truth (same data the session API uses).
-            # study.tasks may be None if loaded with defer(), so explicitly query if needed.
-            tasks_dict = getattr(study, 'tasks', None) or {}
-            if not tasks_dict and study_id:
-                try:
-                    row = self.db.execute(select(Study.tasks).where(Study.id == study_id)).first()
-                    if row and row[0] is not None:
-                        tasks_dict = row[0]
-                except Exception:
-                    pass
+            # Load tasks using TaskService (supports both new table and legacy study.tasks)
+            from app.services.task_service import TaskService
+            task_service = TaskService(self.db)
+            tasks_dict = task_service.get_all_tasks_as_dict(study_id)
             use_planned = isinstance(tasks_dict, dict) and len(tasks_dict) > 0 and 'respondent_id' in full_df.columns
 
             if use_planned:
