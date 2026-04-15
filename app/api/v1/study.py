@@ -653,6 +653,17 @@ def get_study_endpoint(
     # Ensure aspect_ratio is present
     out['aspect_ratio'] = ar
 
+    # Load tasks: first check study.tasks (legacy), then fall back to new table
+    tasks_data = out.get('tasks')
+    if not tasks_data or not isinstance(tasks_data, dict) or not any(str(k).isdigit() for k in tasks_data):
+        # Legacy tasks empty, try new table
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        tasks_data = task_service.get_all_tasks_as_dict(study_id)
+        if not tasks_data:
+            tasks_data = None
+    out['tasks'] = tasks_data
+
     # If classification_questions missing or empty in the serialized output, populate from ORM
     try:
         serialized_cq = out.get('classification_questions')
