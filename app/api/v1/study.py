@@ -762,14 +762,25 @@ def get_study_preview_endpoint(
     # Ensure aspect_ratio is present
     out['aspect_ratio'] = ar
 
-    # Limit tasks to only 1 respondent
-    if out.get('tasks') and isinstance(out['tasks'], dict):
-        # Get the first respondent's tasks only
-        first_respondent = next(iter(out['tasks'].keys()), None)
-        if first_respondent:
-            out['tasks'] = {first_respondent: out['tasks'][first_respondent]}
+    # Load tasks: first check study.tasks (legacy), then fall back to new table
+    tasks_data = out.get('tasks')
+    if not tasks_data or not isinstance(tasks_data, dict) or not any(str(k).isdigit() for k in tasks_data):
+        # Legacy tasks empty, try new table (load only 1 respondent for speed)
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        respondent_tasks = task_service.get_respondent_tasks(study_id, 1)
+        if respondent_tasks:
+            tasks_data = {"1": respondent_tasks}
         else:
-            out['tasks'] = {}
+            tasks_data = None
+    else:
+        # Legacy tasks exist, limit to 1 respondent
+        first_respondent = next((k for k in tasks_data if str(k).isdigit()), None)
+        if first_respondent:
+            tasks_data = {first_respondent: tasks_data[first_respondent]}
+        else:
+            tasks_data = None
+    out['tasks'] = tasks_data
 
     # If classification_questions missing or empty in the serialized output, populate from ORM
     try:
