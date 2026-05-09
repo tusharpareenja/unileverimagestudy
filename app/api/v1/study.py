@@ -653,15 +653,10 @@ def get_study_endpoint(
     # Ensure aspect_ratio is present
     out['aspect_ratio'] = ar
 
-    # Load tasks: first check study.tasks (legacy), then fall back to new table
-    tasks_data = out.get('tasks')
-    if not tasks_data or not isinstance(tasks_data, dict) or not any(str(k).isdigit() for k in tasks_data):
-        # Legacy tasks empty, try new table
-        from app.services.task_service import TaskService
-        task_service = TaskService(db)
-        tasks_data = task_service.get_all_tasks_as_dict(study_id)
-        if not tasks_data:
-            tasks_data = None
+    # Load tasks through TaskService so normalized rows win and legacy JSON is only fallback.
+    from app.services.task_service import TaskService
+    task_service = TaskService(db)
+    tasks_data = task_service.get_all_tasks_as_dict(study_id) or None
     out['tasks'] = tasks_data
 
     # If classification_questions missing or empty in the serialized output, populate from ORM
@@ -773,24 +768,12 @@ def get_study_preview_endpoint(
     # Ensure aspect_ratio is present
     out['aspect_ratio'] = ar
 
-    # Load tasks: first check study.tasks (legacy), then fall back to new table
-    tasks_data = out.get('tasks')
-    if not tasks_data or not isinstance(tasks_data, dict) or not any(str(k).isdigit() for k in tasks_data):
-        # Legacy tasks empty, try new table (load only 1 respondent for speed)
-        from app.services.task_service import TaskService
-        task_service = TaskService(db)
-        respondent_tasks = task_service.get_respondent_tasks(study_id, 1)
-        if respondent_tasks:
-            tasks_data = {"1": respondent_tasks}
-        else:
-            tasks_data = None
-    else:
-        # Legacy tasks exist, limit to 1 respondent
-        first_respondent = next((k for k in tasks_data if str(k).isdigit()), None)
-        if first_respondent:
-            tasks_data = {first_respondent: tasks_data[first_respondent]}
-        else:
-            tasks_data = None
+    # Load tasks through TaskService so preview uses the same source as runtime.
+    from app.services.task_service import TaskService
+    task_service = TaskService(db)
+    all_tasks = task_service.get_all_tasks_as_dict(study_id)
+    first_respondent = next((k for k in all_tasks if str(k).isdigit()), None) if isinstance(all_tasks, dict) else None
+    tasks_data = {first_respondent: all_tasks[first_respondent]} if first_respondent else None
     out['tasks'] = tasks_data
 
     # If classification_questions missing or empty in the serialized output, populate from ORM
@@ -1012,6 +995,9 @@ def get_study_public_details_endpoint(
         ar = (study.audience_segmentation or {}).get('aspect_ratio')
         out = StudyOut.model_validate(study).model_dump()
         out['aspect_ratio'] = ar
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        out['tasks'] = task_service.get_all_tasks_as_dict(study_id) or None
         
         # Cache the successful response
         RedisCache.set(cache_key, out, ttl_seconds=7)
@@ -1602,6 +1588,104 @@ def generate_tasks_from_body_endpoint(
             last_step=getattr(study_row, 'last_step', None),
             tasks=tasks,
             metadata=meta
+        )
+    elif payload.study_type == 'hybrid':
+        if not payload.elements or not payload.categories or not payload.phase_order:
+            raise HTTPException(status_code=400, detail="Hybrid study requires elements, categories, and phase_order")
+
+        import random
+        from app.services.golden_task_generator import generate_grid_tasks_golden
+
+        combined_tasks = {}
+        combined_metadata = {"phases": []}
+        is_mix = "mix" in payload.phase_order
+        if is_mix:
+            target_phases = list({c.phase_type for c in payload.categories if c.phase_type})
+        else:
+            target_phases = payload.phase_order
+
+        if not target_phases:
+            raise HTTPException(status_code=400, detail="Hybrid study requires at least one configured phase")
+
+        tasks_per_respondent_mix = {}
+        for phase_type in target_phases:
+            phase_categories = [c for c in payload.categories if c.phase_type == phase_type]
+            if not phase_categories:
+                continue
+
+            categories_data = []
+            for cat in phase_categories:
+                cat_elements = [e for e in payload.elements if e.category_id == cat.category_id]
+                categories_data.append({
+                    "category_name": cat.name,
+                    "elements": [
+                        {
+                            "element_id": str(el.element_id),
+                            "name": el.name,
+                            "content": el.content,
+                            "alt_text": el.alt_text or el.name,
+                            "element_type": el.element_type,
+                        }
+                        for el in cat_elements
+                    ]
+                })
+
+            phase_result = generate_grid_tasks_golden(
+                categories_data=categories_data,
+                number_of_respondents=payload.audience_segmentation.number_of_respondents,
+                exposure_tolerance_cv=payload.exposure_tolerance_cv or 1.0,
+                seed=payload.seed,
+                tasks_per_respondent=int(payload.tasks_per_respondent or 0),
+            )
+            phase_tasks = phase_result.get('tasks', {})
+
+            if is_mix:
+                for resp_id, task_list in phase_tasks.items():
+                    tasks_per_respondent_mix.setdefault(resp_id, [])
+                    for task in task_list:
+                        task['phase_type'] = phase_type
+                        tasks_per_respondent_mix[resp_id].append(task)
+            else:
+                for resp_id, task_list in phase_tasks.items():
+                    combined_tasks.setdefault(resp_id, [])
+                    offset = len(combined_tasks[resp_id])
+                    for task in task_list:
+                        task['task_index'] = int(task.get('task_index', 0)) + offset
+                        task['phase_type'] = phase_type
+                    combined_tasks[resp_id].extend(task_list)
+
+            combined_metadata["phases"].append({
+                "phase_type": phase_type,
+                "metadata": phase_result.get('metadata', {})
+            })
+
+        if is_mix:
+            for resp_id, task_list in tasks_per_respondent_mix.items():
+                random.shuffle(task_list)
+                for idx, task in enumerate(task_list):
+                    task['task_index'] = idx
+                combined_tasks[resp_id] = task_list
+
+        if not combined_tasks:
+            raise HTTPException(status_code=400, detail="No hybrid tasks could be generated for the configured phases")
+
+        from app.services.task_service import TaskService
+        task_service = TaskService(db)
+        task_service.save_tasks(study_row.id, combined_tasks)
+
+        if payload.last_step is not None:
+            current_step = getattr(study_row, 'last_step', 1) or 1
+            if payload.last_step > current_step:
+                setattr(study_row, 'last_step', payload.last_step)
+        db.commit()
+        db.refresh(study_row)
+        return GenerateTasksResult(
+            last_step=getattr(study_row, 'last_step', None),
+            tasks=combined_tasks,
+            metadata={
+                **combined_metadata,
+                "study_id": str(study_row.id)
+            }
         )
     else:
         raise HTTPException(status_code=400, detail="Unsupported study_type")

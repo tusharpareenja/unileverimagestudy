@@ -1286,6 +1286,11 @@ async def export_study_analysis_json(
         "background": study_obj.background_image_url,
         "language": study_obj.language,
         "launched_at": study_obj.created_at.isoformat() if study_obj.created_at else "",
+        "aspect_ratio": (
+            (study_obj.audience_segmentation or {}).get("aspect_ratio")
+            if isinstance(study_obj.audience_segmentation, dict)
+            else None
+        ),
         "categories": [],
         "elements": [],
         "classification_questions": []
@@ -1301,7 +1306,9 @@ async def export_study_analysis_json(
             study_data["categories"].append({
                 "id": cat_id,
                 "name": layer.name,
-                "order": layer.order
+                "order": layer.order,
+                "z_index": layer.z_index,
+                "transform": layer.transform or {},
             })
             
             sorted_images = sorted(layer.images, key=lambda x: x.order)
@@ -1311,7 +1318,18 @@ async def export_study_analysis_json(
                     "name": img.name,
                     "content": img.url,
                     "category_id": cat_id,
-                    "category": {"name": layer.name, "order": layer.order}
+                    "category": {
+                        "name": layer.name,
+                        "order": layer.order,
+                        "z_index": layer.z_index,
+                        "transform": layer.transform or {},
+                    },
+                    "z_index": layer.z_index,
+                    "transform": layer.transform or {},
+                    "layer_name": layer.name,
+                    "layer_order": layer.order,
+                    "image_order": img.order,
+                    "alt_text": img.alt_text,
                 })
     else:
         # Grid and text logic (both use categories and elements)

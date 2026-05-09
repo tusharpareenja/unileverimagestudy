@@ -2104,7 +2104,10 @@ class StudyResponseService:
                 )
             except Exception:
                 expected_respondents = 0
-            generated_pool = self._get_generated_respondent_capacity(getattr(study, 'tasks', None))
+            generated_pool = self._get_generated_respondent_capacity_for_study(
+                study.id,
+                getattr(study, 'tasks', None),
+            )
             
             # Debug logging
             logger.info(f"Study {study.id} completion check:")
@@ -2393,6 +2396,19 @@ class StudyResponseService:
             return sum(1 for key in tasks if str(key).isdigit())
         except Exception:
             return 0
+
+    def _get_generated_respondent_capacity_for_study(self, study_id: UUID, legacy_tasks: Any = None) -> int:
+        """Count generated respondent slots from normalized rows, falling back to legacy JSON."""
+        try:
+            from app.services.task_service import TaskService
+            task_service = TaskService(self.db)
+            count = task_service.get_respondent_count(study_id)
+            if count > 0:
+                return count
+        except Exception:
+            pass
+
+        return self._get_generated_respondent_capacity(legacy_tasks)
     
     def _calculate_respondent_task_count(self, tasks: Any, respondent_id: int) -> int:
         """Calculate the number of tasks assigned to a specific respondent."""
@@ -2572,12 +2588,33 @@ class StudyResponseService:
         ]
         if unilever_format:
             response_cols.append(StudyResponse.panelist_id)
+            response_cols.append(StudyResponse.session_start_time)  # For panelist deduplication (keep first completed)
         if str(study.study_type) in ('grid', 'text', 'hybrid'):
             response_cols.append(StudyResponse.respondent_id)
         responses_query = select(*response_cols).where(StudyResponse.study_id == study_id)
         if completed_only:
             responses_query = responses_query.where(StudyResponse.is_completed.is_(True))
         responses_df = pd.read_sql(responses_query, self.db.bind)
+        
+        # Deduplicate by panelist_id: keep only the first completed response per panelist
+        # This only applies for unilever_format studies with completed_only=True
+        if unilever_format and completed_only and not responses_df.empty and 'panelist_id' in responses_df.columns:
+            # Separate rows with and without panelist_id
+            has_panelist = responses_df['panelist_id'].notna() & (responses_df['panelist_id'] != '')
+            with_panelist = responses_df[has_panelist].copy()
+            without_panelist = responses_df[~has_panelist].copy()
+            
+            if not with_panelist.empty:
+                # Sort by session_start_time and keep first (earliest) per panelist_id
+                with_panelist = with_panelist.sort_values('session_start_time')
+                with_panelist = with_panelist.drop_duplicates(subset=['panelist_id'], keep='first')
+            
+            # Combine back
+            responses_df = pd.concat([with_panelist, without_panelist], ignore_index=True)
+            
+            # Drop session_start_time - it was only needed for sorting, not for output
+            if 'session_start_time' in responses_df.columns:
+                responses_df = responses_df.drop(columns=['session_start_time'])
 
         if responses_df.empty:
             if unilever_format:

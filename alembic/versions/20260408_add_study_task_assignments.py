@@ -20,6 +20,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Note: gen_random_uuid() is built into PostgreSQL 13+ (no extension needed)
+    # Azure PostgreSQL doesn't allow pgcrypto extension, but gen_random_uuid() works natively
     op.create_table(
         "study_task_assignments",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),

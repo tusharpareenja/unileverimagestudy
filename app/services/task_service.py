@@ -5,7 +5,7 @@ This service handles reading and writing task assignments to/from the
 study_task_assignments table, with fallback support for legacy study.tasks JSONB.
 """
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Sequence
 from uuid import UUID
 import logging
 
@@ -28,16 +28,21 @@ class TaskService:
         Get all tasks for a study in the original dict format:
         {"1": [task1, task2, ...], "2": [...], ...}
         
-        Falls back to legacy study.tasks if new table is empty.
+        Falls back to legacy study.tasks if new table is empty or doesn't exist.
         """
-        assignments = self.db.execute(
-            select(StudyTaskAssignment)
-            .where(StudyTaskAssignment.study_id == study_id)
-            .order_by(StudyTaskAssignment.respondent_id, StudyTaskAssignment.task_index)
-        ).scalars().all()
-        
-        if assignments:
-            return self._group_assignments_to_dict(assignments)
+        try:
+            assignments = self.db.execute(
+                select(StudyTaskAssignment)
+                .where(StudyTaskAssignment.study_id == study_id)
+                .order_by(StudyTaskAssignment.respondent_id, StudyTaskAssignment.task_index)
+            ).scalars().all()
+            
+            if assignments:
+                return self._group_assignments_to_dict(assignments)
+        except Exception as e:
+            # Table may not exist in older databases - fall back to legacy
+            logger.debug(f"study_task_assignments query failed, using legacy: {e}")
+            self.db.rollback()
         
         return self._get_legacy_tasks(study_id)
     
@@ -45,19 +50,24 @@ class TaskService:
         """
         Get tasks for a single respondent.
         
-        Falls back to legacy study.tasks if new table is empty.
+        Falls back to legacy study.tasks if new table is empty or doesn't exist.
         """
-        assignments = self.db.execute(
-            select(StudyTaskAssignment)
-            .where(
-                StudyTaskAssignment.study_id == study_id,
-                StudyTaskAssignment.respondent_id == respondent_id
-            )
-            .order_by(StudyTaskAssignment.task_index)
-        ).scalars().all()
-        
-        if assignments:
-            return [self._assignment_to_dict(a) for a in assignments]
+        try:
+            assignments = self.db.execute(
+                select(StudyTaskAssignment)
+                .where(
+                    StudyTaskAssignment.study_id == study_id,
+                    StudyTaskAssignment.respondent_id == respondent_id
+                )
+                .order_by(StudyTaskAssignment.task_index)
+            ).scalars().all()
+            
+            if assignments:
+                return [self._assignment_to_dict(a) for a in assignments]
+        except Exception as e:
+            # Table may not exist in older databases - fall back to legacy
+            logger.debug(f"study_task_assignments query failed, using legacy: {e}")
+            self.db.rollback()
         
         legacy_tasks = self._get_legacy_tasks(study_id)
         respondent_key = str(respondent_id)
@@ -71,17 +81,22 @@ class TaskService:
     
     def get_task_by_index(self, study_id: UUID, respondent_id: int, task_index: int) -> Optional[Dict[str, Any]]:
         """Get a specific task by respondent and index."""
-        assignment = self.db.execute(
-            select(StudyTaskAssignment)
-            .where(
-                StudyTaskAssignment.study_id == study_id,
-                StudyTaskAssignment.respondent_id == respondent_id,
-                StudyTaskAssignment.task_index == task_index
-            )
-        ).scalar_one_or_none()
-        
-        if assignment:
-            return self._assignment_to_dict(assignment)
+        try:
+            assignment = self.db.execute(
+                select(StudyTaskAssignment)
+                .where(
+                    StudyTaskAssignment.study_id == study_id,
+                    StudyTaskAssignment.respondent_id == respondent_id,
+                    StudyTaskAssignment.task_index == task_index
+                )
+            ).scalar_one_or_none()
+            
+            if assignment:
+                return self._assignment_to_dict(assignment)
+        except Exception as e:
+            # Table may not exist in older databases - fall back to legacy
+            logger.debug(f"study_task_assignments query failed, using legacy: {e}")
+            self.db.rollback()
         
         legacy_tasks = self._get_legacy_tasks(study_id)
         respondent_key = str(respondent_id)
@@ -94,13 +109,18 @@ class TaskService:
     
     def get_task_count(self, study_id: UUID) -> int:
         """Get total task count for a study."""
-        count = self.db.execute(
-            select(func.count()).select_from(StudyTaskAssignment)
-            .where(StudyTaskAssignment.study_id == study_id)
-        ).scalar() or 0
-        
-        if count > 0:
-            return count
+        try:
+            count = self.db.execute(
+                select(func.count()).select_from(StudyTaskAssignment)
+                .where(StudyTaskAssignment.study_id == study_id)
+            ).scalar() or 0
+            
+            if count > 0:
+                return count
+        except Exception as e:
+            # Table may not exist in older databases - fall back to legacy
+            logger.debug(f"study_task_assignments query failed, using legacy: {e}")
+            self.db.rollback()
         
         legacy_tasks = self._get_legacy_tasks(study_id)
         if legacy_tasks:
@@ -113,13 +133,18 @@ class TaskService:
     
     def get_respondent_count(self, study_id: UUID) -> int:
         """Get number of unique respondents with tasks."""
-        count = self.db.execute(
-            select(func.count(distinct(StudyTaskAssignment.respondent_id)))
-            .where(StudyTaskAssignment.study_id == study_id)
-        ).scalar() or 0
-        
-        if count > 0:
-            return count
+        try:
+            count = self.db.execute(
+                select(func.count(distinct(StudyTaskAssignment.respondent_id)))
+                .where(StudyTaskAssignment.study_id == study_id)
+            ).scalar() or 0
+            
+            if count > 0:
+                return count
+        except Exception as e:
+            # Table may not exist in older databases - fall back to legacy
+            logger.debug(f"study_task_assignments query failed, using legacy: {e}")
+            self.db.rollback()
         
         legacy_tasks = self._get_legacy_tasks(study_id)
         if legacy_tasks:
@@ -128,17 +153,22 @@ class TaskService:
     
     def get_tasks_per_respondent(self, study_id: UUID) -> int:
         """Get tasks per respondent (from first respondent)."""
-        result = self.db.execute(
-            select(func.count())
-            .select_from(StudyTaskAssignment)
-            .where(
-                StudyTaskAssignment.study_id == study_id,
-                StudyTaskAssignment.respondent_id == 1
-            )
-        ).scalar() or 0
-        
-        if result > 0:
-            return result
+        try:
+            result = self.db.execute(
+                select(func.count())
+                .select_from(StudyTaskAssignment)
+                .where(
+                    StudyTaskAssignment.study_id == study_id,
+                    StudyTaskAssignment.respondent_id == 1
+                )
+            ).scalar() or 0
+            
+            if result > 0:
+                return result
+        except Exception as e:
+            # Table may not exist in older databases - fall back to legacy
+            logger.debug(f"study_task_assignments query failed, using legacy: {e}")
+            self.db.rollback()
         
         legacy_tasks = self._get_legacy_tasks(study_id)
         if legacy_tasks:
@@ -152,20 +182,26 @@ class TaskService:
     
     def has_tasks(self, study_id: UUID) -> bool:
         """Check if study has any tasks (in new table or legacy)."""
-        exists = self.db.execute(
-            select(StudyTaskAssignment.id)
-            .where(StudyTaskAssignment.study_id == study_id)
-            .limit(1)
-        ).scalar_one_or_none()
-        
-        if exists:
-            return True
+        try:
+            exists = self.db.execute(
+                select(StudyTaskAssignment.id)
+                .where(StudyTaskAssignment.study_id == study_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            
+            if exists:
+                return True
+        except Exception as e:
+            # Table may not exist in older databases - fall back to legacy
+            logger.debug(f"study_task_assignments query failed, using legacy: {e}")
+            self.db.rollback()
         
         study = self.db.get(Study, study_id)
-        if study and study.tasks:
-            if isinstance(study.tasks, dict):
-                return any(str(k).isdigit() for k in study.tasks)
-            return bool(study.tasks)
+        legacy_tasks = getattr(study, "tasks", None) if study is not None else None
+        if legacy_tasks:
+            if isinstance(legacy_tasks, dict):
+                return any(str(k).isdigit() for k in legacy_tasks)
+            return bool(legacy_tasks)
         return False
     
     def save_tasks(self, study_id: UUID, tasks: Dict[str, List[Dict[str, Any]]]) -> int:
@@ -174,66 +210,82 @@ class TaskService:
         Deletes existing tasks for this study before inserting.
         
         Returns number of rows inserted.
+
+        Raises RuntimeError when the normalized task table cannot be written.
+        Generation callers must fail loudly rather than report success with no
+        persisted tasks.
         """
-        self.db.execute(
-            delete(StudyTaskAssignment).where(StudyTaskAssignment.study_id == study_id)
-        )
-        
-        count = 0
-        batch = []
-        BATCH_SIZE = 5000
-        
-        for respondent_id_str, task_list in tasks.items():
-            if not str(respondent_id_str).isdigit():
-                continue
-            respondent_id = int(respondent_id_str)
+        try:
+            self.db.execute(
+                delete(StudyTaskAssignment).where(StudyTaskAssignment.study_id == study_id)
+            )
             
-            if not isinstance(task_list, list):
-                continue
+            count = 0
+            batch = []
+            BATCH_SIZE = 5000
+            
+            for respondent_id_str, task_list in tasks.items():
+                if not str(respondent_id_str).isdigit():
+                    continue
+                respondent_id = int(respondent_id_str)
                 
-            for task in task_list:
-                batch.append(StudyTaskAssignment(
-                    study_id=study_id,
-                    respondent_id=respondent_id,
-                    task_index=task.get("task_index", 0),
-                    task_id=task.get("task_id", f"{respondent_id}_{task.get('task_index', 0)}"),
-                    elements_shown=task.get("elements_shown", {}),
-                    elements_shown_content=task.get("elements_shown_content"),
-                    phase_type=task.get("phase_type")
-                ))
-                count += 1
-                
-                if len(batch) >= BATCH_SIZE:
-                    self.db.bulk_save_objects(batch)
-                    batch = []
-        
-        if batch:
-            self.db.bulk_save_objects(batch)
-        
-        self.db.flush()
-        logger.info(f"Saved {count} task assignments for study {study_id}")
-        return count
+                if not isinstance(task_list, list):
+                    continue
+                    
+                for task in task_list:
+                    batch.append(StudyTaskAssignment(
+                        study_id=study_id,
+                        respondent_id=respondent_id,
+                        task_index=task.get("task_index", 0),
+                        task_id=task.get("task_id", f"{respondent_id}_{task.get('task_index', 0)}"),
+                        elements_shown=task.get("elements_shown", {}),
+                        elements_shown_content=task.get("elements_shown_content"),
+                        phase_type=task.get("phase_type")
+                    ))
+                    count += 1
+                    
+                    if len(batch) >= BATCH_SIZE:
+                        self.db.bulk_save_objects(batch)
+                        batch = []
+            
+            if batch:
+                self.db.bulk_save_objects(batch)
+            
+            self.db.flush()
+            logger.info(f"Saved {count} task assignments for study {study_id}")
+            return count
+        except Exception as e:
+            logger.error(f"Could not save task assignments for study {study_id}: {e}")
+            self.db.rollback()
+            raise RuntimeError(f"Failed to save task assignments for study {study_id}") from e
     
     def delete_tasks(self, study_id: UUID) -> int:
         """Delete all task assignments for a study."""
-        result = self.db.execute(
-            delete(StudyTaskAssignment).where(StudyTaskAssignment.study_id == study_id)
-        )
-        count = result.rowcount
-        self.db.flush()
-        logger.info(f"Deleted {count} task assignments for study {study_id}")
-        return count
+        try:
+            result = self.db.execute(
+                delete(StudyTaskAssignment).where(StudyTaskAssignment.study_id == study_id)
+            )
+            count = result.rowcount
+            self.db.flush()
+            logger.info(f"Deleted {count} task assignments for study {study_id}")
+            return count
+        except Exception as e:
+            # Table may not exist in older databases
+            logger.debug(f"Could not delete from study_task_assignments (table may not exist): {e}")
+            self.db.rollback()
+            return 0
     
     def _get_legacy_tasks(self, study_id: UUID) -> Dict[str, List[Dict[str, Any]]]:
         """Get tasks from legacy study.tasks JSONB column."""
         study = self.db.get(Study, study_id)
-        if not study or not study.tasks:
+        legacy_tasks = getattr(study, "tasks", None) if study is not None else None
+        if not legacy_tasks:
             return {}
         
-        if isinstance(study.tasks, dict):
-            return study.tasks
-        elif isinstance(study.tasks, list):
-            return {"0": study.tasks}
+        if isinstance(legacy_tasks, dict):
+            return legacy_tasks
+        elif isinstance(legacy_tasks, list):
+            return {"0": legacy_tasks}
         return {}
     
     def _assignment_to_dict(self, assignment: StudyTaskAssignment) -> Dict[str, Any]:
@@ -244,11 +296,12 @@ class TaskService:
             "elements_shown": assignment.elements_shown,
             "elements_shown_content": assignment.elements_shown_content,
         }
-        if assignment.phase_type:
-            result["phase_type"] = assignment.phase_type
+        phase_type = getattr(assignment, "phase_type", None)
+        if phase_type not in (None, ""):
+            result["phase_type"] = phase_type
         return result
     
-    def _group_assignments_to_dict(self, assignments: List[StudyTaskAssignment]) -> Dict[str, List[Dict[str, Any]]]:
+    def _group_assignments_to_dict(self, assignments: Sequence[StudyTaskAssignment]) -> Dict[str, List[Dict[str, Any]]]:
         """Group assignments into dict format keyed by respondent_id."""
         result: Dict[str, List[Dict[str, Any]]] = {}
         for a in assignments:

@@ -399,7 +399,8 @@ class StudyAnalysisService:
             "Title": study_data.get("title", ""),
             "Background": study_data.get("background", ""),
             "Language": study_data.get("language", ""),
-            "Launched At": study_data.get("launched_at", "")
+            "Launched At": study_data.get("launched_at", ""),
+            "Aspect Ratio": study_data.get("aspect_ratio"),
         }
         
         # 5b. Information Block
@@ -407,6 +408,7 @@ class StudyAnalysisService:
             "Study Title": study_data.get("title", ""),
             "Study Type": study_data.get("study_type", ""),
             "Study Background": study_data.get("background", ""),
+            "Aspect Ratio": study_data.get("aspect_ratio"),
             "Categories": []
         }
         
@@ -419,12 +421,29 @@ class StudyAnalysisService:
                 "name": cat_name,
                 "elements": []
             }
+            if cat.get("z_index") is not None:
+                cat_info["z_index"] = cat.get("z_index")
+            if cat.get("transform") is not None:
+                cat_info["transform"] = cat.get("transform")
+            if cat.get("order") is not None:
+                cat_info["order"] = cat.get("order")
             c_elements = [e for e in elements if e.get("category_id") == cat_id]
             for el in c_elements:
-                cat_info["elements"].append({
+                element_info = {
                     "name": el.get("name", ""),
                     "content": el.get("content", "")
-                })
+                }
+                for key in (
+                    "z_index",
+                    "transform",
+                    "layer_name",
+                    "layer_order",
+                    "image_order",
+                    "alt_text",
+                ):
+                    if el.get(key) is not None:
+                        element_info[key] = el.get(key)
+                cat_info["elements"].append(element_info)
             info_block["Categories"].append(cat_info)
         
         result["Information Block"] = info_block

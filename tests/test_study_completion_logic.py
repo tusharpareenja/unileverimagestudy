@@ -10,15 +10,19 @@ from app.services.response import StudyResponseService
 
 
 class MockExecuteResult:
-    def __init__(self, *, first_value=None, scalar_items=None):
+    def __init__(self, *, first_value=None, scalar_items=None, scalar_value=None):
         self._first_value = first_value
         self._scalar_items = scalar_items
+        self._scalar_value = scalar_value
 
     def first(self):
         return self._first_value
 
     def scalars(self):
         return SimpleNamespace(all=lambda: self._scalar_items or [])
+
+    def scalar(self):
+        return self._scalar_value
 
 
 class MockDB:
@@ -47,6 +51,7 @@ def test_study_does_not_complete_when_only_total_reaches_target():
     db = MockDB([
         MockExecuteResult(scalar_items=[study]),
         MockExecuteResult(first_value=SimpleNamespace(total=300, completed=200, abandoned=0)),
+        MockExecuteResult(scalar_value=600),
     ])
     service = StudyResponseService(db)
 
@@ -61,6 +66,7 @@ def test_study_completes_when_completed_reaches_target():
     db = MockDB([
         MockExecuteResult(scalar_items=[study]),
         MockExecuteResult(first_value=SimpleNamespace(total=300, completed=300, abandoned=0)),
+        MockExecuteResult(scalar_value=600),
         MockExecuteResult(scalar_items=[]),
     ])
     service = StudyResponseService(db)
@@ -82,6 +88,7 @@ def test_study_completes_when_generated_pool_is_exhausted():
     db = MockDB([
         MockExecuteResult(scalar_items=[study]),
         MockExecuteResult(first_value=SimpleNamespace(total=600, completed=250, abandoned=100)),
+        MockExecuteResult(scalar_value=600),
         MockExecuteResult(scalar_items=[in_progress]),
     ])
     service = StudyResponseService(db)
