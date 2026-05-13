@@ -3024,19 +3024,20 @@ class StudyResponseService:
         # answers_pivot index is study_response_id
         full_df = full_df.merge(answers_pivot, left_on='study_response_id', right_index=True, how='left')
 
-        # Map Yes/No (and Y/N) classification answers to 0/1 in raw export
-        def _yes_no_to_01(v):
-            if v is None or (isinstance(v, float) and pd.isna(v)):
+        # Map Yes/No (and Y/N) classification answers to 0/1 only for unilever.com exports
+        if unilever_format:
+            def _yes_no_to_01(v):
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    return v
+                s = str(v).strip().lower()
+                if s in ('yes', 'y'):
+                    return 1
+                if s in ('no', 'n'):
+                    return 0
                 return v
-            s = str(v).strip().lower()
-            if s in ('yes', 'y'):
-                return 1
-            if s in ('no', 'n'):
-                return 0
-            return v
-        for col in question_id_yes_no_cols:
-            if col in full_df.columns:
-                full_df[col] = full_df[col].apply(_yes_no_to_01)
+            for col in question_id_yes_no_cols:
+                if col in full_df.columns:
+                    full_df[col] = full_df[col].apply(_yes_no_to_01)
 
         if unilever_format:
             key_cols = [k['name'] for k in (getattr(study, 'product_keys', None) or []) if isinstance(k, dict) and k.get('name')]
