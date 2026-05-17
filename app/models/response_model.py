@@ -147,6 +147,7 @@ class StudyResponse(Base):
     
     # Client-specific features
     product_id = Column(String(100), nullable=True) # Optional hexadecimal product id
+    done_by_id = Column(String(50), nullable=True, index=True)
     
     # Panelist Integration
     panelist_id = Column(String(50), nullable=True, index=True)

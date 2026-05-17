@@ -124,5 +124,7 @@ class Settings(BaseSettings):
     FROM_EMAIL: str 
     APP_NAME: str = "mindsurve"
     FRONTEND_URL: str = "https://mindsurve.com"
+    MERGE_STUDY_A: str | None = None
+    MERGE_STUDY_B: str | None = None
 
 settings = Settings()

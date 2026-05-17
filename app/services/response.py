@@ -340,6 +340,8 @@ class StudyResponseService:
     
     def start_study(self, request: StartStudyRequest, ip_address: str = None, user_agent: str = None) -> StartStudyResponse:
         """Ultra-fast start study - minimal DB operations for instant response."""
+        from app.core.merged_studies import is_merged_study
+
         # Single query to get only essential study data
         study_row = self.db.execute(
             select(Study.status, Study.title, Study.study_type, Study.main_question, Study.orientation_text, Study.rating_scale, Study.tasks)
@@ -360,10 +362,14 @@ class StudyResponseService:
         # Generate IDs - session_id without DB query, respondent_id with proper sequential logic
         from uuid import uuid4 as _uuid4
         session_id = f"session_{_uuid4().hex[:16]}"
+        done_by_id = None
+        if is_merged_study(request.study_id):
+            done_by_id = (request.done_by_id or "").strip() or f"done_{_uuid4().hex[:12]}"
+
         def _payload_builder(respondent_id: int) -> Dict[str, Any]:
             respondent_tasks = task_service.get_respondent_tasks(request.study_id, respondent_id)
             total_tasks_assigned = len(respondent_tasks)
-            return {
+            payload = {
                 "study_id": request.study_id,
                 "session_id": session_id,
                 "total_tasks_assigned": total_tasks_assigned,
@@ -377,6 +383,11 @@ class StudyResponseService:
                 "is_abandoned": False,
                 "is_completed": False,
             }
+            if done_by_id:
+                payload["done_by_id"] = done_by_id
+            if getattr(request, "panelist_id", None):
+                payload["panelist_id"] = request.panelist_id
+            return payload
         
         # Minimal personal info merge
         combined_personal_info = None
@@ -402,6 +413,7 @@ class StudyResponseService:
             session_id=session_id,
             respondent_id=new_response.respondent_id,
             total_tasks_assigned=new_response.total_tasks_assigned,
+            done_by_id=done_by_id,
             study_info={
                 "id": str(request.study_id),
                 "title": study_row.title,
@@ -2580,12 +2592,16 @@ class StudyResponseService:
         study = self.db.get(Study, study_id)
         if not study:
             raise HTTPException(status_code=404, detail="Study not found")
+        from app.core.merged_studies import is_merged_study
+        include_done_by_id = is_merged_study(study_id)
 
         response_cols = [
             StudyResponse.id,
             StudyResponse.session_id,
             StudyResponse.personal_info,
         ]
+        if include_done_by_id:
+            response_cols.append(StudyResponse.done_by_id)
         if unilever_format:
             response_cols.append(StudyResponse.panelist_id)
             response_cols.append(StudyResponse.session_start_time)  # For panelist deduplication (keep first completed)
@@ -2619,9 +2635,11 @@ class StudyResponseService:
         if responses_df.empty:
             if unilever_format:
                 key_names = [k.get("name") for k in (study.product_keys or []) if k and k.get("name")]
-                cols = ["Panelist", "Product ID", "Age", "Gender"] + key_names + ["Task", "Task type", "Rating", "ResponseTime"]
+                done_by_cols = ["Done By ID"] if include_done_by_id else []
+                cols = ["Panelist"] + done_by_cols + ["Product ID", "Age", "Gender"] + key_names + ["Task", "Task type", "Rating", "ResponseTime"]
                 return pd.DataFrame(columns=cols)
-            return pd.DataFrame(columns=["Panelist", "Gender", "Age", "Task", "Rating", "ResponseTime"])
+            done_by_cols = ["Done By ID"] if include_done_by_id else []
+            return pd.DataFrame(columns=["Panelist"] + done_by_cols + ["Gender", "Age", "Task", "Rating", "ResponseTime"])
 
         response_ids = responses_df['id'].tolist()
 
@@ -3041,20 +3059,24 @@ class StudyResponseService:
 
         if unilever_format:
             key_cols = [k['name'] for k in (getattr(study, 'product_keys', None) or []) if isinstance(k, dict) and k.get('name')]
+            done_by_cols = ['done_by_id'] if include_done_by_id else []
             final_cols = (
-                ['_panelist', 'Product ID', 'Age', 'Gender'] + key_cols +
+                ['_panelist'] + done_by_cols + ['Product ID', 'Age', 'Gender'] + key_cols +
                 list(question_id_to_col.values()) + ['Task', 'Task type'] +
                 dynamic_cols + ['rating_given', 'task_duration_seconds']
             )
             export_rename = {
                 '_panelist': 'Panelist',
+                'done_by_id': 'Done By ID',
                 'rating_given': 'Rating',
                 'task_duration_seconds': 'ResponseTime'
             }
         else:
-            final_cols = ['session_id', 'Age', 'Gender'] + list(question_id_to_col.values()) + ['Task'] + dynamic_cols + ['rating_given', 'task_duration_seconds']
+            done_by_cols = ['done_by_id'] if include_done_by_id else []
+            final_cols = ['session_id'] + done_by_cols + ['Age', 'Gender'] + list(question_id_to_col.values()) + ['Task'] + dynamic_cols + ['rating_given', 'task_duration_seconds']
             export_rename = {
                 'session_id': 'Panelist',
+                'done_by_id': 'Done By ID',
                 'rating_given': 'Rating',
                 'task_duration_seconds': 'ResponseTime'
             }
